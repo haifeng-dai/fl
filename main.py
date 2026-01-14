@@ -5,7 +5,7 @@ import torch
 
 from data_scripts import prepare_data
 from src.models import SimpleCNN
-from src.utils import ClientInfo, load_data
+from src.utils import ClientInfo, load_data, is_pfl
 
 
 def main():
@@ -32,7 +32,6 @@ def main():
     data_group.add_argument("--test_ratio", type=float, default=0.2)
     data_group.add_argument("--alpha", type=float, default=0.5, help="For Dirichlet")
     data_group.add_argument("--n_classes", type=int, default=2, help="For Pathological")
-    data_group.add_argument("--pfl", action="store_true", help="Personalized FL: use local test sets")
 
     # Training Args
     train_group = full_parser.add_argument_group("Training Arguments")
@@ -40,6 +39,7 @@ def main():
     train_group.add_argument("--epochs", type=int, default=1)
     train_group.add_argument("--lr", type=float, default=0.01)
     train_group.add_argument("--gpus", type=str, default="0")
+    train_group.add_argument("--no_mp", action="store_true", help="Disable multiprocessing training")
 
     # Algorithm Specific Args
     algo_module = importlib.import_module(f"src.{args.algo}")
@@ -63,6 +63,7 @@ def main():
 
     # 5. Global Objects
     global_model = SimpleCNN()
+    pfl = is_pfl(args.algo)
 
     # Unified data loading
     train_loaders, test_loader = load_data(
@@ -71,7 +72,7 @@ def main():
         num_clients=args.num_clients,
         alpha=args.alpha,
         n_classes=args.n_classes,
-        pfl=args.pfl
+        pfl=pfl
     )
 
     # 6. Instantiate and Run
@@ -79,6 +80,7 @@ def main():
     if args.algo == "fedavg":
         from src.fedavg import FedAvgServer
 
+        assert isinstance(test_loader, torch.utils.data.DataLoader)
         server = FedAvgServer(
             model=global_model,
             train_loader=train_loaders,
@@ -89,6 +91,7 @@ def main():
     elif args.algo == "moon":
         from src.moon import MOONServer
 
+        assert isinstance(test_loader, torch.utils.data.DataLoader)
         server = MOONServer(
             model=global_model,
             train_loader=train_loaders,
@@ -103,5 +106,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # 虽然这里设置了 spawn，但在 no_mp 模式下不会创建进程池
+    # 保持 spawn 是为了在多 GPU 环境下使用多进程时的稳定性
     torch.multiprocessing.set_start_method("spawn", force=True)
     main()

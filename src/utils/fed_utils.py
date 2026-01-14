@@ -42,7 +42,7 @@ class BaseServer:
     def __init__(
             self,
             model: torch.nn.Module,
-            test_loader: torch.utils.data.DataLoader,
+            test_loader: torch.utils.data.DataLoader | dict[int, torch.utils.data.DataLoader] | None,
             clients_info: ClientInfo,
             rounds: int,
     ):
@@ -53,14 +53,18 @@ class BaseServer:
 
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
-        device_counts = defaultdict(int)
-        for _, device in self.clients_info.cuda.items():
-            device_counts[device] += 1
-
+        self.no_mp = clients_info.args.no_mp
         self.gpu_pools = {}
-        for device, count in device_counts.items():
-            print(f"-> 为设备 {device} 分配并行池 (Worker: {count})")
-            self.gpu_pools[device] = mp.Pool(processes=count)
+        if not self.no_mp:
+            device_counts = defaultdict(int)
+            for _, device in self.clients_info.cuda.items():
+                device_counts[device] += 1
+
+            for device, count in device_counts.items():
+                print(f"-> 为设备 {device} 分配并行池 (Worker: {count})")
+                self.gpu_pools[device] = mp.Pool(processes=count)
+        else:
+            print("-> 禁用多进程训练，将使用顺序训练")
 
     def aggregate(self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs):
         aggregated_state = param_aggregate(client_state_dicts, weights)

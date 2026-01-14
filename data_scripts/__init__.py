@@ -12,16 +12,16 @@ def split_indices_by_class(targets, test_ratio):
     """
     num_classes = len(np.unique(targets))
     indices_by_class = [np.where(targets == i)[0] for i in range(num_classes)]
-    
+
     train_indices_by_class = []
     test_indices_by_class = []
-    
+
     for c_idx in indices_by_class:
         np.random.shuffle(c_idx)
         split = int(len(c_idx) * (1 - test_ratio))
         train_indices_by_class.append(c_idx[:split])
         test_indices_by_class.append(c_idx[split:])
-        
+
     return train_indices_by_class, test_indices_by_class
 
 # --- 分区方法 ---
@@ -29,7 +29,7 @@ def split_indices_by_class(targets, test_ratio):
 def iid_partition(train_indices_by_class, test_indices_by_class, num_clients):
     client_train_indices = [[] for _ in range(num_clients)]
     client_test_indices = [[] for _ in range(num_clients)]
-    
+
     for k in range(len(train_indices_by_class)):
         # Train
         tr_k = train_indices_by_class[k]
@@ -37,12 +37,12 @@ def iid_partition(train_indices_by_class, test_indices_by_class, num_clients):
         # Test
         te_k = test_indices_by_class[k]
         te_splits = np.array_split(te_k, num_clients)
-        
+
         for i in range(num_clients):
             client_train_indices[i].append(tr_splits[i])
             client_test_indices[i].append(te_splits[i])
-            
-    return ([np.concatenate(idx) for idx in client_train_indices], 
+
+    return ([np.concatenate(idx) for idx in client_train_indices],
             [np.concatenate(idx) for idx in client_test_indices])
 
 
@@ -53,22 +53,22 @@ def dirichlet_partition(train_indices_by_class, test_indices_by_class, num_clien
 
     for k in range(num_classes):
         proportions = np.random.dirichlet([alpha] * num_clients)
-        
+
         # 划分训练集
         tr_k = train_indices_by_class[k]
         tr_counts = (np.cumsum(proportions) * len(tr_k)).astype(int)[:-1]
         tr_splits = np.split(tr_k, tr_counts)
-        
+
         # 划分测试集（使用相同的比例）
         te_k = test_indices_by_class[k]
         te_counts = (np.cumsum(proportions) * len(te_k)).astype(int)[:-1]
         te_splits = np.split(te_k, te_counts)
-        
+
         for i in range(num_clients):
             client_train_indices[i].append(tr_splits[i])
             client_test_indices[i].append(te_splits[i])
 
-    return ([np.concatenate(idx) for idx in client_train_indices], 
+    return ([np.concatenate(idx) for idx in client_train_indices],
             [np.concatenate(idx) for idx in client_test_indices])
 
 
@@ -76,29 +76,29 @@ def pathological_partition(train_indices_by_class, test_indices_by_class, num_cl
     num_classes = len(train_indices_by_class)
     client_train_indices = [[] for _ in range(num_clients)]
     client_test_indices = [[] for _ in range(num_clients)]
-    
+
     shards_per_class = (num_clients * n_classes_per_client) // num_classes
-    
+
     train_shards = []
     test_shards = []
     for k in range(num_classes):
         train_shards.append(np.array_split(train_indices_by_class[k], shards_per_class))
         test_shards.append(np.array_split(test_indices_by_class[k], shards_per_class))
-        
+
     shard_ids = []
     for k in range(num_classes):
         for s in range(shards_per_class):
             shard_ids.append((k, s))
-            
+
     np.random.shuffle(shard_ids)
-    
+
     for i in range(num_clients):
         for j in range(n_classes_per_client):
             k, s = shard_ids[i * n_classes_per_client + j]
             client_train_indices[i].append(train_shards[k][s])
             client_test_indices[i].append(test_shards[k][s])
 
-    return ([np.concatenate(idx) for idx in client_train_indices], 
+    return ([np.concatenate(idx) for idx in client_train_indices],
             [np.concatenate(idx) for idx in client_test_indices])
 
 
@@ -135,12 +135,12 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     print(f"-> 正在划分数据 ({part_str})...")
     data = torch.load(raw_path, weights_only=False)
     X, Y = data["x"], data["y"]
-    
+
     test_ratio = kwargs.get("test_ratio", 0.2)
-    
+
     # 1. 首先按类别划分训练和测试索引
     tr_idx_by_cls, te_idx_by_cls = split_indices_by_class(Y.numpy(), test_ratio)
-    
+
     # 保存一个全局测试集供服务器使用 (包含所有类的测试部分)
     base_dir = f"./datasets/{dataset_name}"
     if not os.path.exists(os.path.join(base_dir, "test_data.pt")):
@@ -164,7 +164,7 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     # 3. 保存客户端数据
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-        
+
     for i in range(num_clients):
         client_data = {
             "train": {"x": X[cli_tr_idx[i]], "y": Y[cli_tr_idx[i]]},

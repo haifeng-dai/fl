@@ -29,21 +29,21 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
     - test_loader: dict[int, DataLoader] (如果 pfl=True) 或 DataLoader (如果 pfl=False)
     """
     part_dir = get_partition_path(dataset_name, partition, num_clients, alpha, n_classes)
-    
+
     train_loaders = {}
-    test_loaders = {} if pfl else None
+    test_loaders = {}
 
     for i in range(num_clients):
         data_path = os.path.join(part_dir, f"client_{i}.pt")
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"Data for client {i} not found at {data_path}.")
-        
+
         data = torch.load(data_path, weights_only=False)
-        
+
         # 加载训练集
         train_dataset = TensorDataset(data["train"]["x"], data["train"]["y"])
         train_loaders[i] = DataLoader(train_dataset, batch_size=64, shuffle=True)
-        
+
         # 如果是 pFL，加载每个客户端的本地测试集
         if pfl:
             test_dataset = TensorDataset(data["test"]["x"], data["test"]["y"])

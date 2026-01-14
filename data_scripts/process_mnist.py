@@ -43,4 +43,9 @@ def process(output_dir="./datasets/raw"):
     # 封装处理后的数据
     processed_data = {"x": all_x, "y": all_y, "num_classes": 10}
 
+    # 保存处理后的数据到指定目录
+    save_path = os.path.join(output_dir, "mnist_raw.pt")
+    torch.save(processed_data, save_path)
+    print(f"-> MNIST 原始数据已保存至 {save_path}")
+
     return processed_data

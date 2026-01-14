@@ -37,19 +37,19 @@ class MOONClient(BaseClient):
         self.model.train()
         self.global_model.eval()
         self.prev_model.eval()
-        
+
         optimizer = optim.SGD(
-            self.model.parameters(), 
+            self.model.parameters(),
             lr=self.lr,
             weight_decay=self.weight_decay
         )
         loss_list = []
-        
+
         for epoch in range(self.epochs):
             for data, target in self.train_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 optimizer.zero_grad()
-                
+
                 y, z = self.model(data)
                 with torch.no_grad():
                     _, z_glob = self.global_model(data)
@@ -58,11 +58,11 @@ class MOONClient(BaseClient):
                 loss_ce = self.ce(y, target)
                 loss_con = self.moon_loss(z, z_glob, z_prev)
                 loss = loss_ce + self.mu * loss_con
-                
+
                 loss.backward()
                 optimizer.step()
                 loss_list.append(loss.item())
-                
+
         model_state = {k: v.detach().clone().cpu() for k, v in self.model.state_dict().items()}
         return sum(loss_list) / len(loss_list), model_state
 
@@ -71,7 +71,7 @@ class MOONClient(BaseClient):
         # 加载全局参数到本地模型和全局模型副本
         self.model.load_state_dict(global_params)
         self.global_model.load_state_dict(global_params)
-        
+
         # 加载上轮本地参数
         if prev_local_params is not None:
             self.prev_model.load_state_dict(prev_local_params)
@@ -79,7 +79,14 @@ class MOONClient(BaseClient):
             self.prev_model.load_state_dict(global_params)
 
 class MOONServer(BaseServer):
-    def __init__(self, model, train_loader, test_loader, clients_info, rounds):
+    def __init__(
+            self,
+            model: torch.nn.Module,
+            train_loader: dict[int, torch.utils.data.DataLoader],
+            test_loader: torch.utils.data.DataLoader,
+            clients_info: ClientInfo,
+            rounds: int
+    ):
         super().__init__(model, test_loader, clients_info, rounds)
         self.args = clients_info.args
         self.clients = {
@@ -98,23 +105,24 @@ class MOONServer(BaseServer):
 
     def fit(self):
         prev_local_params_list = [None] * len(self.clients)
-        
+
         for r in range(self.rounds):
             print(f"\n--- MOON Round {r + 1}/{self.rounds} ---")
             global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
 
             # 准备每个客户端的个性化参数包
             parameters_per_client = {
-                i: (global_params, prev_local_params_list[i]) 
+                i: (global_params, prev_local_params_list[i])
                 for i in self.clients.keys()
             }
 
             results = run_parallel_clients(
                 clients=self.clients,
                 parameters=parameters_per_client,
-                gpu_pools=self.gpu_pools
+                gpu_pools=self.gpu_pools,
+                no_mp=self.no_mp
             )
-            
+
             loss_epoch = [res[0] for res in results]
             client_dicts = [res[1] for res in results]
 

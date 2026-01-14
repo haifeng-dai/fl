@@ -70,7 +70,8 @@ class FedAvgServer(BaseServer):
             results = run_parallel_clients(
                 clients=self.clients,
                 parameters=global_params,
-                gpu_pools=self.gpu_pools
+                gpu_pools=self.gpu_pools,
+                no_mp=self.no_mp
             )
             loss_epoch = [res[0] for res in results]
             client_dicts = [res[1] for res in results]
