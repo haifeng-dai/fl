@@ -1,62 +1,105 @@
+import copy
+from collections import defaultdict
+import argparse
+
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-import os
+import torch.multiprocessing as mp
+from dataclasses import dataclass
+
+from .aggregate import param_aggregate
+from .evaluate import evaluate_model
+
 
 class BaseClient:
-    def __init__(self, client_id, device, args):
+    def __init__(
+            self,
+            client_id: int,
+            model: torch.nn.Module,
+            train_loader: torch.utils.data.DataLoader,
+            lr: float,
+            epochs: int,
+            device: torch.device,
+    ):
         self.client_id = client_id
+        self.model = copy.deepcopy(model).to(device)
+        self.train_loader = train_loader
+        self.lr = lr
+        self.epochs = epochs
         self.device = device
-        self.args = args
 
-    def train(self, global_params):
+        self.ce = torch.nn.CrossEntropyLoss()
+        self.mse = torch.nn.MSELoss()
+        self.KL = torch.nn.KLDivLoss(reduction="batchmean")
+
+    def train(self, *args, **kwargs):
         raise NotImplementedError
+
+    def set_client(self, *args, **kwargs):
+        raise NotImplementedError
+
 
 class BaseServer:
-    def __init__(self, model, test_loader, clients_info, args):
-        self.model = model
+    def __init__(
+            self,
+            model: torch.nn.Module,
+            test_loader: torch.utils.data.DataLoader,
+            clients_info: ClientInfo,
+            rounds: int,
+    ):
+        self.model = model.cpu()
         self.test_loader = test_loader
         self.clients_info = clients_info
-        self.args = args
+        self.rounds = rounds
 
-    def aggregate(self, client_state_dicts):
-        weights = [1.0 / len(client_state_dicts)] * len(client_state_dicts)
-        global_dict = self.model.state_dict()
-        for key in global_dict.keys():
-            if global_dict[key].dtype == torch.float32:
-                temp = torch.zeros_like(global_dict[key])
-                for i, state_dict in enumerate(client_state_dicts):
-                    temp += state_dict[key] * weights[i]
-                global_dict[key].copy_(temp)
-        self.model.load_state_dict(global_dict)
+        self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
-    def evaluate(self, device):
-        self.model.to(device)
-        self.model.eval()
-        correct = 0
-        with torch.no_grad():
-            for data, target in self.test_loader:
-                data, target = data.to(device), target.to(device)
-                output, _ = self.model(data)
-                pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
-        return 100. * correct / len(self.test_loader.dataset)
+        device_counts = defaultdict(int)
+        for _, device in self.clients_info.cuda.items():
+            device_counts[device] += 1
 
-    def fit(self):
+        self.gpu_pools = {}
+        for device, count in device_counts.items():
+            print(f"-> 为设备 {device} 分配并行池 (Worker: {count})")
+            self.gpu_pools[device] = mp.Pool(processes=count)
+
+    def aggregate(self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs):
+        aggregated_state = param_aggregate(client_state_dicts, weights)
+        self.model.load_state_dict(aggregated_state)
+
+    def evaluate(self, pfl=False, *args, **kwargs):
+        if isinstance(self.test_loader, dict):
+            #是个性化联邦学习或使用了本地测试集，计算平均准确率
+            accs = []
+            for client_id, loader in self.test_loader.items():
+                acc = evaluate_model(self.model, loader, self.device)
+                accs.append(acc)
+            return sum(accs) / len(accs)
+        else:
+            acc = evaluate_model(self.model, self.test_loader, self.device)
+            return acc
+
+    def fit(self, *args, **kwargs):
         raise NotImplementedError
 
-def load_client_data(client_id, dataset_name, partition):
-    data_path = f'./datasets/{dataset_name}/{partition}/client_{client_id}.pt'
-    if not os.path.exists(data_path):
-        raise FileNotFoundError(f"Data for client {client_id} not found at {data_path}.")
-    data = torch.load(data_path)
-    dataset = TensorDataset(data['x'], data['y'])
-    return DataLoader(dataset, batch_size=64, shuffle=True)
+    def __del__(self, *args, **kwargs):
+        if hasattr(self, "gpu_pools"):
+            for pool in self.gpu_pools.values():
+                pool.close()
+                pool.join()
 
-def load_test_data(dataset_name, partition):
-    test_path = f'./datasets/{dataset_name}/{partition}/test_data.pt'
-    if not os.path.exists(test_path):
-        raise FileNotFoundError(f"Test data not found at {test_path}.")
-    data = torch.load(test_path)
-    dataset = TensorDataset(data['x'], data['y'])
-    return DataLoader(dataset, batch_size=1000, shuffle=False)
+
+@dataclass
+class ClientInfo:
+    args: argparse.Namespace
+
+    def __post_init__(self):
+        self.lr: float = self.args.lr
+        self.epochs: int = self.args.epochs
+        gpu_ids = [int(i) for i in self.args.gpus.split(",")]
+        self.cuda = {
+            i: torch.device(
+                f"cuda:{gpu_ids[i % len(gpu_ids)]}"
+                if torch.cuda.is_available()
+                else "cpu"
+            ) for i in range(self.args.num_clients)
+        }

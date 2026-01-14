@@ -1,108 +1,175 @@
-import os
-import torch
-import numpy as np
 import importlib
+import os
 
-# --- Partition Methods ---
+import numpy as np
+import torch
 
-def iid_partition(targets, num_clients):
-    indices = np.arange(len(targets))
-    np.random.shuffle(indices)
-    return np.array_split(indices, num_clients)
+# --- 辅助方法 ---
 
-def dirichlet_partition(targets, num_clients, alpha=0.5):
+def split_indices_by_class(targets, test_ratio):
+    """
+    先按类别对所有索引进行划分，每个类别内部按 test_ratio 分成训练和测试。
+    """
     num_classes = len(np.unique(targets))
-    indices = [np.where(targets == i)[0] for i in range(num_classes)]
-    client_indices = [[] for _ in range(num_clients)]
+    indices_by_class = [np.where(targets == i)[0] for i in range(num_classes)]
     
-    for k in range(num_classes):
-        np.random.shuffle(indices[k])
-        proportions = np.random.dirichlet([alpha] * num_clients)
-        proportions = (np.cumsum(proportions) * len(indices[k])).astype(int)[:-1]
-        splits = np.split(indices[k], proportions)
-        for i, split in enumerate(splits):
-            client_indices[i].append(split)
-            
-    return [np.concatenate(idx) for idx in client_indices]
-
-def pathological_partition(targets, num_clients, n_classes_per_client=2):
-    num_classes = len(np.unique(targets))
-    indices = [np.where(targets == i)[0] for i in range(num_classes)]
-    for i in range(num_classes):
-        np.random.shuffle(indices[i])
+    train_indices_by_class = []
+    test_indices_by_class = []
+    
+    for c_idx in indices_by_class:
+        np.random.shuffle(c_idx)
+        split = int(len(c_idx) * (1 - test_ratio))
+        train_indices_by_class.append(c_idx[:split])
+        test_indices_by_class.append(c_idx[split:])
         
-    client_indices = [[] for _ in range(num_clients)]
-    shards_per_class = (num_clients * n_classes_per_client) // num_classes
-    class_shards = []
-    for i in range(num_classes):
-        shards = np.array_split(indices[i], shards_per_class)
-        class_shards.extend(shards)
+    return train_indices_by_class, test_indices_by_class
+
+# --- 分区方法 ---
+
+def iid_partition(train_indices_by_class, test_indices_by_class, num_clients):
+    client_train_indices = [[] for _ in range(num_clients)]
+    client_test_indices = [[] for _ in range(num_clients)]
     
-    np.random.shuffle(class_shards)
+    for k in range(len(train_indices_by_class)):
+        # Train
+        tr_k = train_indices_by_class[k]
+        tr_splits = np.array_split(tr_k, num_clients)
+        # Test
+        te_k = test_indices_by_class[k]
+        te_splits = np.array_split(te_k, num_clients)
+        
+        for i in range(num_clients):
+            client_train_indices[i].append(tr_splits[i])
+            client_test_indices[i].append(te_splits[i])
+            
+    return ([np.concatenate(idx) for idx in client_train_indices], 
+            [np.concatenate(idx) for idx in client_test_indices])
+
+
+def dirichlet_partition(train_indices_by_class, test_indices_by_class, num_clients, alpha=0.5):
+    client_train_indices = [[] for _ in range(num_clients)]
+    client_test_indices = [[] for _ in range(num_clients)]
+    num_classes = len(train_indices_by_class)
+
+    for k in range(num_classes):
+        proportions = np.random.dirichlet([alpha] * num_clients)
+        
+        # 划分训练集
+        tr_k = train_indices_by_class[k]
+        tr_counts = (np.cumsum(proportions) * len(tr_k)).astype(int)[:-1]
+        tr_splits = np.split(tr_k, tr_counts)
+        
+        # 划分测试集（使用相同的比例）
+        te_k = test_indices_by_class[k]
+        te_counts = (np.cumsum(proportions) * len(te_k)).astype(int)[:-1]
+        te_splits = np.split(te_k, te_counts)
+        
+        for i in range(num_clients):
+            client_train_indices[i].append(tr_splits[i])
+            client_test_indices[i].append(te_splits[i])
+
+    return ([np.concatenate(idx) for idx in client_train_indices], 
+            [np.concatenate(idx) for idx in client_test_indices])
+
+
+def pathological_partition(train_indices_by_class, test_indices_by_class, num_clients, n_classes_per_client=2):
+    num_classes = len(train_indices_by_class)
+    client_train_indices = [[] for _ in range(num_clients)]
+    client_test_indices = [[] for _ in range(num_clients)]
+    
+    shards_per_class = (num_clients * n_classes_per_client) // num_classes
+    
+    train_shards = []
+    test_shards = []
+    for k in range(num_classes):
+        train_shards.append(np.array_split(train_indices_by_class[k], shards_per_class))
+        test_shards.append(np.array_split(test_indices_by_class[k], shards_per_class))
+        
+    shard_ids = []
+    for k in range(num_classes):
+        for s in range(shards_per_class):
+            shard_ids.append((k, s))
+            
+    np.random.shuffle(shard_ids)
+    
     for i in range(num_clients):
         for j in range(n_classes_per_client):
-            client_indices[i].append(class_shards[i * n_classes_per_client + j])
-            
-    return [np.concatenate(idx) for idx in client_indices]
+            k, s = shard_ids[i * n_classes_per_client + j]
+            client_train_indices[i].append(train_shards[k][s])
+            client_test_indices[i].append(test_shards[k][s])
 
-# --- Main Entry Point ---
+    return ([np.concatenate(idx) for idx in client_train_indices], 
+            [np.concatenate(idx) for idx in client_test_indices])
+
+
+# --- 主要入口点 ---
+
 
 def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
-    """
-    Unified entry point for data processing and partitioning.
-    """
-    raw_dir = './datasets/raw'
-    raw_path = os.path.join(raw_dir, f'{dataset_name}_raw.pt')
-    
-    # 1. Ensure Raw Data exists
-    if not os.path.exists(raw_path):
-        print(f"-> Raw data for {dataset_name} not found. Processing...")
-        try:
-            module = importlib.import_module(f'data_scripts.process_{dataset_name}')
-            module.process(raw_dir)
-        except ImportError:
-            raise ImportError(f"No processing script: data_scripts/process_{dataset_name}.py")
+    raw_dir = "./datasets/raw"
+    raw_path = os.path.join(raw_dir, f"{dataset_name}_raw.pt")
 
-    # 2. Check if partition already exists
-    output_dir = f'./datasets/{dataset_name}/{partition_method}'
+    if not os.path.exists(raw_path):
+        print(f"-> 未找到 {dataset_name} 的原始数据。正在处理...")
+        module = importlib.import_module(f"data_scripts.process_{dataset_name}")
+        module.process(raw_dir)
+
+    # 2. 准备分区文件夹名
+    if partition_method == "iid":
+        part_str = f"iid_n{num_clients}"
+    elif partition_method == "dirichlet":
+        alpha = kwargs.get("alpha", 0.5)
+        part_str = f"dirichlet_n{num_clients}_a{alpha}"
+    elif partition_method == "pathological":
+        n_classes = kwargs.get("n_classes", 2)
+        part_str = f"pathological_n{num_clients}_c{n_classes}"
+    else:
+        raise ValueError(f"未知分区方法: {partition_method}")
+
+    output_dir = os.path.join("./datasets", dataset_name, part_str)
+
     if os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients:
-        print(f"-> Partition {partition_method} for {dataset_name} already exists. Skipping.")
+        print(f"-> {dataset_name} 的 {part_str} 分区已存在。跳过处理。")
         return
 
-    print(f"-> Partitioning {dataset_name} using {partition_method}...")
-    data = torch.load(raw_path)
-    X, Y = data['x'], data['y']
+    print(f"-> 正在划分数据 ({part_str})...")
+    data = torch.load(raw_path, weights_only=False)
+    X, Y = data["x"], data["y"]
     
-    # 3. Split Global Test Set
-    num_samples = len(Y)
-    indices = np.arange(num_samples)
-    np.random.shuffle(indices)
+    test_ratio = kwargs.get("test_ratio", 0.2)
     
-    test_ratio = kwargs.get('test_ratio', 0.2)
-    test_size = int(num_samples * test_ratio)
-    test_indices = indices[:test_size]
-    train_indices = indices[test_size:]
+    # 1. 首先按类别划分训练和测试索引
+    tr_idx_by_cls, te_idx_by_cls = split_indices_by_class(Y.numpy(), test_ratio)
     
-    test_data = {'x': X[test_indices], 'y': Y[test_indices]}
-    X_train, Y_train = X[train_indices], Y[train_indices]
-    
-    # 4. Partition Logic
-    if partition_method == 'iid':
-        client_indices = iid_partition(Y_train, num_clients)
-    elif partition_method == 'dirichlet':
-        alpha = kwargs.get('alpha', 0.5)
-        client_indices = dirichlet_partition(Y_train, num_clients, alpha)
-    elif partition_method == 'pathological':
-        n_classes = kwargs.get('n_classes', 2)
-        client_indices = pathological_partition(Y_train, num_clients, n_classes)
+    # 保存一个全局测试集供服务器使用 (包含所有类的测试部分)
+    base_dir = f"./datasets/{dataset_name}"
+    if not os.path.exists(os.path.join(base_dir, "test_data.pt")):
+        if not os.path.exists(base_dir):
+            os.makedirs(base_dir)
+        all_te_idx = np.concatenate(te_idx_by_cls)
+        torch.save({"x": X[all_te_idx], "y": Y[all_te_idx]}, os.path.join(base_dir, "test_data.pt"))
+
+    # 2. 执行分区逻辑
+    if partition_method == "iid":
+        cli_tr_idx, cli_te_idx = iid_partition(tr_idx_by_cls, te_idx_by_cls, num_clients)
+    elif partition_method == "dirichlet":
+        alpha = kwargs.get("alpha", 0.5)
+        cli_tr_idx, cli_te_idx = dirichlet_partition(tr_idx_by_cls, te_idx_by_cls, num_clients, alpha)
+    elif partition_method == "pathological":
+        n_classes = kwargs.get("n_classes", 2)
+        cli_tr_idx, cli_te_idx = pathological_partition(tr_idx_by_cls, te_idx_by_cls, num_clients, n_classes)
     else:
-        raise ValueError(f"Unknown partition: {partition_method}")
-        
-    # 5. Save
+        raise ValueError(f"未知分区方法: {partition_method}")
+
+    # 3. 保存客户端数据
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    torch.save(test_data, os.path.join(output_dir, 'test_data.pt'))
-    for i, idx in enumerate(client_indices):
-        torch.save({'x': X_train[idx], 'y': Y_train[idx]}, os.path.join(output_dir, f'client_{i}.pt'))
         
-    print(f"-> Successfully prepared {dataset_name} ({partition_method}) for {num_clients} clients.")
+    for i in range(num_clients):
+        client_data = {
+            "train": {"x": X[cli_tr_idx[i]], "y": Y[cli_tr_idx[i]]},
+            "test": {"x": X[cli_te_idx[i]], "y": Y[cli_te_idx[i]]}
+        }
+        torch.save(client_data, os.path.join(output_dir, f"client_{i}.pt"))
+
+    print(f"-> 成功为 {num_clients} 个客户端准备了 {dataset_name} ({partition_method})。")

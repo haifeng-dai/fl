@@ -1,5 +1,5 @@
 import torch.nn as nn
-import torch.nn.functional as F
+
 
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=10):
@@ -9,9 +9,13 @@ class SimpleCNN(nn.Module):
         self.pool = nn.MaxPool2d(2, 2)
         # Feature extractor
         self.features = nn.Sequential(
-            self.conv1, nn.ReLU(), self.pool,
-            self.conv2, nn.ReLU(), self.pool,
-            nn.Flatten()
+            self.conv1,
+            nn.ReLU(),
+            self.pool,
+            self.conv2,
+            nn.ReLU(),
+            self.pool,
+            nn.Flatten(),
         )
         # Projection head (for MOON)
         self.proj = nn.Sequential(
@@ -20,10 +24,11 @@ class SimpleCNN(nn.Module):
             nn.Linear(128, 64)
         )
         # Classification head
-        self.fc = nn.Linear(64, num_classes)
+        self.fc = nn.Linear(64 * 7 * 7, num_classes)
 
     def forward(self, x):
         h = self.features(x)
+        # MOON uses projection head, others use features directly
         z = self.proj(h)
-        y = self.fc(z)
+        y = self.fc(h)
         return y, z

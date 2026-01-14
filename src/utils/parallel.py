@@ -1,36 +1,40 @@
-import torch.multiprocessing as mp
+def client_worker(client, parameters):
+    client.set_client(parameters)
+    result = client.train()
+    return client.client_id, result
 
 
-def client_worker(client_cls, client_id, device, global_params, args, return_dict):
+def run_parallel_clients(
+    clients,
+    parameters,
+    gpu_pools,
+):
     """
-    Worker function to instantiate client and run training in a sub-process.
+    运行并行客户端训练。
+    :param clients: 客户端字典 {id: client_obj}
+    :param parameters: 可以是所有客户端共用的参数，也可以是 {id: params} 的字典
+    :param gpu_pools: 设备对应的进程池字典
     """
-    client = client_cls(client_id, device, args)
-    updated_params = client.train(global_params)
-    return_dict[client_id] = updated_params
+    async_results = []
+    for client_id, client in clients.items():
+        pool = gpu_pools[client.device]
 
+        # 如果 parameters 是字典且包含当前 client_id，则取其对应参数，否则取全局参数
+        if isinstance(parameters, dict) and client_id in parameters:
+            client_params = parameters[client_id]
+        else:
+            client_params = parameters
 
-def run_parallel_clients(client_cls, clients_info, global_params, common_args):
-    manager = mp.Manager()
-    return_dict = manager.dict()
-    processes = []
-
-    for client_id, device in clients_info:
-        p = mp.Process(
-            target=client_worker,
-            args=(
-                client_cls,
-                client_id,
-                device,
-                global_params,
-                common_args,
-                return_dict,
-            ),
+        async_results.append(
+            pool.apply_async(
+                client_worker,
+                (
+                    client,
+                    client_params,
+                )
+            )
         )
-        p.start()
-        processes.append(p)
 
-    for p in processes:
-        p.join()
-
-    return [return_dict[i] for i in sorted(return_dict.keys())]
+    all_results = [r.get() for r in async_results]
+    all_results.sort(key=lambda x: x[0])
+    return [r[1] for r in all_results]
