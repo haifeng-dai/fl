@@ -1,6 +1,6 @@
 import torch
 import os
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import TensorDataset
 
 def get_partition_path(dataset_name, partition, num_clients, alpha=0.5, n_classes=2):
     if partition == "iid":
@@ -19,19 +19,21 @@ def load_test_data(dataset_name):
         raise FileNotFoundError(f"Global test data not found at {test_path}.")
     data = torch.load(test_path, weights_only=False)
     dataset = TensorDataset(data["x"], data["y"])
-    return DataLoader(dataset, batch_size=128, shuffle=False)
+    return dataset
 
 def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=False):
     """
     统一的数据加载接口。
-    返回: (train_loaders, test_loader)
-    - train_loaders: dict[int, DataLoader]
-    - test_loader: dict[int, DataLoader] (如果 pfl=True) 或 DataLoader (如果 pfl=False)
+    返回: (train_datasets, test_dataset, train_counts)
+    - train_datasets: dict[int, Dataset]
+    - test_dataset: dict[int, Dataset] (如果 pfl=True) 或 Dataset (如果 pfl=False)
+    - train_counts: dict[int, int]
     """
     part_dir = get_partition_path(dataset_name, partition, num_clients, alpha, n_classes)
 
-    train_loaders = {}
-    test_loaders = {}
+    train_datasets = {}
+    test_datasets = {}
+    train_counts = {}
 
     for i in range(num_clients):
         data_path = os.path.join(part_dir, f"client_{i}.pt")
@@ -41,18 +43,17 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
         data = torch.load(data_path, weights_only=False)
 
         # 加载训练集
-        train_dataset = TensorDataset(data["train"]["x"], data["train"]["y"])
-        train_loaders[i] = DataLoader(train_dataset, batch_size=64, shuffle=True)
+        train_datasets[i] = TensorDataset(data["train"]["x"], data["train"]["y"])
+        train_counts[i] = len(data["train"]["x"])
 
         # 如果是 pFL，加载每个客户端的本地测试集
         if pfl:
-            test_dataset = TensorDataset(data["test"]["x"], data["test"]["y"])
-            test_loaders[i] = DataLoader(test_dataset, batch_size=64, shuffle=False)
+            test_datasets[i] = TensorDataset(data["test"]["x"], data["test"]["y"])
 
     if not pfl:
         # 非 pFL 模式，加载全局测试集
-        test_loader = load_test_data(dataset_name)
+        test_dataset = load_test_data(dataset_name)
     else:
-        test_loader = test_loaders
+        test_dataset = test_datasets
 
-    return train_loaders, test_loader
+    return train_datasets, test_dataset, train_counts

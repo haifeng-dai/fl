@@ -1,10 +1,10 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import copy
+import argparse
 
-from src.utils.fed_utils import BaseClient, BaseServer, ClientInfo
+from src.utils.fed_utils import BaseClient, BaseServer
 from src.utils.parallel import run_parallel_clients
 
 
@@ -16,11 +16,10 @@ def add_args(parser):
 
 
 class MOONClient(BaseClient):
-    def __init__(self, *args, mu=1.0, tau=0.5, weight_decay=1e-4, **kwargs):
+    def __init__(self, mu=1.0, tau=0.5, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.mu = mu
         self.tau = tau
-        self.weight_decay = weight_decay
         # MOON 需要两个额外的辅助模型
         self.global_model = copy.deepcopy(self.model).to(self.device)
         self.prev_model = copy.deepcopy(self.model).to(self.device)
@@ -41,12 +40,12 @@ class MOONClient(BaseClient):
         optimizer = optim.SGD(
             self.model.parameters(),
             lr=self.lr,
-            weight_decay=self.weight_decay
         )
         loss_list = []
 
         for epoch in range(self.epochs):
-            for data, target in self.train_loader:
+            train_loader = self.build_train_loader()
+            for data, target in train_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 optimizer.zero_grad()
 
@@ -82,26 +81,22 @@ class MOONServer(BaseServer):
     def __init__(
             self,
             model: torch.nn.Module,
-            train_loader: dict[int, torch.utils.data.DataLoader],
-            test_loader: torch.utils.data.DataLoader,
-            clients_info: ClientInfo,
-            rounds: int
+            train_sets: dict[int, torch.utils.data.Dataset],
+            test_set: torch.utils.data.Dataset,
+            train_counts: dict[int, int],
+            args: argparse.Namespace,
     ):
-        super().__init__(model, test_loader, clients_info, rounds)
-        self.args = clients_info.args
-        self.clients = {
-            i: MOONClient(
+        super().__init__(model, test_set, train_counts, args)
+        self.clients = {}
+        for i in range(len(args.cuda)):
+            self.clients[i] = MOONClient(
                 client_id=i,
                 model=model,
-                train_loader=train_loader[i],
-                lr=clients_info.lr,
-                epochs=clients_info.epochs,
-                device=clients_info.cuda[i],
-                mu=self.args.mu if hasattr(self.args, 'mu') else 1.0,
-                tau=self.args.tau if hasattr(self.args, 'tau') else 0.5,
-                weight_decay=self.args.weight_decay if hasattr(self.args, 'weight_decay') else 1e-4
-            ) for i in range(len(clients_info.cuda))
-        }
+                train_set=train_sets[i],
+                args=args,
+                mu=args.mu,
+                tau=args.tau
+            )
 
     def fit(self):
         prev_local_params_list = [None] * len(self.clients)
@@ -127,6 +122,6 @@ class MOONServer(BaseServer):
             client_dicts = [res[1] for res in results]
 
             prev_local_params_list = client_dicts
-            self.aggregate(client_dicts)
+            self.aggregate(client_dicts, weights=self.weights)
             acc = self.evaluate()
             print(f"Global Accuracy: {acc:.2f}%, Avg Loss: {sum(loss_epoch)/len(loss_epoch):.4f}")

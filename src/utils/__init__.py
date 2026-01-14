@@ -1,5 +1,5 @@
 from .load_data import load_data
-from .fed_utils import BaseClient, BaseServer, ClientInfo
+from .fed_utils import BaseClient, BaseServer
 
 def is_pfl(algo_name: str) -> bool:
     # --- 算法类型硬编码区分 ---

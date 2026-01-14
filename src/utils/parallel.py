@@ -19,31 +19,21 @@ def run_parallel_clients(
     """
     if no_mp:
         results = []
-        for client_id, client in clients.items():
-            if isinstance(parameters, dict) and client_id in parameters:
-                client_params = parameters[client_id]
-            else:
-                client_params = parameters
-            results.append(client_worker(client, client_params))
+        for client in clients.values():
+            results.append(client_worker(client, parameters))
         results.sort(key=lambda x: x[0])
         return [r[1] for r in results]
 
     async_results = []
-    for client_id, client in clients.items():
+    for client in clients.values():
         pool = gpu_pools[client.device]
-
-        # 如果 parameters 是字典且包含当前 client_id，则取其对应参数，否则取全局参数
-        if isinstance(parameters, dict) and client_id in parameters:
-            client_params = parameters[client_id]
-        else:
-            client_params = parameters
 
         async_results.append(
             pool.apply_async(
                 client_worker,
                 (
                     client,
-                    client_params,
+                    parameters,
                 )
             )
         )

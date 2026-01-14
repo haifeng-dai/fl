@@ -7,15 +7,12 @@ def param_aggregate(
     if weights is None:
         weights = [1.0 / len(state_dicts)] * len(state_dicts)
 
+    weight_tensor = torch.tensor(weights, dtype=torch.float32, device="cpu")
     with torch.no_grad():
-        temp_state: dict[str, torch.Tensor] = {}
+        aggregated_state: dict[str, torch.Tensor] = {}
         for key in state_dicts[0].keys():
-            temp_state[key] = torch.zeros_like(state_dicts[0][key])
+            stacked = torch.stack([state_dict[key].cpu() for state_dict in state_dicts], dim=0)
+            expanded_weights = weight_tensor.view(-1, *([1] * (stacked.ndim - 1)))
+            aggregated_state[key] = (stacked * expanded_weights).sum(dim=0)
 
-        for key in temp_state.keys():
-            temp = torch.zeros_like(temp_state[key])
-            for i, state_dict in enumerate(state_dicts):
-                temp += state_dict[key].cpu() * weights[i]
-            temp_state[key].copy_(temp)
-
-    return temp_state
+        return aggregated_state

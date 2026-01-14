@@ -5,7 +5,7 @@ import torch
 
 from data_scripts import prepare_data
 from src.models import SimpleCNN
-from src.utils import ClientInfo, load_data, is_pfl
+from src.utils import load_data, is_pfl
 
 
 def main():
@@ -38,6 +38,7 @@ def main():
     train_group.add_argument("--rounds", type=int, default=5)
     train_group.add_argument("--epochs", type=int, default=1)
     train_group.add_argument("--lr", type=float, default=0.01)
+    train_group.add_argument("--batch_size", type=int, default=64)
     train_group.add_argument("--gpus", type=str, default="0")
     train_group.add_argument("--no_mp", action="store_true", help="Disable multiprocessing training")
 
@@ -59,14 +60,21 @@ def main():
     )
 
     # 4. Resource Setup
-    clients_info = ClientInfo(args)
+    gpu_ids = [int(i) for i in args.gpus.split(",")]
+    args.cuda = {
+        i: torch.device(
+            f"cuda:{gpu_ids[i % len(gpu_ids)]}"
+            if torch.cuda.is_available()
+            else "cpu"
+        ) for i in range(args.num_clients)
+    }
 
     # 5. Global Objects
     global_model = SimpleCNN()
     pfl = is_pfl(args.algo)
 
     # Unified data loading
-    train_loaders, test_loader = load_data(
+    train_sets, test_set, train_counts = load_data(
         dataset_name=args.dataset,
         partition=args.partition,
         num_clients=args.num_clients,
@@ -80,24 +88,24 @@ def main():
     if args.algo == "fedavg":
         from src.fedavg import FedAvgServer
 
-        assert isinstance(test_loader, torch.utils.data.DataLoader)
+        assert isinstance(test_set, torch.utils.data.Dataset)
         server = FedAvgServer(
             model=global_model,
-            train_loader=train_loaders,
-            test_loader=test_loader,
-            clients_info=clients_info,
-            rounds=args.rounds,
+            train_sets=train_sets,
+            test_set=test_set,
+            train_counts=train_counts,
+            args=args
         )
     elif args.algo == "moon":
         from src.moon import MOONServer
 
-        assert isinstance(test_loader, torch.utils.data.DataLoader)
+        assert isinstance(test_set, torch.utils.data.Dataset)
         server = MOONServer(
             model=global_model,
-            train_loader=train_loaders,
-            test_loader=test_loader,
-            clients_info=clients_info,
-            rounds=args.rounds,
+            train_sets=train_sets,
+            test_set=test_set,
+            train_counts=train_counts,
+            args=args
         )
     if server is None:
         raise ValueError(f"Unsupported algorithm: {args.algo}")
@@ -106,7 +114,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # 虽然这里设置了 spawn，但在 no_mp 模式下不会创建进程池
-    # 保持 spawn 是为了在多 GPU 环境下使用多进程时的稳定性
     torch.multiprocessing.set_start_method("spawn", force=True)
     main()

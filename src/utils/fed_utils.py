@@ -4,10 +4,10 @@ import argparse
 
 import torch
 import torch.multiprocessing as mp
-from dataclasses import dataclass
 
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model
+from torch.utils.data import DataLoader
 
 
 class BaseClient:
@@ -15,21 +15,23 @@ class BaseClient:
             self,
             client_id: int,
             model: torch.nn.Module,
-            train_loader: torch.utils.data.DataLoader,
-            lr: float,
-            epochs: int,
-            device: torch.device,
+            train_set: torch.utils.data.Dataset,
+            args: argparse.Namespace
     ):
         self.client_id = client_id
-        self.model = copy.deepcopy(model).to(device)
-        self.train_loader = train_loader
-        self.lr = lr
-        self.epochs = epochs
-        self.device = device
+        self.model = copy.deepcopy(model).to(args.cuda[client_id])
+        self.train_set = train_set
+        self.lr = args.lr
+        self.batch_size = args.batch_size
+        self.epochs = args.epochs
+        self.device = args.cuda[client_id]
 
         self.ce = torch.nn.CrossEntropyLoss()
         self.mse = torch.nn.MSELoss()
         self.KL = torch.nn.KLDivLoss(reduction="batchmean")
+
+    def build_train_loader(self) -> DataLoader:
+        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True)
 
     def train(self, *args, **kwargs):
         raise NotImplementedError
@@ -42,22 +44,26 @@ class BaseServer:
     def __init__(
             self,
             model: torch.nn.Module,
-            test_loader: torch.utils.data.DataLoader | dict[int, torch.utils.data.DataLoader] | None,
-            clients_info: ClientInfo,
-            rounds: int,
+            test_set: torch.utils.data.Dataset | dict[int, torch.utils.data.Dataset] | None,
+            train_counts: dict[int, int],
+            args: argparse.Namespace
     ):
         self.model = model.cpu()
-        self.test_loader = test_loader
-        self.clients_info = clients_info
-        self.rounds = rounds
+        self.test_set = test_set
+        self.args = args
+        self.rounds = args.rounds
 
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
-        self.no_mp = clients_info.args.no_mp
+        # Use pre-calculated counts for sample weights
+        total_samples = sum(train_counts.values())
+        self.weights = [train_counts[i] / total_samples for i in range(len(train_counts))]
+
+        self.no_mp = self.args.no_mp
         self.gpu_pools = {}
         if not self.no_mp:
             device_counts = defaultdict(int)
-            for _, device in self.clients_info.cuda.items():
+            for _, device in self.args.cuda.items():
                 device_counts[device] += 1
 
             for device, count in device_counts.items():
@@ -71,15 +77,20 @@ class BaseServer:
         self.model.load_state_dict(aggregated_state)
 
     def evaluate(self, pfl=False, *args, **kwargs):
-        if isinstance(self.test_loader, dict):
-            #是个性化联邦学习或使用了本地测试集，计算平均准确率
+        if self.test_set is None:
+            return 0.0
+
+        if isinstance(self.test_set, dict):
+            # 是个性化联邦学习或使用了本地测试集，计算平均准确率
             accs = []
-            for client_id, loader in self.test_loader.items():
+            for client_id, dataset in self.test_set.items():
+                loader = DataLoader(dataset, batch_size=128, shuffle=False)
                 acc = evaluate_model(self.model, loader, self.device)
                 accs.append(acc)
             return sum(accs) / len(accs)
         else:
-            acc = evaluate_model(self.model, self.test_loader, self.device)
+            loader = DataLoader(self.test_set, batch_size=128, shuffle=False)
+            acc = evaluate_model(self.model, loader, self.device)
             return acc
 
     def fit(self, *args, **kwargs):
@@ -90,20 +101,3 @@ class BaseServer:
             for pool in self.gpu_pools.values():
                 pool.close()
                 pool.join()
-
-
-@dataclass
-class ClientInfo:
-    args: argparse.Namespace
-
-    def __post_init__(self):
-        self.lr: float = self.args.lr
-        self.epochs: int = self.args.epochs
-        gpu_ids = [int(i) for i in self.args.gpus.split(",")]
-        self.cuda = {
-            i: torch.device(
-                f"cuda:{gpu_ids[i % len(gpu_ids)]}"
-                if torch.cuda.is_available()
-                else "cpu"
-            ) for i in range(self.args.num_clients)
-        }

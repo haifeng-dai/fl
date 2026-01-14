@@ -1,6 +1,7 @@
 import torch.optim as optim
 import torch
-from src.utils.fed_utils import BaseClient, BaseServer, ClientInfo
+import argparse
+from src.utils.fed_utils import BaseClient, BaseServer
 from src.utils.parallel import run_parallel_clients
 
 
@@ -11,20 +12,19 @@ def add_args(parser):
 
 
 class FedAvgClient(BaseClient):
-    def __init__(self, *args, weight_decay=1e-4, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.weight_decay = weight_decay
 
     def train(self):
         self.model.train()
         optimizer = optim.SGD(
             self.model.parameters(),
             lr=self.lr,
-            weight_decay=self.weight_decay
         )
         loss_ = []
         for epoch in range(self.epochs):
-            for data, target in self.train_loader:
+            train_loader = self.build_train_loader()
+            for data, target in train_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 optimizer.zero_grad()
                 output, _ = self.model(data)
@@ -43,23 +43,20 @@ class FedAvgServer(BaseServer):
     def __init__(
             self,
             model: torch.nn.Module,
-            train_loader: dict[int, torch.utils.data.DataLoader],
-            test_loader: torch.utils.data.DataLoader,
-            clients_info: ClientInfo,
-            rounds: int
+            train_sets: dict[int, torch.utils.data.Dataset],
+            test_set: torch.utils.data.Dataset,
+            train_counts: dict[int, int],
+            args: argparse.Namespace
     ):
-        super().__init__(model, test_loader, clients_info, rounds)
-        self.clients = {
-            i: FedAvgClient(
+        super().__init__(model, test_set, train_counts, args)
+        self.clients = {}
+        for i in range(len(args.cuda)):
+            self.clients[i] = FedAvgClient(
                 client_id=i,
                 model=model,
-                train_loader=train_loader[i],
-                lr=clients_info.lr,
-                epochs=clients_info.epochs,
-                device=clients_info.cuda[i],
-                weight_decay=clients_info.args.weight_decay if hasattr(clients_info.args, 'weight_decay') else 1e-4
-            ) for i in range(len(clients_info.cuda))
-        }
+                train_set=train_sets[i],
+                args=args
+            )
 
     def fit(self):
         loss = []
@@ -78,6 +75,6 @@ class FedAvgServer(BaseServer):
 
             avg_loss = sum(loss_epoch) / len(loss_epoch)
             loss.append(avg_loss)
-            self.aggregate(client_dicts)
+            self.aggregate(client_dicts, weights=self.weights)
             acc = self.evaluate()
             print(f"Global Accuracy: {acc:.2f}%, Avg Loss: {avg_loss:.4f}")
