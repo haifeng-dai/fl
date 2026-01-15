@@ -91,9 +91,7 @@ def main():
         assert isinstance(test_set, torch.utils.data.Dataset)
         server = FedAvgServer(
             model=global_model,
-            train_sets=train_sets,
-            test_set=test_set,
-            train_counts=train_counts,
+            pfl=False,
             args=args
         )
     elif args.algo == "moon":
@@ -102,15 +100,17 @@ def main():
         assert isinstance(test_set, torch.utils.data.Dataset)
         server = MOONServer(
             model=global_model,
-            train_sets=train_sets,
-            test_set=test_set,
-            train_counts=train_counts,
+            pfl=False,
             args=args
         )
     if server is None:
         raise ValueError(f"Unsupported algorithm: {args.algo}")
 
-    server.fit()
+    try:
+        server.fit()
+    finally:
+        if server is not None:
+            server.close()
 
 
 if __name__ == "__main__":

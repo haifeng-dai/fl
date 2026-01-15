@@ -24,11 +24,11 @@ class SimpleCNN(nn.Module):
             nn.Linear(128, 64)
         )
         # Classification head
-        self.fc = nn.Linear(64 * 7 * 7, num_classes)
+        self.fc = nn.Linear(64, num_classes)
 
     def forward(self, x):
         h = self.features(x)
         # MOON uses projection head, others use features directly
         z = self.proj(h)
-        y = self.fc(h)
+        y = self.fc(z)
         return y, z

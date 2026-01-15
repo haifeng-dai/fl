@@ -9,6 +9,8 @@ from .aggregate import param_aggregate
 from .evaluate import evaluate_model
 from torch.utils.data import DataLoader
 
+from .load_data import load_data
+
 
 class BaseClient:
     def __init__(
@@ -21,10 +23,10 @@ class BaseClient:
         self.client_id = client_id
         self.model = copy.deepcopy(model).to(args.cuda[client_id])
         self.train_set = train_set
-        self.lr = args.lr
-        self.batch_size = args.batch_size
-        self.epochs = args.epochs
-        self.device = args.cuda[client_id]
+        self.lr: float = args.lr
+        self.batch_size: int = args.batch_size
+        self.epochs: int = args.epochs
+        self.device: torch.device = args.cuda[client_id]
 
         self.ce = torch.nn.CrossEntropyLoss()
         self.mse = torch.nn.MSELoss()
@@ -39,27 +41,27 @@ class BaseClient:
     def set_client(self, *args, **kwargs):
         raise NotImplementedError
 
+    def evaluate(self, test_set, *args, **kwargs):
+        acc = evaluate_model(self.model, test_set, self.device)
+        return acc
+
 
 class BaseServer:
     def __init__(
             self,
             model: torch.nn.Module,
-            test_set: torch.utils.data.Dataset | dict[int, torch.utils.data.Dataset] | None,
-            train_counts: dict[int, int],
+            pfl: bool,
             args: argparse.Namespace
     ):
         self.model = model.cpu()
-        self.test_set = test_set
         self.args = args
-        self.rounds = args.rounds
+        self.rounds: int = args.rounds
+        self.no_mp: bool = self.args.no_mp
 
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        self.clients = dict[int, BaseClient]()
+        self.pfl = pfl
 
-        # Use pre-calculated counts for sample weights
-        total_samples = sum(train_counts.values())
-        self.weights = [train_counts[i] / total_samples for i in range(len(train_counts))]
-
-        self.no_mp = self.args.no_mp
         self.gpu_pools = {}
         if not self.no_mp:
             device_counts = defaultdict(int)
@@ -72,32 +74,47 @@ class BaseServer:
         else:
             print("-> 禁用多进程训练，将使用顺序训练")
 
+        self.train_sets, self.test_set, train_counts = load_data(
+            dataset_name=args.dataset,
+            partition=args.partition,
+            num_clients=args.num_clients,
+            alpha=args.alpha,
+            n_classes=args.n_classes,
+            pfl=self.pfl
+        )
+
+        # Use pre-calculated counts for sample weights
+        total_samples = sum(train_counts.values())
+        self.weights = [train_counts[i] / total_samples for i in range(len(train_counts))]
+
     def aggregate(self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs):
         aggregated_state = param_aggregate(client_state_dicts, weights)
         self.model.load_state_dict(aggregated_state)
 
-    def evaluate(self, pfl=False, *args, **kwargs):
-        if self.test_set is None:
-            return 0.0
-
-        if isinstance(self.test_set, dict):
+    def evaluate(self, *args, **kwargs):
+        if self.pfl:
             # 是个性化联邦学习或使用了本地测试集，计算平均准确率
             accs = []
-            for client_id, dataset in self.test_set.items():
-                loader = DataLoader(dataset, batch_size=128, shuffle=False)
-                acc = evaluate_model(self.model, loader, self.device)
-                accs.append(acc)
-            return sum(accs) / len(accs)
+            for client_id in self.clients:
+                acc_ = self.clients[client_id].evaluate(self.test_set[client_id])
+                accs.append(acc_)
+            acc = sum(accs) / len(accs)
         else:
-            loader = DataLoader(self.test_set, batch_size=128, shuffle=False)
-            acc = evaluate_model(self.model, loader, self.device)
-            return acc
+            acc = evaluate_model(self.model, self.test_set, self.device)
+        return acc
 
     def fit(self, *args, **kwargs):
         raise NotImplementedError
 
-    def __del__(self, *args, **kwargs):
+    def close(self):
+        """显式关闭并行池，释放 GPU 资源"""
         if hasattr(self, "gpu_pools"):
-            for pool in self.gpu_pools.values():
+            for device, pool in self.gpu_pools.items():
+                print(f"-> 正在关闭设备 {device} 的并行池...")
                 pool.close()
                 pool.join()
+            # 防止重复关闭
+            self.gpu_pools = {}
+
+    def __del__(self):
+        self.close()

@@ -43,18 +43,15 @@ class FedAvgServer(BaseServer):
     def __init__(
             self,
             model: torch.nn.Module,
-            train_sets: dict[int, torch.utils.data.Dataset],
-            test_set: torch.utils.data.Dataset,
-            train_counts: dict[int, int],
+            pfl: bool,
             args: argparse.Namespace
     ):
-        super().__init__(model, test_set, train_counts, args)
-        self.clients = {}
+        super().__init__(model, pfl, args)
         for i in range(len(args.cuda)):
             self.clients[i] = FedAvgClient(
                 client_id=i,
                 model=model,
-                train_set=train_sets[i],
+                train_set=self.train_sets[i],
                 args=args
             )
 

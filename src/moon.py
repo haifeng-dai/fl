@@ -42,9 +42,8 @@ class MOONClient(BaseClient):
             lr=self.lr,
         )
         loss_list = []
-
+        train_loader = self.build_train_loader()
         for epoch in range(self.epochs):
-            train_loader = self.build_train_loader()
             for data, target in train_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 optimizer.zero_grad()
@@ -66,7 +65,7 @@ class MOONClient(BaseClient):
         return sum(loss_list) / len(loss_list), model_state
 
     def set_client(self, parameters):
-        global_params, prev_local_params = parameters
+        global_params, prev_local_params = parameters[self.client_id]
         # 加载全局参数到本地模型和全局模型副本
         self.model.load_state_dict(global_params)
         self.global_model.load_state_dict(global_params)
@@ -81,18 +80,15 @@ class MOONServer(BaseServer):
     def __init__(
             self,
             model: torch.nn.Module,
-            train_sets: dict[int, torch.utils.data.Dataset],
-            test_set: torch.utils.data.Dataset,
-            train_counts: dict[int, int],
+            pfl: bool,
             args: argparse.Namespace,
     ):
-        super().__init__(model, test_set, train_counts, args)
-        self.clients = {}
+        super().__init__(model, pfl, args)
         for i in range(len(args.cuda)):
             self.clients[i] = MOONClient(
                 client_id=i,
                 model=model,
-                train_set=train_sets[i],
+                train_set=self.train_sets[i],
                 args=args,
                 mu=args.mu,
                 tau=args.tau
