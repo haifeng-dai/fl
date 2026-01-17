@@ -20,7 +20,9 @@ def run_parallel_clients(
     if no_mp:
         results = []
         for client in clients.values():
-            results.append(client_worker(client, parameters))
+            results.append(client_worker(
+                client, parameters[client.client_id]
+            ))
         results.sort(key=lambda x: x[0])
         return [r[1] for r in results]
 
@@ -31,10 +33,8 @@ def run_parallel_clients(
         async_results.append(
             pool.apply_async(
                 client_worker,
-                (
-                    client,
-                    parameters,
-                )
+                (client, parameters[client.client_id],)
+                # (client, parameters,)
             )
         )
 

@@ -22,7 +22,7 @@ def split_indices_by_class(targets, test_ratio):
         train_indices_by_class.append(c_idx[:split])
         test_indices_by_class.append(c_idx[split:])
 
-    return train_indices_by_class, test_indices_by_class
+    return train_indices_by_class, test_indices_by_class, num_classes
 
 # --- 分区方法 ---
 
@@ -77,11 +77,33 @@ def pathological_partition(train_indices_by_class, test_indices_by_class, num_cl
     client_train_indices = [[] for _ in range(num_clients)]
     client_test_indices = [[] for _ in range(num_clients)]
 
-    shards_per_class = (num_clients * n_classes_per_client) // num_classes
+    total_slots = num_clients * n_classes_per_client
+
+    if total_slots < num_classes:
+        raise ValueError(
+            f"[Pathological Partition Error] 总需求分片数 ({total_slots}) 小于类别总数 ({num_classes})。\n"
+            f"请增加 num_clients 或 n_classes_per_client。"
+        )
+
+    if total_slots % num_classes != 0:
+        raise ValueError(
+            f"[Pathological Partition Error] 总需求分片数 ({total_slots}) 无法被类别总数 ({num_classes}) 整除。\n"
+            f"请调整参数使得 (num_clients * n_classes_per_client) % {num_classes} == 0。"
+        )
+
+    shards_per_class = total_slots // num_classes
+    if shards_per_class == 0:
+        raise ValueError("[Pathological Partition Error] 计算出的每类分片数为 0。")
 
     train_shards = []
     test_shards = []
     for k in range(num_classes):
+        if len(train_indices_by_class[k]) < shards_per_class:
+            raise ValueError(
+                f"[Pathological Partition Error] 类别 {k} 的样本量 ({len(train_indices_by_class[k])}) "
+                f"不足以切分为 {shards_per_class} 个分片。"
+            )
+
         train_shards.append(np.array_split(train_indices_by_class[k], shards_per_class))
         test_shards.append(np.array_split(test_indices_by_class[k], shards_per_class))
 
@@ -130,7 +152,6 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
 
     if os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients:
         print(f"-> {dataset_name} 的 {part_str} 分区已存在。跳过处理。")
-        return
 
     print(f"-> 正在划分数据 ({part_str})...")
     data = torch.load(raw_path, weights_only=False)
@@ -139,7 +160,7 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     test_ratio = kwargs.get("test_ratio", 0.2)
 
     # 1. 首先按类别划分训练和测试索引
-    tr_idx_by_cls, te_idx_by_cls = split_indices_by_class(Y.numpy(), test_ratio)
+    tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(Y.numpy(), test_ratio)
 
     # 保存一个全局测试集供服务器使用 (包含所有类的测试部分)
     base_dir = f"./datasets/{dataset_name}"
@@ -168,7 +189,8 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     for i in range(num_clients):
         client_data = {
             "train": {"x": X[cli_tr_idx[i]], "y": Y[cli_tr_idx[i]]},
-            "test": {"x": X[cli_te_idx[i]], "y": Y[cli_te_idx[i]]}
+            "test": {"x": X[cli_te_idx[i]], "y": Y[cli_te_idx[i]]},
+            "num_classes": num_classes
         }
         torch.save(client_data, os.path.join(output_dir, f"client_{i}.pt"))
 

@@ -37,9 +37,6 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
 
     for i in range(num_clients):
         data_path = os.path.join(part_dir, f"client_{i}.pt")
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Data for client {i} not found at {data_path}.")
-
         data = torch.load(data_path, weights_only=False)
 
         # 加载训练集
@@ -50,10 +47,12 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
         if pfl:
             test_datasets[i] = TensorDataset(data["test"]["x"], data["test"]["y"])
 
+    num_class = data["num_classes"]  # type: ignore
+
     if not pfl:
         # 非 pFL 模式，加载全局测试集
         test_dataset = load_test_data(dataset_name)
     else:
         test_dataset = test_datasets
 
-    return train_datasets, test_dataset, train_counts
+    return train_datasets, test_dataset, train_counts, num_class

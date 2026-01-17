@@ -1,49 +1,48 @@
 import torch
-import torch.nn.functional as F
-import torch.optim as optim
-import copy
+import copy,os
 import argparse
 
-from src.utils.fed_utils import BaseClient, BaseServer
-from src.utils.parallel import run_parallel_clients
+from .utils import BaseClient, BaseServer, run_parallel_clients
 
 
-def add_args(parser):
+def add_args(parser: argparse.ArgumentParser):
     group = parser.add_argument_group("MOON Specific Arguments")
-    group.add_argument("--mu", type=float, default=1.0)
-    group.add_argument("--tau", type=float, default=0.5)
+    group.add_argument("--mu", type=float, default=1.0, help="Weight for contrastive loss")
+    group.add_argument("--tau", type=float, default=0.5, help="Temperature parameter for contrastive loss")
     return parser
 
 
-class MOONClient(BaseClient):
-    def __init__(self, mu=1.0, tau=0.5, *args, **kwargs):
+class Client(BaseClient):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.mu = mu
-        self.tau = tau
+        self.mu = self.args.mu
+        self.tau = self.args.tau
         # MOON 需要两个额外的辅助模型
         self.global_model = copy.deepcopy(self.model).to(self.device)
         self.prev_model = copy.deepcopy(self.model).to(self.device)
 
+        self.ce_moon = torch.nn.CosineSimilarity(dim=-1)
+
     def moon_loss(self, z, z_glob, z_prev):
-        pos_sim = F.cosine_similarity(z, z_glob, dim=-1)
-        neg_sim = F.cosine_similarity(z, z_prev, dim=-1)
+        pos_sim = self.ce_moon(z, z_glob)
+        neg_sim = self.ce_moon(z, z_prev)
         logits = torch.cat([pos_sim.reshape(-1, 1), neg_sim.reshape(-1, 1)], dim=1)
         logits /= self.tau
         labels = torch.zeros(z.size(0)).to(z.device).long()
-        return F.cross_entropy(logits, labels)
+        return self.ce(logits, labels)
 
     def train(self):
         self.model.train()
         self.global_model.eval()
         self.prev_model.eval()
 
-        optimizer = optim.SGD(
+        optimizer = torch.optim.SGD(
             self.model.parameters(),
             lr=self.lr,
         )
-        loss_list = []
+        loss_ = []
         train_loader = self.build_train_loader()
-        for epoch in range(self.epochs):
+        for _ in range(self.epochs):
             for data, target in train_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 optimizer.zero_grad()
@@ -59,13 +58,13 @@ class MOONClient(BaseClient):
 
                 loss.backward()
                 optimizer.step()
-                loss_list.append(loss.item())
+                loss_.append(loss.item())
 
         model_state = {k: v.detach().clone().cpu() for k, v in self.model.state_dict().items()}
-        return sum(loss_list) / len(loss_list), model_state
+        return sum(loss_) / len(loss_), model_state
 
     def set_client(self, parameters):
-        global_params, prev_local_params = parameters[self.client_id]
+        global_params, prev_local_params = parameters
         # 加载全局参数到本地模型和全局模型副本
         self.model.load_state_dict(global_params)
         self.global_model.load_state_dict(global_params)
@@ -76,22 +75,19 @@ class MOONClient(BaseClient):
         else:
             self.prev_model.load_state_dict(global_params)
 
-class MOONServer(BaseServer):
+class Server(BaseServer):
     def __init__(
             self,
             model: torch.nn.Module,
-            pfl: bool,
             args: argparse.Namespace,
     ):
-        super().__init__(model, pfl, args)
-        for i in range(len(args.cuda)):
-            self.clients[i] = MOONClient(
+        super().__init__(model, False, args)
+        for i in range(args.num_clients):
+            self.clients[i] = Client(
                 client_id=i,
                 model=model,
                 train_set=self.train_sets[i],
-                args=args,
-                mu=args.mu,
-                tau=args.tau
+                args=args
             )
 
     def fit(self):
@@ -102,10 +98,9 @@ class MOONServer(BaseServer):
             global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
 
             # 准备每个客户端的个性化参数包
-            parameters_per_client = {
-                i: (global_params, prev_local_params_list[i])
-                for i in self.clients.keys()
-            }
+            parameters_per_client = [
+                (global_params, prev_local_params_list[i]) for i in range(self.num_clients)
+            ]
 
             results = run_parallel_clients(
                 clients=self.clients,
@@ -117,7 +112,19 @@ class MOONServer(BaseServer):
             loss_epoch = [res[0] for res in results]
             client_dicts = [res[1] for res in results]
 
+            loss_avg = sum(loss_epoch) / len(loss_epoch)
             prev_local_params_list = client_dicts
             self.aggregate(client_dicts, weights=self.weights)
             acc = self.evaluate()
-            print(f"Global Accuracy: {acc:.2f}%, Avg Loss: {sum(loss_epoch)/len(loss_epoch):.4f}")
+            self.acc.append(acc)
+            self.loss.append(loss_avg)
+            print(f"Global Accuracy: {acc:.2f}%, Avg Loss: {loss_avg:.4f}")
+
+    def save(self, test):
+        file_name: str = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"
+        f = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "state_dict": self.model.state_dict()
+        }
+        super().deal_save(test, f, file_name)
