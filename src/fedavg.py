@@ -27,10 +27,7 @@ class Client(BaseClient):
                 loss.backward()
                 optimizer.step()
                 loss_.append(loss.item())
-        model_state = {
-            k: v.detach().clone().cpu() for k, v in self.model.state_dict().items()
-        }
-        return sum(loss_) / len(loss_), model_state
+        return sum(loss_) / len(loss_)
 
     def set_client(self, parameters):
         self.model.load_state_dict(parameters)
@@ -41,7 +38,10 @@ class Server(BaseServer):
         super().__init__(model, False, args)
         for i in range(args.num_clients):
             self.clients[i] = Client(
-                client_id=i, model=model, train_set=self.train_sets[i], args=args
+                client_id=i,
+                model=model,
+                train_set=self.train_sets[i],
+                args=args
             )
 
     def fit(self):
@@ -57,15 +57,15 @@ class Server(BaseServer):
                 gpu_pools=self.gpu_pools,
                 no_mp=self.no_mp,
             )
-            loss_epoch = [res[0] for res in results]
-            client_dicts = [res[1] for res in results]
-
-            avg_loss = sum(loss_epoch) / len(loss_epoch)
+            avg_loss = sum(results) / self.num_clients
             self.loss.append(avg_loss)
-            self.aggregate(client_dicts, weights=self.weights)
-            acc = self.evaluate()
-            self.acc.append(acc)
-            print(f"Global Accuracy: {acc:.2f}%, Avg Loss: {avg_loss:.4f}")
+
+            clients_params = [
+                self.clients[i].model.state_dict() for i in range(self.num_clients)
+            ]
+            self.aggregate(clients_params, weights=self.weights)
+            self.evaluate()
+            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
 
     def save(self, test):
         f = {

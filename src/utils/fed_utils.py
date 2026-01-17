@@ -29,6 +29,7 @@ class BaseClient:
         self.batch_size: int = args.batch_size
         self.epochs: int = args.epochs
         self.device: torch.device = args.cuda[client_id]
+        self.loss: list[float] = []
 
         self.ce = torch.nn.CrossEntropyLoss()
         self.mse = torch.nn.MSELoss()
@@ -90,7 +91,6 @@ class BaseServer:
         self.weights = [train_counts[i] / total_samples for i in range(len(train_counts))]
 
         args.cuda = self.__start_pools(args.gpus)
-        self.__share_model()
 
     def __start_pools(self, gpus):
         gpu_ids = [int(i) for i in gpus.split(",")]
@@ -115,11 +115,6 @@ class BaseServer:
             print("-> 禁用多进程训练，将使用顺序训练")
         return cuda
 
-    def __share_model(self):
-        if not self.no_mp:
-            for v in self.model.state_dict().values():
-                v.share_memory_()
-
     def aggregate(self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs):
         aggregated_state = param_aggregate(client_state_dicts, weights)
         self.model.load_state_dict(aggregated_state)
@@ -135,7 +130,7 @@ class BaseServer:
             acc = sum(accs) / len(accs)
         else:
             acc = evaluate_model(self.model, self.test_set, self.device)
-        return acc
+        self.acc.append(acc)
 
     def fit(self, *args, **kwargs):
         raise NotImplementedError

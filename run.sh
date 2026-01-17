@@ -1,28 +1,26 @@
 #!/bin/bash
 
 # 通过环境变量配置实验参数
-export DATASETS=("mnist" "cifar10")
-export NUM_CLIENTS=(10)
-export PARTITIONS=("iid" "pathological" "dirichlet")
-export ROUND=2
-export EPOCHS=(2)
-export LRS=(0.01)
+export ALGO="moon"
+export DATASETS="mnist"
+export MODELS="cnn"
+export NUM_CLIENTS="10"
+export PARTITIONS="iid"
+export ROUND="10"
+export EPOCHS="2"
+export LRS="0.01"
 export GPUS="0,1,2,3"
+# export NO_MP="--no_mp"
 export TEST=True
 
 export ALPHAS="0.1"
 export N_CLASS="2"
 
-# 启动 FedAvg 脚本
-# bash ./scripts/fedavg.sh
-
-# 启动 MOON 脚本
+# 算法特定参数
 export MUS="1.0"
 export TAUS="0.5"
-# bash ./scripts/moon.sh
 
-# 启动 FedPLN 脚本
-export LAMBDAS="1.0, 10.0"
+export LAMBDAS="1.0"
 export EPOCH_PLNS="2"
 export LR_PLNS="0.01"
 export MODES="normal"
@@ -33,5 +31,23 @@ export WIDTH_PLNS="12"
 export FIXED_PROTOS="False"
 export INIT_EMBS="0"
 export HARS="False"
-# bash ./scripts/fedpln.sh
-bash ./scripts/feddpl.sh
+
+# 根据算法选择启动对应的脚本
+case $ALGO in
+    "fedavg")
+        bash ./scripts/fedavg.sh
+        ;;
+    "moon")
+        bash ./scripts/moon.sh
+        ;;
+    "fedpln")
+        bash ./scripts/fedpln.sh
+        ;;
+    "feddpl")
+        bash ./scripts/feddpl.sh
+        ;;
+    *)
+        echo "未知算法: $ALGO. 支持的算法: fedavg, moon, fedpln, feddpl"
+        exit 1
+        ;;
+esac

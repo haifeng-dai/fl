@@ -93,19 +93,11 @@ class Client(BaseClient):
         self.pln = copy.deepcopy(pln).to(self.device)
         self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings).to(self.device)
 
-        for v in self.model.state_dict().values():
-            v.share_memory_()
-
-        for v in self.pln.state_dict().values():
-            v.share_memory_()
-
     def train(self, *args, **kwargs):
         train_loader = self.build_train_loader()
         loss_m = self.train_model(train_loader)
         loss_p = self.pln_learning(train_loader)
-        model_state = {k: v.detach().clone().cpu() for k, v in self.model.state_dict().items()}
-        pln_state = {k: v.detach().clone().cpu() for k, v in self.pln.state_dict().items()}
-        return loss_m, loss_p, model_state, pln_state
+        return loss_m, loss_p
 
     def train_model(self, train_loader):
         self.model.train()
@@ -188,20 +180,12 @@ class Server(BaseServer):
         self.acc_p: list[float] = []
         self.loss_p: list[float] = []
 
-        for v in self.pln.state_dict().values():
-            v.share_memory_()
-
     def fit(self):
         model_param = {k: v.cpu() for k, v in self.model.state_dict().items()}
         pln_param = {k: v.cpu() for k, v in self.pln.state_dict().items()}
         parameters_per_client = [(model_param, pln_param)] * self.num_clients
-        # parameters_per_client = {
-        #     i: (model_param, pln_param) for i in range(self.num_clients)
-        # }
         for r in range(self.rounds):
-            print(f"\n--- FedPLN Round {r + 1}/{self.rounds} ---")
-            pln_params = {k: v.cpu() for k, v in self.pln.state_dict().items()}
-            global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
+            print(f"\n--- FedDPL Round {r + 1}/{self.rounds} ---")
 
             results = run_parallel_clients(
                 clients=self.clients,
@@ -214,27 +198,23 @@ class Server(BaseServer):
             self.loss.append(sum(loss_model_epoch) / len(loss_model_epoch))
             self.loss_p.append(sum(loss_pln_epoch) / len(loss_pln_epoch))
 
-            # Update global PLN
-            clients_params = [results[i][2] for i in range(self.num_clients)]
-            plns_params = [results[i][3] for i in range(self.num_clients)]
+            # # Update global PLN
+            clients_params = [self.clients[i].model.state_dict() for i in range(self.num_clients)]
+            plns_params = [self.clients[i].pln.state_dict() for i in range(self.num_clients)]  # type: ignore
 
             # Aggregate model parameters
-            self.aggregate([results[i][3] for i in range(self.num_clients)])
+            self.aggregate(plns_params)
 
             parameters_per_client = [
                 (clients_params[i], self.pln.state_dict()) for i in range(self.num_clients)
             ]
-            # parameters_per_client = {
-            #     i: (clients_params[i], self.pln.state_dict()) for i in range(self.num_clients)
-            # }
 
             self.evaluate(clients_params, plns_params)
 
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
 
     def aggregate(self, pln_params, *args, **kwargs):
-        aggregated_state = param_aggregate(pln_params, self.weights)
-        self.pln.load_state_dict(aggregated_state)
+        self.pln.load_state_dict(param_aggregate(pln_params, self.weights))
 
     def evaluate(self, clients_state, plns_state, *args, **kwargs):
         current_acc = []
@@ -243,9 +223,6 @@ class Server(BaseServer):
             self.clients[client_id].set_client((
                 clients_state[client_id], plns_state[client_id]
             ))
-            # self.clients[client_id].set_client({
-            #     i: (clients_state[i], plns_state[i]) for i in range(self.num_clients)
-            # })
             acc, acc_p = self.clients[client_id].evaluate(
                 self.test_set[client_id]
             )

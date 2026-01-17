@@ -2,7 +2,7 @@ import copy
 import torch
 import argparse
 
-from .utils import BaseClient, BaseServer, run_parallel_clients, evaluate_prototype
+from .utils import BaseClient, BaseServer, run_parallel_clients, evaluate_prototype, param_aggregate
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -96,9 +96,7 @@ class Client(BaseClient):
         train_loader = self.build_train_loader()
         loss_m = self.train_model(train_loader)
         loss_p = self.pln_learning(train_loader)
-        model_state = {k: v.detach().clone().cpu() for k, v in self.model.state_dict().items()}
-        pln_state = {k: v.detach().clone().cpu() for k, v in self.pln.state_dict().items()}
-        return loss_m, loss_p, model_state, pln_state
+        return loss_m, loss_p
 
     def train_model(self, train_loader):
         self.model.train()
@@ -195,25 +193,17 @@ class Server(BaseServer):
             self.loss.append(sum(loss_model_epoch) / len(loss_model_epoch))
             self.loss_p.append(sum(loss_pln_epoch) / len(loss_pln_epoch))
 
-            # Aggregate model parameters
-            new_global_params = dict()
-            new_pln_params = dict()
-            for k in global_params.keys():
-                new_global_params[k] = sum(
-                    [results[i][2][k] * self.weights[i] for i in range(len(self.clients))]
-                )
-            for k in pln_params.keys():
-                new_pln_params[k] = sum(
-                    [results[i][3][k] * self.weights[i] for i in range(len(self.clients))]
-                )
-
             # Update global model and PLN
-            self.model.load_state_dict(new_global_params)
-            self.pln.load_state_dict(new_pln_params)
-
+            self.aggregate()
             self.evaluate()
 
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
+
+    def aggregate(self):
+        clients_params = [self.clients[i].model.state_dict() for i in range(self.num_clients)]
+        plns_params = [self.clients[i].pln.state_dict() for i in range(self.num_clients)]  # type: ignore
+        self.model.load_state_dict(param_aggregate(clients_params, self.weights))
+        self.pln.load_state_dict(param_aggregate(plns_params, self.weights))
 
     def evaluate(self):
         self.acc.append(super().evaluate())

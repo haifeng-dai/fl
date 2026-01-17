@@ -2,7 +2,7 @@ import torch
 import copy,os
 import argparse
 
-from .utils import BaseClient, BaseServer, run_parallel_clients
+from .utils import BaseClient, BaseServer, run_parallel_clients, compare_model_parameters
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -59,21 +59,13 @@ class Client(BaseClient):
                 loss.backward()
                 optimizer.step()
                 loss_.append(loss.item())
-
-        model_state = {k: v.detach().clone().cpu() for k, v in self.model.state_dict().items()}
-        return sum(loss_) / len(loss_), model_state
+        self.prev_model.load_state_dict(self.model.state_dict())
+        return sum(loss_) / len(loss_)
 
     def set_client(self, parameters):
-        global_params, prev_local_params = parameters
-        # 加载全局参数到本地模型和全局模型副本
-        self.model.load_state_dict(global_params)
-        self.global_model.load_state_dict(global_params)
+        self.model.load_state_dict(parameters)
+        self.global_model.load_state_dict(parameters)
 
-        # 加载上轮本地参数
-        if prev_local_params is not None:
-            self.prev_model.load_state_dict(prev_local_params)
-        else:
-            self.prev_model.load_state_dict(global_params)
 
 class Server(BaseServer):
     def __init__(
@@ -91,16 +83,13 @@ class Server(BaseServer):
             )
 
     def fit(self):
-        prev_local_params_list = [None] * len(self.clients)
-
         for r in range(self.rounds):
             print(f"\n--- MOON Round {r + 1}/{self.rounds} ---")
             global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
+            # clients_params_old = copy.deepcopy([self.clients[i].model.state_dict() for i in range(self.num_clients)])
 
             # 准备每个客户端的个性化参数包
-            parameters_per_client = [
-                (global_params, prev_local_params_list[i]) for i in range(self.num_clients)
-            ]
+            parameters_per_client = [global_params] * self.num_clients
 
             results = run_parallel_clients(
                 clients=self.clients,
@@ -108,17 +97,19 @@ class Server(BaseServer):
                 gpu_pools=self.gpu_pools,
                 no_mp=self.no_mp
             )
-
-            loss_epoch = [res[0] for res in results]
-            client_dicts = [res[1] for res in results]
-
-            loss_avg = sum(loss_epoch) / len(loss_epoch)
-            prev_local_params_list = client_dicts
-            self.aggregate(client_dicts, weights=self.weights)
-            acc = self.evaluate()
-            self.acc.append(acc)
+            loss_avg = sum(results) / len(results)
             self.loss.append(loss_avg)
-            print(f"Global Accuracy: {acc:.2f}%, Avg Loss: {loss_avg:.4f}")
+            # updated = [compare_model_parameters(clients_params_old[i], self.clients[i].prev_model.state_dict()) for i in range(self.num_clients)]
+            # print(updated)
+            # updated_1 = [compare_model_parameters(global_params, self.clients[i].model.state_dict()) for i in range(self.num_clients)]
+
+            clients_params = [self.clients[i].model.state_dict() for i in range(self.num_clients)]
+            self.aggregate(clients_params, weights=self.weights)
+            self.evaluate()
+            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {loss_avg:.4f}")
+            # updated_2 = compare_model_parameters(global_params, self.model.state_dict())
+            # updated_3 = [compare_model_parameters(clients_params_old[i], clients_params[i]) for i in range(self.num_clients)]
+            # print(f"Updated Parameters: \nupdated: \n{updated}, \nupdated_1: \n{updated_1}, \nupdated_2: \n{updated_2}, \nupdated_3: \n{updated_3}")
 
     def save(self, test):
         file_name: str = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"

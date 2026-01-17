@@ -3,8 +3,7 @@ import importlib
 
 import torch
 
-from data_scripts import prepare_data
-from models import CNN
+from src import CNN, ResNet18, prepare_data
 
 
 def main():
@@ -21,7 +20,10 @@ def main():
 
     # Data Args
     data_group = full_parser.add_argument_group("Data & Partitioning Arguments")
-    data_group.add_argument("--dataset", type=str, default="mnist", help="Dataset name")
+    data_group.add_argument("--dataset", type=str, default="mnist", help="Dataset name",
+                           choices=["mnist", "cifar10"])
+    data_group.add_argument("--model", type=str, default="cnn", help="Model architecture",
+                           choices=["cnn", "resnet18"])
     data_group.add_argument(
         "--partition",
         type=str,
@@ -64,7 +66,13 @@ def main():
     )
 
     # 4. Instantiate and Run
-    global_model = CNN()
+    if args.model == "resnet18":
+        global_model = ResNet18()
+    else:
+        # 根据数据集选择输入通道数
+        input_channels = 1 if args.dataset == "mnist" else 3
+        global_model = CNN(input_channels=input_channels)
+
     server = algo_module.Server(
         model=global_model,
         args=args
