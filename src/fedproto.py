@@ -25,8 +25,9 @@ class Client(BaseClient):
         self.model.train()
         optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
         loss_list = []
+        train_loader = self.build_train_loader()
         for _ in range(self.epochs):
-            for data, target in self.build_train_loader():
+            for data, target in train_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 optimizer.zero_grad()
                 output, features = self.model(data)
@@ -56,7 +57,7 @@ class Client(BaseClient):
         local_protos = {}
         counts = {}
         with torch.no_grad():
-            for data, target in self.train_loader:
+            for data, target in train_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 _, features = self.model(data)
                 for i in range(len(target)):

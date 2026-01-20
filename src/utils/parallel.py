@@ -1,10 +1,6 @@
-def client_worker(client):
-    result = client.train()
-    return client.client_id, result
-
-
 def run_parallel_clients(
-    clients,
+    client_worker,
+    num_clients,
     parameters,
     gpu_pools,
     no_mp=False,
@@ -18,17 +14,18 @@ def run_parallel_clients(
     """
     if no_mp:
         results = []
-        for client in clients.values():
-            results.append(client_worker(client))
+        for client_id in range(num_clients):
+            results.append(client_worker(client_id, parameters[client_id]))
         results.sort(key=lambda x: x[0])
         return [r[1] for r in results]
 
     async_results = []
-    for client in clients.values():
-        pool = gpu_pools[client.device]
-        client.set_client(parameters[client.client_id])
+    for client_id in range(num_clients):
+        pool = gpu_pools[parameters[client_id][0]]
 
-        async_results.append(pool.apply_async(client_worker, (client,)))
+        async_results.append(
+            pool.apply_async(client_worker, (client_id, parameters[client_id]))
+        )
 
     all_results = [r.get() for r in async_results]
     all_results.sort(key=lambda x: x[0])

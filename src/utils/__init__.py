@@ -1,8 +1,10 @@
-from .fed_utils import BaseClient, BaseServer
+from .fed_utils import BaseServer
 from .parallel import run_parallel_clients
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 import torch
+
+from ..models import ResNet18, CNN
 
 
 def compare_model_parameters(params1: dict, params2: dict) -> bool:
@@ -34,3 +36,61 @@ def compare_model_parameters(params1: dict, params2: dict) -> bool:
             return False
 
     return True
+
+
+def ce_loss(predictions, targets):
+    """
+    计算交叉熵损失
+
+    Args:
+        predictions: 预测值，形状为(batch_size, num_classes)
+        targets: 真实标签，形状为(batch_size,)
+
+    Returns:
+        float: 交叉熵损失值
+    """
+    loss_fn = torch.nn.CrossEntropyLoss()
+    return loss_fn(predictions, targets)
+
+
+def mse_loss(predictions, targets):
+    """
+    计算均方误差损失
+
+    Args:
+        predictions: 预测值，形状为(batch_size, num_classes)
+        targets: 真实标签，形状为(batch_size,)
+
+    Returns:
+        float: 均方误差损失值
+    """
+    loss_fn = torch.nn.MSELoss()
+    return loss_fn(predictions, targets)
+
+
+def kldiv_loss(predictions, targets):
+    """
+    计算KL散度损失
+
+    Args:
+        predictions: 预测值，形状为(batch_size, num_classes)
+        targets: 真实标签，形状为(batch_size,)
+
+    Returns:
+        float: KL散度损失值
+    """
+    loss_fn = torch.nn.KLDivLoss()
+    return loss_fn(predictions, targets)
+
+
+def get_model(model_name, dataset):
+    if model_name == "resnet18":
+        global_model = ResNet18()
+    elif model_name == "cnn":
+        # 根据数据集选择输入通道数
+        input_channels = 1 if dataset == "mnist" else 3
+        global_model = CNN(input_channels=input_channels)
+    else:
+        raise ValueError(f"Unsupported model name: {model_name}")
+
+    return global_model

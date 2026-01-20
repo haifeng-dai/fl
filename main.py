@@ -99,14 +99,7 @@ def main():
     )
 
     # 4. Instantiate and Run
-    if args.model == "resnet18":
-        global_model = ResNet18()
-    else:
-        # 根据数据集选择输入通道数
-        input_channels = 1 if args.dataset == "mnist" else 3
-        global_model = CNN(input_channels=input_channels)
-
-    server = algo_module.Server(model=global_model, args=args)
+    server = algo_module.Server(args=args)
     server.fit()
     server.save(args.test)
 

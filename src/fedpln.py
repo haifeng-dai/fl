@@ -123,17 +123,18 @@ class Client(BaseClient):
         )
 
     def train(self, *args, **kwargs):
-        loss_m = self.train_model()
-        loss_p = self.pln_learning()
+        train_loader = self.build_train_loader()
+        loss_m = self.train_model(train_loader)
+        loss_p = self.pln_learning(train_loader)
         return loss_m, loss_p
 
-    def train_model(self):
+    def train_model(self, train_loader):
         self.model.train()
         self.pln.eval()
         opt = torch.optim.SGD(self.model.parameters(), lr=self.lr)
         loss_ = []
         for _ in range(self.epochs):
-            for x, y in self.train_loader:
+            for x, y in train_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 output, feature = self.model(x)
                 loss_ce = self.ce(output, y)
@@ -150,13 +151,13 @@ class Client(BaseClient):
                 loss_.append(loss.item())
         return sum(loss_) / len(loss_)
 
-    def pln_learning(self):
+    def pln_learning(self, train_loader):
         self.model.eval()
         self.pln.train()
         opt_pln = torch.optim.SGD(self.pln.parameters(), lr=self.lr_pln)
         loss_ = []
         for _ in range(self.epoch_pln):
-            for x, y in self.train_loader:
+            for x, y in train_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 protos = self.pln(self.all_classes)
 

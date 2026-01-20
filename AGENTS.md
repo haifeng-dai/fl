@@ -1,128 +1,85 @@
-# AGENTS.md
+# PROJECT KNOWLEDGE BASE
 
-This file contains guidelines and commands for agentic coding assistants working in this federated learning framework repository.
+**Generated:** 2026-01-20
+**Type:** Federated Learning Research Framework
+**Stack:** Python 3.14, PyTorch 2.6+, CUDA 13.0, uv
 
-## Build / Lint / Test Commands
+## OVERVIEW
 
-### Running Experiments
-- **Quick demo**: `./run.sh` (uses environment variables in the script)
-- **Direct run**: `uv run main.py --algo fedavg --dataset mnist --partition dirichlet --alpha 0.5 --num_clients 10 --gpus 0,1`
-- **Example algorithms**: fedavg, moon, fedpln, feddpl, fedproto
+Federated learning framework with multi-GPU parallel training support. Implements 5+ FL algorithms (FedAvg, MOON, FedProto, FedPLN, FedDPL) with IID/Dirichlet/Pathological data partitioning.
 
-### Setup & Dependencies
-- **Install dependencies**: `uv sync`
-- **Update dependencies**: `uv sync --upgrade`
+## STRUCTURE
 
-### Code Quality
-- **Format code**: `uvx black .` (Black formatter with default 88 char line length)
-- **Type checking**: BasedPyright configured with `typeCheckingMode: "standard"` in pyproject.toml
-
-### Testing
-- No automated test framework (pytest/unittest) configured
-- Manual testing via: `uv run main.py [args]` with `--test` parameter (defaults to True)
-- Custom test files exist in `test/` directory but are run manually
-
-## Code Style Guidelines
-
-### File Structure & Organization
-- Entry point: `main.py` (parsing and orchestration only)
-- Algorithms: `src/<algo_name>.py` (e.g., `fedavg.py`, `moon.py`)
-- Each algorithm file exports:
-  - `add_args(parser: argparse.ArgumentParser)`: Adds algorithm-specific CLI arguments
-  - `Server` class: Inherits from `BaseServer`
-  - `Client` class: Inherits from `BaseClient`
-- Models: `src/models/` (CNN, ResNet18, etc.)
-- Utilities: `src/utils/` (BaseClient, BaseServer, aggregation, evaluation, parallelization)
-- Data processing: `src/data_gen/` (dataset-specific processing logic)
-
-### Imports
-Order: standard library → third-party → local modules (separated by blank lines)
-```python
-import argparse
-import os
-
-import torch
-import torch.multiprocessing as mp
-
-from .utils import BaseClient, BaseServer
-from src.models import CNN
+```
+./
+├── main.py              # Entry: two-phase arg parsing → dynamic algo load
+├── run.sh               # Shell orchestrator → scripts/*.sh dispatch
+├── pyproject.toml       # uv + BasedPyright (standard mode)
+├── src/                 # Core package (18 .py files)
+│   ├── <algo>.py        # fedavg, moon, fedproto, fedpln, feddpl
+│   ├── models/          # CNN, ResNet18 (return tuple: logits, features)
+│   ├── utils/           # BaseClient, BaseServer, parallel, aggregate
+│   └── data_gen/        # Dataset prep (MNIST, CIFAR-10)
+├── scripts/             # Grid search shell scripts (12-13 nested loops)
+├── test/                # Manual test scripts (no pytest)
+└── datasets/            # Generated partition data
 ```
 
-### Type Hints
-- Required on function signatures
-- Use `list[type]`, `dict[key_type, value_type]` syntax (Python 3.9+)
-- Use `|` for unions (Python 3.10+): `float | None`
-- Example: `def train(self) -> float:`
+## WHERE TO LOOK
 
-### Naming Conventions
-- **Classes**: PascalCase (e.g., `BaseClient`, `FedAvgServer`)
-- **Functions/Methods**: snake_case (e.g., `train()`, `aggregate()`)
-- **Variables**: snake_case (e.g., `client_id`, `num_clients`)
-- **Constants**: UPPER_SNAKE_CASE
-- **Private methods**: single underscore prefix (e.g., `_start_pools()`)
+| Task | Location | Notes |
+|------|----------|-------|
+| Add algorithm | `src/<algo>.py` | Inherit BaseClient/BaseServer, export `add_args`, `Client`, `Server` |
+| Add model | `src/models/` | Must return `(logits, features)` tuple |
+| Multi-GPU training | `src/utils/fed_utils.py:94-116` | `__start_pools()` handles GPU allocation |
+| Data partitioning | `src/data_gen/__init__.py` | **CRITICAL BUG: line 149 uses wrong import path** |
+| Parallel execution | `src/utils/parallel.py` | `run_parallel_clients()` |
 
-### Code Formatting
-- Black formatter with 88 character line limit
-- 4 spaces for indentation
-- 2 blank lines between top-level definitions
-- 1 blank line between method definitions
-- Comments in English or Chinese (both are acceptable)
+## CONVENTIONS
 
-### Error Handling
-- Use explicit error messages with context
-- Raise `ValueError` for invalid arguments
-- Use try/finally for resource cleanup (e.g., closing GPU pools)
+- **Imports**: stdlib → third-party → local (blank lines between)
+- **Type hints**: Required, use `list[type]`, `float | None`
+- **Naming**: PascalCase (classes), snake_case (funcs/vars), UPPER_SNAKE_CASE (const)
+- **Formatting**: Black (88 char), 4 spaces, 2 blank lines (top-level)
+- **Multi-GPU**: Must call `set_start_method("spawn", force=True)` in main
+- **Cleanup**: Always call `server.close()` in finally block
 
-### Algorithm Implementation Pattern
-```python
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("<Algo> Specific Arguments")
-    group.add_argument("--param", type=float, default=1.0, help="Description")
-    return parser
+## ANTI-PATTERNS (THIS PROJECT)
 
-class Client(BaseClient):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Initialize algo-specific attributes
+- **CRITICAL BUG**: `src/data_gen/__init__.py:149` → `data_scripts.process_X` should be `src.data_gen.process_X`
+- **Documentation mismatch**: README.md references non-existent `data_scripts/`
+- **Code duplication**: `fedpln.py` and `feddpl.py` are ~95% identical (copy-paste inheritance)
+- **Commented debug code**: `moon.py` lines 97, 110-112, 120-122 contain debug code
+- **Magic numbers**: CNN (7*7, 8*8, 128, 64), ResNet (32, 32, 128), PLN init values (-0.1, 0.1, 0.01)
+- **Hardcoded paths**: `./datasets/`, `./results/` scattered across data_gen/__init__.py, load_data.py, fed_utils.py
+- **Inconsistent device management**: Mixed `.to(device)` patterns, redundant deep copies in evaluate.py
+- **Unused import**: `feddpl.py:2` imports `cli` from pydoc (never used)
+- **Inconsistent return values**: Client.train() returns scalar (FedAvg) vs tuple (FedProto, FedPLN)
+- **Resource leak risk**: `__del__()` cleanup in fed_utils.py is unreliable; use try/finally instead
+- **No test framework**: Manual testing only via `uv run main.py --test`
+- **Deep nested loops**: `scripts/fedpln.sh` has 12-13 nested for loops (extreme)
 
-    def train(self):
-        # Training loop
-        return avg_loss
+## COMMANDS
 
-    def set_client(self, parameters):
-        # Load parameters into model
+```bash
+# Setup
+uv sync
 
-class Server(BaseServer):
-    def __init__(self, model, args):
-        super().__init__(model, pfl_flag, args)
-        # Initialize clients
+# Run experiment
+uv run main.py --algo fedavg --dataset mnist --gpus 0,1
 
-    def fit(self):
-        for r in range(self.rounds):
-            # Communication round
-            self.evaluate()
+# Grid search
+./run.sh
 
-    def save(self, test):
-        # Save results
+# Format
+uvx black .
+
+# Type check (via editor - BasedPyright configured in pyproject.toml)
 ```
 
-### Multi-GPU Parallel Training
-- `run_parallel_clients()` handles both parallel and sequential execution
-- Use `--no_mp` flag to disable multiprocessing (useful for debugging)
-- GPU allocation handled automatically by `BaseServer.__start_pools()`
+## NOTES
 
-### Data Partitioning
-- Supported strategies: `iid`, `dirichlet`, `pathological`
-- Automatically prepares data if missing via `prepare_data()`
-- Data stored in `datasets/` directory
-
-### Result Storage
-- Saved to `results/<dataset>_<partition>_<num_clients>/` path
-- Format: `results/<path>/<epochs>_<batch_size>_<lr>.pt`
-- Contains: `acc`, `loss`, `state_dict`
-
-### Important Notes
-- Must use `torch.multiprocessing.set_start_method("spawn", force=True)` in main
-- Always call `server.close()` in finally block to release GPU resources
-- Models return tuple `(logits, features)` for algorithms requiring embeddings
-- Use `.to(device)` for all tensors in training loops
+- Models MUST return `(logits, features)` tuple for contrastive algorithms
+- Use `.to(device)` for ALL tensors in training loops
+- Data auto-prepares if missing (calls `process_<dataset>()`)
+- Results saved to `results/<dataset>_<partition>_<num_clients>/<epochs>_<batch_size>_<lr>.pt`

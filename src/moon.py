@@ -53,8 +53,9 @@ class Client(BaseClient):
             lr=self.lr,
         )
         loss_ = []
+        train_loader = self.build_train_loader()
         for _ in range(self.epochs):
-            for data, target in self.build_train_loader():
+            for data, target in train_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 optimizer.zero_grad()
 

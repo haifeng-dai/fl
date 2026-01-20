@@ -156,8 +156,9 @@ class Client(BaseClient):
         self.pln.train()
         opt_pln = torch.optim.SGD(self.pln.parameters(), lr=self.lr_pln)
         loss_ = []
+        train_loader = self.build_train_loader()
         for _ in range(self.epoch_pln):
-            for x, y in self.train_loader:
+            for x, y in train_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 protos = self.pln(self.all_classes)
 
