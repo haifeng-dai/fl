@@ -2,6 +2,7 @@ import torch
 import os
 from torch.utils.data import TensorDataset
 
+
 def get_partition_path(dataset_name, partition, num_clients, alpha=0.5, n_classes=2):
     if partition == "iid":
         part_str = f"iid_n{num_clients}"
@@ -13,6 +14,7 @@ def get_partition_path(dataset_name, partition, num_clients, alpha=0.5, n_classe
         raise ValueError(f"Unknown partition method: {partition}")
     return os.path.join("./datasets", dataset_name, part_str)
 
+
 def load_test_data(dataset_name):
     test_path = os.path.join("./datasets", dataset_name, "test_data.pt")
     if not os.path.exists(test_path):
@@ -20,6 +22,7 @@ def load_test_data(dataset_name):
     data = torch.load(test_path, weights_only=False)
     dataset = TensorDataset(data["x"], data["y"])
     return dataset
+
 
 def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=False):
     """
@@ -29,7 +32,9 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
     - test_dataset: dict[int, Dataset] (如果 pfl=True) 或 Dataset (如果 pfl=False)
     - train_counts: dict[int, int]
     """
-    part_dir = get_partition_path(dataset_name, partition, num_clients, alpha, n_classes)
+    part_dir = get_partition_path(
+        dataset_name, partition, num_clients, alpha, n_classes
+    )
 
     train_datasets = {}
     test_datasets = {}

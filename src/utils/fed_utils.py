@@ -1,7 +1,7 @@
 import copy
 import os
 import argparse
-from typing import Any
+from typing import Any, Optional
 
 import torch
 import torch.multiprocessing as mp
@@ -15,11 +15,11 @@ from .load_data import load_data
 
 class BaseClient:
     def __init__(
-            self,
-            client_id: int,
-            model: torch.nn.Module,
-            train_set: torch.utils.data.Dataset,
-            args: argparse.Namespace
+        self,
+        client_id: int,
+        model: torch.nn.Module,
+        train_set: torch.utils.data.Dataset,
+        args: argparse.Namespace,
     ):
         self.client_id = client_id
         self.model = copy.deepcopy(model).to(args.cuda[client_id])
@@ -34,6 +34,7 @@ class BaseClient:
         self.ce = torch.nn.CrossEntropyLoss()
         self.mse = torch.nn.MSELoss()
         self.KL = torch.nn.KLDivLoss(reduction="batchmean")
+        self.train_loader = self.build_train_loader()
 
     def build_train_loader(self) -> DataLoader:
         return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True)
@@ -50,20 +51,17 @@ class BaseClient:
 
 
 class BaseServer:
-    def __init__(
-            self,
-            model: torch.nn.Module,
-            pfl: bool,
-            args: argparse.Namespace
-    ):
+    def __init__(self, model: torch.nn.Module, pfl: bool, args: argparse.Namespace):
         self.model = model.cpu()
         self.args = args
         self.rounds: int = args.rounds
         self.no_mp: bool = self.args.no_mp
 
         self.num_clients = self.args.num_clients
-        self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-        self.clients = dict[int, BaseClient]()
+        self.device = (
+            torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        )
+        self.clients: dict[int, BaseClient] = {}
         self.pfl = pfl
         self.acc: list[float] = []
         self.loss: list[float] = []
@@ -74,11 +72,10 @@ class BaseServer:
             num_clients=args.num_clients,
             alpha=args.alpha,
             n_classes=args.n_classes,
-            pfl=self.pfl
+            pfl=self.pfl,
         )
         self.fold_path = os.path.join(
-            "results",
-            f"{args.dataset}_{args.partition}_{args.num_clients}"
+            "results", f"{args.dataset}_{args.partition}_{args.num_clients}"
         )
         if args.partition == "dirichlet":
             self.fold_path += f"_{args.alpha}"
@@ -88,18 +85,21 @@ class BaseServer:
 
         # Use pre-calculated counts for sample weights
         total_samples = sum(train_counts.values())
-        self.weights = [train_counts[i] / total_samples for i in range(len(train_counts))]
+        self.weights = [
+            train_counts[i] / total_samples for i in range(len(train_counts))
+        ]
 
-        args.cuda = self.__start_pools(args.gpus)
+        args.cuda = self._BaseServer__start_pools(args.gpus)
 
-    def __start_pools(self, gpus):
+    def _BaseServer__start_pools(self, gpus):
         gpu_ids = [int(i) for i in gpus.split(",")]
         cuda = {
             i: torch.device(
                 f"cuda:{gpu_ids[i % len(gpu_ids)]}"
                 if torch.cuda.is_available()
                 else "cpu"
-            ) for i in range(self.num_clients)
+            )
+            for i in range(self.num_clients)
         }
 
         self.gpu_pools = {}
@@ -115,7 +115,9 @@ class BaseServer:
             print("-> 禁用多进程训练，将使用顺序训练")
         return cuda
 
-    def aggregate(self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs):
+    def aggregate(
+        self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
+    ):
         aggregated_state = param_aggregate(client_state_dicts, weights)
         self.model.load_state_dict(aggregated_state)
 
@@ -124,7 +126,9 @@ class BaseServer:
             # 是个性化联邦学习或使用了本地测试集，计算平均准确率
             accs = []
             for client_id in self.clients:
-                self.clients[client_id].set_client({k: v.cpu() for k, v in self.model.state_dict().items()})
+                self.clients[client_id].set_client(
+                    {k: v.cpu() for k, v in self.model.state_dict().items()}
+                )
                 acc_ = self.clients[client_id].evaluate(self.test_set[client_id])
                 accs.append(acc_)
             acc = sum(accs) / len(accs)
@@ -147,6 +151,185 @@ class BaseServer:
 
     def __del__(self):
         self.close()
+
+    def deal_save(self, test, params, file_name: str | None = None):
+        new_name = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}"
+        if file_name:
+            new_name += f"_{file_name}"
+        path = os.path.join(self.fold_path, f"{new_name}.pt")
+        if test:
+            print(f"not save to {path}")
+        else:
+            print(f"saved to {path}")
+            torch.save(params, path)
+
+
+# ===================== Stream 版本基类 =====================
+
+
+class StreamBaseClient:
+    """使用 CUDA Stream 的客户端基类（无状态，每次训练独立）"""
+
+    def __init__(
+        self,
+        client_id: int,
+        gpu_id: int,
+        model: torch.nn.Module,
+        train_set: torch.utils.data.Dataset,
+        args: argparse.Namespace,
+    ):
+        self.client_id = client_id
+        self.device = torch.device(f"cuda:{gpu_id}")
+        self.model = copy.deepcopy(model).to(self.device)
+        self.train_set = train_set
+        self.lr: float = args.lr
+        self.batch_size: int = args.batch_size
+        self.epochs: int = args.epochs
+
+        self.ce = torch.nn.CrossEntropyLoss()
+        self.mse = torch.nn.MSELoss()
+        self.KL = torch.nn.KLDivLoss(reduction="batchmean")
+        self.train_loader = DataLoader(
+            self.train_set, batch_size=self.batch_size, shuffle=True
+        )
+
+    def set_parameters(self, parameters: dict[str, torch.Tensor]):
+        self.model.load_state_dict(parameters)
+
+    def train(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def get_parameters(self):
+        """获取训练后的参数（移到 CPU）"""
+        return {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+
+    def evaluate(self, test_set, *args, **kwargs) -> Any:
+        acc = evaluate_model(self.model, test_set, self.device)
+        return acc
+
+
+class StreamBaseServer:
+    """使用 CUDA Stream 的服务端基类"""
+
+    def __init__(self, model: torch.nn.Module, pfl: bool, args: argparse.Namespace):
+        self.model = model
+        self.pfl = pfl
+        self.args = args
+        self.rounds: int = args.rounds
+        self.num_clients = args.num_clients
+        self.parallel_mode = args.parallel_mode
+
+        # 客户端按用户指定的 GPU 分配
+        self.clients: dict[int, StreamBaseClient] = {}
+        self.__setup_streams()
+
+        # 数据加载
+        self.train_sets, self.test_set, train_counts, self.num_class = load_data(
+            dataset_name=args.dataset,
+            partition=args.partition,
+            num_clients=args.num_clients,
+            alpha=args.alpha,
+            n_classes=args.n_classes,
+            pfl=self.pfl,
+        )
+
+        # 设置保存路径
+        self.fold_path = os.path.join(
+            "results", f"{args.dataset}_{args.partition}_{args.num_clients}"
+        )
+        if args.partition == "dirichlet":
+            self.fold_path += f"_{args.alpha}"
+        elif args.partition == "pathological":
+            self.fold_path += f"_{args.n_classes}"
+        os.makedirs(self.fold_path, exist_ok=True)
+
+        # 设置保存路径
+        self.__setup_streams()
+
+        # 计算默认权重
+        total_samples = sum(train_counts.values())
+        self.weights = [
+            train_counts[i] / total_samples for i in range(self.num_clients)
+        ]
+
+        # 训练结果记录
+        self.acc: list[float] = []
+        self.loss: list[float] = []
+
+    def __setup_streams(self):
+        """根据并行模式设置 Streams"""
+        self.gpus = [int(i) for i in self.args.gpus.split(",")]
+        self.device = self.gpus[0]
+        self.clients_gpu: dict[int, int] = {}
+
+        match self.parallel_mode:
+            case "sequential":
+                # 单 GPU 串行：仅在一块 GPU 上训练
+                self.clients_gpu = {i: self.device for i in range(self.num_clients)}
+
+            case "stream":
+                # 多 GPU 并行：每块 GPU 1 个 Stream
+                self.all_streams = {}
+                for gpu_id in self.gpus:
+                    with torch.cuda.device(gpu_id):
+                        self.all_streams[gpu_id] = torch.cuda.Stream()
+                for i in range(self.num_clients):
+                    self.clients_gpu[i] = self.gpus[i % len(self.gpus)]
+
+            case "multi_stream":
+                # 多 GPU + 多 Stream：每块 GPU 多个 Streams（每个 Client 一个）
+                self.all_streams: dict[int, torch.cuda.Stream] = {}
+                for i in range(self.num_clients):
+                    gpu_id = self.gpus[i % len(self.gpus)]
+                    with torch.cuda.device(gpu_id):
+                        self.all_streams[i] = torch.cuda.Stream()
+                        self.clients_gpu[i] = gpu_id
+
+    def train_client(self, client_id, global_params):
+        """训练所有客户端"""
+        self.clients[client_id].set_parameters(global_params)
+
+        if self.parallel_mode == "stream":
+            """stream 模式：一块 GPU 一个 Stream"""
+            gpu_id = self.clients_gpu[client_id]
+            with torch.cuda.stream(self.all_streams[gpu_id]):
+                self.clients[client_id].train()
+
+        elif self.parallel_mode == "multi_stream":
+            """multi_stream 模式：一个 Client 一个 Stream"""
+            with torch.cuda.stream(self.all_streams[client_id]):
+                self.clients[client_id].train()
+
+        elif self.parallel_mode == "sequential":
+            """sequential 模式：顺序训练"""
+            self.clients[client_id].train()
+
+    def evaluate(self):
+        """评估全局模型"""
+        if self.pfl:
+            # 是个性化联邦学习或使用了本地测试集，计算平均准确率
+            accs = []
+            for client_id in self.clients:
+                self.clients[client_id].set_parameters(
+                    {k: v.cpu() for k, v in self.model.state_dict().items()}
+                )
+                acc_ = self.clients[client_id].evaluate(self.test_set[client_id])
+                accs.append(acc_)
+            acc = sum(accs) / len(accs)
+        else:
+            acc = evaluate_model(self.model, self.test_set, self.device)
+        self.acc.append(acc)
+
+    def aggregate(
+        self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
+    ):
+        aggregated_state = param_aggregate(client_state_dicts, weights)
+        self.model.load_state_dict(aggregated_state)
+
+    def synchronize(self):
+        """清理资源：同步所有 Stream"""
+        if self.parallel_mode != "sequential":
+            [s.synchronize() for s in self.all_streams.values()]
 
     def deal_save(self, test, params, file_name: str | None = None):
         new_name = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}"

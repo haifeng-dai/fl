@@ -3,22 +3,56 @@ from pydoc import cli
 import torch
 import argparse
 
-from .utils import BaseClient, BaseServer, run_parallel_clients, evaluate_prototype, param_aggregate
+from .utils import (
+    BaseClient,
+    BaseServer,
+    run_parallel_clients,
+    evaluate_prototype,
+    param_aggregate,
+)
 
 
 def add_args(parser: argparse.ArgumentParser):
     group = parser.add_argument_group("FedPLN Specific Arguments")
-    group.add_argument("--lambda_", type=float, default=10.0, help="Weight for PLN Contrastive Loss")
-    group.add_argument("--epoch_pln", type=int, default=10, help="Epochs for PLN learning")
-    group.add_argument("--lr_pln", type=float, default=0.01, help="Learning rate for PLN learning")
-    group.add_argument("--batch_size_pln", type=int, default=32, help="Batch size for PLN learning")
+    group.add_argument(
+        "--lambda_", type=float, default=10.0, help="Weight for PLN Contrastive Loss"
+    )
+    group.add_argument(
+        "--epoch_pln", type=int, default=10, help="Epochs for PLN learning"
+    )
+    group.add_argument(
+        "--lr_pln", type=float, default=0.01, help="Learning rate for PLN learning"
+    )
+    group.add_argument(
+        "--batch_size_pln", type=int, default=32, help="Batch size for PLN learning"
+    )
     group.add_argument("--feature_dim", type=int, default=128, help="Feature dimension")
     group.add_argument("--depth_pln", type=int, default=2, help="Depth of PLN network")
-    group.add_argument("--width_pln", type=int, default=128, help="Width of PLN network")
-    group.add_argument("--mode", type=str, default="normal", choices=["normal", "pln", "model", "all"], help="Task mode")
-    group.add_argument("--har", type=bool, default=False, help="Whether to use HAR dataset")
-    group.add_argument("--fixed_proto", type=bool, default=False, help="Whether to fix the prototypes during training")
-    group.add_argument("--init_emb", type=int, default=0, help="Initialization strategy for PLN embeddings")
+    group.add_argument(
+        "--width_pln", type=int, default=128, help="Width of PLN network"
+    )
+    group.add_argument(
+        "--mode",
+        type=str,
+        default="normal",
+        choices=["normal", "pln", "model", "all"],
+        help="Task mode",
+    )
+    group.add_argument(
+        "--har", type=bool, default=False, help="Whether to use HAR dataset"
+    )
+    group.add_argument(
+        "--fixed_proto",
+        type=bool,
+        default=False,
+        help="Whether to fix the prototypes during training",
+    )
+    group.add_argument(
+        "--init_emb",
+        type=int,
+        default=0,
+        help="Initialization strategy for PLN embeddings",
+    )
     return parser
 
 
@@ -32,9 +66,8 @@ class PLN(torch.nn.Module):
         if depth < 1:
             raise ValueError("depth must be at least 1")
         layers = [
-            torch.nn.Sequential(
-                torch.nn.Linear(width, width), torch.nn.ReLU()
-            ) for _ in range(depth)
+            torch.nn.Sequential(torch.nn.Linear(width, width), torch.nn.ReLU())
+            for _ in range(depth)
         ]
         self.middle = torch.nn.Sequential(*layers)
         self.fc = torch.nn.Linear(width, feature_dim)
@@ -62,7 +95,7 @@ class PLN(torch.nn.Module):
         elif init_emb == 5:
             torch.nn.init.xavier_normal_(self.embedings.weight)
         elif init_emb == 6:
-            torch.nn.init.kaiming_uniform_(self.embedings.weight, nonlinearity='linear')
+            torch.nn.init.kaiming_uniform_(self.embedings.weight, nonlinearity="linear")
         elif init_emb == 7:
             torch.nn.init.orthogonal_(self.embedings.weight)
         else:
@@ -77,12 +110,7 @@ class PLN(torch.nn.Module):
 
 
 class Client(BaseClient):
-    def __init__(
-            self,
-            pln: PLN,
-            *args,
-            **kwargs
-    ):
+    def __init__(self, pln: PLN, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.lambda_ = self.args.lambda_
         self.epoch_pln = self.args.epoch_pln
@@ -91,21 +119,22 @@ class Client(BaseClient):
         self.mode = self.args.mode
         self.har = self.args.har
         self.pln = copy.deepcopy(pln).to(self.device)
-        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings).to(self.device)
+        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings).to(
+            self.device
+        )
 
     def train(self, *args, **kwargs):
-        train_loader = self.build_train_loader()
-        loss_m = self.train_model(train_loader)
-        loss_p = self.pln_learning(train_loader)
+        loss_m = self.train_model()
+        loss_p = self.pln_learning()
         return loss_m, loss_p
 
-    def train_model(self, train_loader):
+    def train_model(self):
         self.model.train()
         self.pln.eval()
         opt = torch.optim.SGD(self.model.parameters(), lr=self.lr)
         loss_ = []
         for _ in range(self.epochs):
-            for x, y in train_loader:
+            for x, y in self.train_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 output, feature = self.model(x)
                 loss_ce = self.ce(output, y)
@@ -122,13 +151,13 @@ class Client(BaseClient):
                 loss_.append(loss.item())
         return sum(loss_) / len(loss_)
 
-    def pln_learning(self, train_loader):
+    def pln_learning(self):
         self.model.eval()
         self.pln.train()
         opt_pln = torch.optim.SGD(self.pln.parameters(), lr=self.lr_pln)
         loss_ = []
         for _ in range(self.epoch_pln):
-            for x, y in train_loader:
+            for x, y in self.train_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 protos = self.pln(self.all_classes)
 
@@ -155,11 +184,7 @@ class Client(BaseClient):
 
 
 class Server(BaseServer):
-    def __init__(
-            self,
-            model: torch.nn.Module,
-            args: argparse.Namespace
-    ):
+    def __init__(self, model: torch.nn.Module, args: argparse.Namespace):
         super().__init__(model, True, args)
         self.pln = PLN(
             num_classes=self.num_class,
@@ -167,7 +192,7 @@ class Server(BaseServer):
             feature_dim=args.feature_dim,
             depth=args.depth_pln,
             fixed=args.fixed_proto,
-            init_emb=args.init_emb
+            init_emb=args.init_emb,
         ).to(self.device)
         for i in range(args.num_clients):
             self.clients[i] = Client(
@@ -175,7 +200,7 @@ class Server(BaseServer):
                 model=model,
                 train_set=self.train_sets[i],
                 pln=self.pln,
-                args=args
+                args=args,
             )
         self.acc_p: list[float] = []
         self.loss_p: list[float] = []
@@ -191,7 +216,7 @@ class Server(BaseServer):
                 clients=self.clients,
                 parameters=parameters_per_client,
                 gpu_pools=self.gpu_pools,
-                no_mp=self.no_mp
+                no_mp=self.no_mp,
             )
             loss_model_epoch = [res[0] for res in results]
             loss_pln_epoch = [res[1] for res in results]
@@ -199,14 +224,17 @@ class Server(BaseServer):
             self.loss_p.append(sum(loss_pln_epoch) / len(loss_pln_epoch))
 
             # # Update global PLN
-            clients_params = [self.clients[i].model.state_dict() for i in range(self.num_clients)]
+            clients_params = [
+                self.clients[i].model.state_dict() for i in range(self.num_clients)
+            ]
             plns_params = [self.clients[i].pln.state_dict() for i in range(self.num_clients)]  # type: ignore
 
             # Aggregate model parameters
             self.aggregate(plns_params)
 
             parameters_per_client = [
-                (clients_params[i], self.pln.state_dict()) for i in range(self.num_clients)
+                (clients_params[i], self.pln.state_dict())
+                for i in range(self.num_clients)
             ]
 
             self.evaluate(clients_params, plns_params)
@@ -220,12 +248,10 @@ class Server(BaseServer):
         current_acc = []
         current_acc_p = []
         for client_id in self.clients:
-            self.clients[client_id].set_client((
-                clients_state[client_id], plns_state[client_id]
-            ))
-            acc, acc_p = self.clients[client_id].evaluate(
-                self.test_set[client_id]
+            self.clients[client_id].set_client(
+                (clients_state[client_id], plns_state[client_id])
             )
+            acc, acc_p = self.clients[client_id].evaluate(self.test_set[client_id])
             current_acc.append(acc)
             current_acc_p.append(acc_p)
         self.acc.append(sum(current_acc) / len(current_acc))

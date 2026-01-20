@@ -4,5 +4,6 @@ test/
 .venv/
 .vscode/
 .zed/
+.ruff_cache/
 
 uv.lock

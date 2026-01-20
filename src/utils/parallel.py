@@ -28,12 +28,7 @@ def run_parallel_clients(
         pool = gpu_pools[client.device]
         client.set_client(parameters[client.client_id])
 
-        async_results.append(
-            pool.apply_async(
-                client_worker,
-                (client,)
-            )
-        )
+        async_results.append(pool.apply_async(client_worker, (client,)))
 
     all_results = [r.get() for r in async_results]
     all_results.sort(key=lambda x: x[0])

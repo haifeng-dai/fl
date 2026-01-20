@@ -6,6 +6,7 @@ import torch
 
 # --- 辅助方法 ---
 
+
 def split_indices_by_class(targets, test_ratio):
     """
     先按类别对所有索引进行划分，每个类别内部按 test_ratio 分成训练和测试。
@@ -24,7 +25,9 @@ def split_indices_by_class(targets, test_ratio):
 
     return train_indices_by_class, test_indices_by_class, num_classes
 
+
 # --- 分区方法 ---
+
 
 def iid_partition(train_indices_by_class, test_indices_by_class, num_clients):
     client_train_indices = [[] for _ in range(num_clients)]
@@ -42,11 +45,15 @@ def iid_partition(train_indices_by_class, test_indices_by_class, num_clients):
             client_train_indices[i].append(tr_splits[i])
             client_test_indices[i].append(te_splits[i])
 
-    return ([np.concatenate(idx) for idx in client_train_indices],
-            [np.concatenate(idx) for idx in client_test_indices])
+    return (
+        [np.concatenate(idx) for idx in client_train_indices],
+        [np.concatenate(idx) for idx in client_test_indices],
+    )
 
 
-def dirichlet_partition(train_indices_by_class, test_indices_by_class, num_clients, alpha=0.5):
+def dirichlet_partition(
+    train_indices_by_class, test_indices_by_class, num_clients, alpha=0.5
+):
     client_train_indices = [[] for _ in range(num_clients)]
     client_test_indices = [[] for _ in range(num_clients)]
     num_classes = len(train_indices_by_class)
@@ -68,11 +75,15 @@ def dirichlet_partition(train_indices_by_class, test_indices_by_class, num_clien
             client_train_indices[i].append(tr_splits[i])
             client_test_indices[i].append(te_splits[i])
 
-    return ([np.concatenate(idx) for idx in client_train_indices],
-            [np.concatenate(idx) for idx in client_test_indices])
+    return (
+        [np.concatenate(idx) for idx in client_train_indices],
+        [np.concatenate(idx) for idx in client_test_indices],
+    )
 
 
-def pathological_partition(train_indices_by_class, test_indices_by_class, num_clients, n_classes_per_client=2):
+def pathological_partition(
+    train_indices_by_class, test_indices_by_class, num_clients, n_classes_per_client=2
+):
     num_classes = len(train_indices_by_class)
     client_train_indices = [[] for _ in range(num_clients)]
     client_test_indices = [[] for _ in range(num_clients)]
@@ -120,8 +131,10 @@ def pathological_partition(train_indices_by_class, test_indices_by_class, num_cl
             client_train_indices[i].append(train_shards[k][s])
             client_test_indices[i].append(test_shards[k][s])
 
-    return ([np.concatenate(idx) for idx in client_train_indices],
-            [np.concatenate(idx) for idx in client_test_indices])
+    return (
+        [np.concatenate(idx) for idx in client_train_indices],
+        [np.concatenate(idx) for idx in client_test_indices],
+    )
 
 
 # --- 主要入口点 ---
@@ -160,7 +173,9 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     test_ratio = kwargs.get("test_ratio", 0.2)
 
     # 1. 首先按类别划分训练和测试索引
-    tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(Y.numpy(), test_ratio)
+    tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(
+        Y.numpy(), test_ratio
+    )
 
     # 保存一个全局测试集供服务器使用 (包含所有类的测试部分)
     base_dir = f"./datasets/{dataset_name}"
@@ -168,17 +183,26 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
         if not os.path.exists(base_dir):
             os.makedirs(base_dir)
         all_te_idx = np.concatenate(te_idx_by_cls)
-        torch.save({"x": X[all_te_idx], "y": Y[all_te_idx]}, os.path.join(base_dir, "test_data.pt"))
+        torch.save(
+            {"x": X[all_te_idx], "y": Y[all_te_idx]},
+            os.path.join(base_dir, "test_data.pt"),
+        )
 
     # 2. 执行分区逻辑
     if partition_method == "iid":
-        cli_tr_idx, cli_te_idx = iid_partition(tr_idx_by_cls, te_idx_by_cls, num_clients)
+        cli_tr_idx, cli_te_idx = iid_partition(
+            tr_idx_by_cls, te_idx_by_cls, num_clients
+        )
     elif partition_method == "dirichlet":
         alpha = kwargs.get("alpha", 0.5)
-        cli_tr_idx, cli_te_idx = dirichlet_partition(tr_idx_by_cls, te_idx_by_cls, num_clients, alpha)
+        cli_tr_idx, cli_te_idx = dirichlet_partition(
+            tr_idx_by_cls, te_idx_by_cls, num_clients, alpha
+        )
     elif partition_method == "pathological":
         n_classes = kwargs.get("n_classes", 2)
-        cli_tr_idx, cli_te_idx = pathological_partition(tr_idx_by_cls, te_idx_by_cls, num_clients, n_classes)
+        cli_tr_idx, cli_te_idx = pathological_partition(
+            tr_idx_by_cls, te_idx_by_cls, num_clients, n_classes
+        )
     else:
         raise ValueError(f"未知分区方法: {partition_method}")
 
@@ -190,8 +214,10 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
         client_data = {
             "train": {"x": X[cli_tr_idx[i]], "y": Y[cli_tr_idx[i]]},
             "test": {"x": X[cli_te_idx[i]], "y": Y[cli_te_idx[i]]},
-            "num_classes": num_classes
+            "num_classes": num_classes,
         }
         torch.save(client_data, os.path.join(output_dir, f"client_{i}.pt"))
 
-    print(f"-> 成功为 {num_clients} 个客户端准备了 {dataset_name} ({partition_method})。")
+    print(
+        f"-> 成功为 {num_clients} 个客户端准备了 {dataset_name} ({partition_method})。"
+    )

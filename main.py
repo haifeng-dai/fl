@@ -1,5 +1,6 @@
 import argparse
 import importlib
+import time
 
 import torch
 
@@ -10,7 +11,10 @@ def main():
     # 1. First-pass parsing for algo
     parser = argparse.ArgumentParser(description="Unified FL Framework", add_help=False)
     parser.add_argument(
-        "--algo", type=str, default="fedavg", choices=["fedavg", "moon", "fedpln", "feddpl"]
+        "--algo",
+        type=str,
+        default="fedavg",
+        choices=["fedavg", "fedavg_stream", "moon", "fedpln", "feddpl", "fedproto"],
     )
     parser.add_argument("--test", type=bool, default=True, help="Test or train")
     args, _ = parser.parse_known_args()
@@ -20,10 +24,20 @@ def main():
 
     # Data Args
     data_group = full_parser.add_argument_group("Data & Partitioning Arguments")
-    data_group.add_argument("--dataset", type=str, default="mnist", help="Dataset name",
-                           choices=["mnist", "cifar10"])
-    data_group.add_argument("--model", type=str, default="cnn", help="Model architecture",
-                           choices=["cnn", "resnet18"])
+    data_group.add_argument(
+        "--dataset",
+        type=str,
+        default="mnist",
+        help="Dataset name",
+        choices=["mnist", "cifar10"],
+    )
+    data_group.add_argument(
+        "--model",
+        type=str,
+        default="cnn",
+        help="Model architecture",
+        choices=["cnn", "resnet18"],
+    )
     data_group.add_argument(
         "--partition",
         type=str,
@@ -31,19 +45,38 @@ def main():
         choices=["iid", "dirichlet", "pathological"],
         help="Data partitioning strategy",
     )
-    data_group.add_argument("--num_clients", type=int, default=10, help="Number of clients")
-    data_group.add_argument("--test_ratio", type=float, default=0.2, help="Ratio of test data")
+    data_group.add_argument(
+        "--num_clients", type=int, default=10, help="Number of clients"
+    )
+    data_group.add_argument(
+        "--test_ratio", type=float, default=0.2, help="Ratio of test data"
+    )
     data_group.add_argument("--alpha", type=float, default=0.5, help="For Dirichlet")
     data_group.add_argument("--n_classes", type=int, default=2, help="For Pathological")
 
     # Training Args
     train_group = full_parser.add_argument_group("Training Arguments")
-    train_group.add_argument("--rounds", type=int, default=5, help="Number of communication rounds")
-    train_group.add_argument("--epochs", type=int, default=1, help="Number of local epochs")
+    train_group.add_argument(
+        "--rounds", type=int, default=5, help="Number of communication rounds"
+    )
+    train_group.add_argument(
+        "--epochs", type=int, default=1, help="Number of local epochs"
+    )
     train_group.add_argument("--lr", type=float, default=0.01, help="Learning rate")
     train_group.add_argument("--batch_size", type=int, default=64, help="Batch size")
-    train_group.add_argument("--gpus", type=str, default="0", help="Comma separated list of GPU ids")
-    train_group.add_argument("--no_mp", action="store_true", help="Disable multiprocessing training")
+    train_group.add_argument(
+        "--gpus", type=str, default="0", help="Comma separated list of GPU ids"
+    )
+    train_group.add_argument(
+        "--no_mp", action="store_true", help="Disable multiprocessing training"
+    )
+    train_group.add_argument(
+        "--parallel_mode",
+        type=str,
+        default="stream",
+        choices=["sequential", "stream", "multi_stream"],
+        help="Parallel mode for stream training: sequential, stream (1 per GPU), multi_stream (N per GPU)",
+    )
 
     # Algorithm Specific Args
     try:
@@ -73,17 +106,15 @@ def main():
         input_channels = 1 if args.dataset == "mnist" else 3
         global_model = CNN(input_channels=input_channels)
 
-    server = algo_module.Server(
-        model=global_model,
-        args=args
-    )
-    try:
-        server.fit()
-        server.save(args.test)
-    finally:
-        server.close()
+    server = algo_module.Server(model=global_model, args=args)
+    server.fit()
+    server.save(args.test)
 
 
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn", force=True)
+    a = time.time()
     main()
+
+    b = time.time()
+    print(f"Total time: {b - a} seconds")

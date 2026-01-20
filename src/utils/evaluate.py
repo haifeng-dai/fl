@@ -3,13 +3,14 @@ import torch
 
 
 def evaluate_model(model, test_set, device) -> float:
+    print(device)
     loader = torch.utils.data.DataLoader(test_set, batch_size=128, shuffle=False)
 
     eval_model = copy.deepcopy(model)
     eval_model.to(device)
     eval_model.eval()
-    correct = 0.
-    count = 0.
+    correct = 0.0
+    count = 0.0
     with torch.no_grad():
         for data, target in loader:
             data, target = data.to(device), target.to(device)
@@ -27,8 +28,8 @@ def evaluate_prototype(model, prototypes, test_set, device) -> float:
     eval_model = copy.deepcopy(model)
     eval_model.to(device)
     eval_model.eval()
-    correct = 0.
-    count = 0.
+    correct = 0.0
+    count = 0.0
     with torch.no_grad():
         for data, target in loader:
             data, target = data.to(device), target.to(device)

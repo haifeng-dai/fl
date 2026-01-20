@@ -1,14 +1,26 @@
 import torch
-import copy,os
+import copy, os
 import argparse
 
-from .utils import BaseClient, BaseServer, run_parallel_clients, compare_model_parameters
+from .utils import (
+    BaseClient,
+    BaseServer,
+    run_parallel_clients,
+    compare_model_parameters,
+)
 
 
 def add_args(parser: argparse.ArgumentParser):
     group = parser.add_argument_group("MOON Specific Arguments")
-    group.add_argument("--mu", type=float, default=1.0, help="Weight for contrastive loss")
-    group.add_argument("--tau", type=float, default=0.5, help="Temperature parameter for contrastive loss")
+    group.add_argument(
+        "--mu", type=float, default=1.0, help="Weight for contrastive loss"
+    )
+    group.add_argument(
+        "--tau",
+        type=float,
+        default=0.5,
+        help="Temperature parameter for contrastive loss",
+    )
     return parser
 
 
@@ -41,9 +53,8 @@ class Client(BaseClient):
             lr=self.lr,
         )
         loss_ = []
-        train_loader = self.build_train_loader()
         for _ in range(self.epochs):
-            for data, target in train_loader:
+            for data, target in self.build_train_loader():
                 data, target = data.to(self.device), target.to(self.device)
                 optimizer.zero_grad()
 
@@ -69,17 +80,14 @@ class Client(BaseClient):
 
 class Server(BaseServer):
     def __init__(
-            self,
-            model: torch.nn.Module,
-            args: argparse.Namespace,
+        self,
+        model: torch.nn.Module,
+        args: argparse.Namespace,
     ):
         super().__init__(model, False, args)
         for i in range(args.num_clients):
             self.clients[i] = Client(
-                client_id=i,
-                model=model,
-                train_set=self.train_sets[i],
-                args=args
+                client_id=i, model=model, train_set=self.train_sets[i], args=args
             )
 
     def fit(self):
@@ -95,7 +103,7 @@ class Server(BaseServer):
                 clients=self.clients,
                 parameters=parameters_per_client,
                 gpu_pools=self.gpu_pools,
-                no_mp=self.no_mp
+                no_mp=self.no_mp,
             )
             loss_avg = sum(results) / len(results)
             self.loss.append(loss_avg)
@@ -103,7 +111,9 @@ class Server(BaseServer):
             # print(updated)
             # updated_1 = [compare_model_parameters(global_params, self.clients[i].model.state_dict()) for i in range(self.num_clients)]
 
-            clients_params = [self.clients[i].model.state_dict() for i in range(self.num_clients)]
+            clients_params = [
+                self.clients[i].model.state_dict() for i in range(self.num_clients)
+            ]
             self.aggregate(clients_params, weights=self.weights)
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {loss_avg:.4f}")
@@ -113,9 +123,5 @@ class Server(BaseServer):
 
     def save(self, test):
         file_name: str = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": self.model.state_dict()
-        }
+        f = {"acc": self.acc, "loss": self.loss, "state_dict": self.model.state_dict()}
         super().deal_save(test, f, file_name)

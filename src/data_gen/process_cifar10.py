@@ -13,10 +13,12 @@ def process(output_dir="./datasets/raw"):
 
     # 定义数据转换：转换为张量并进行标准化
     # CIFAR10的均值和标准差
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ]
+    )
 
     # 下载并加载 CIFAR10 训练集
     train_set = datasets.CIFAR10(
