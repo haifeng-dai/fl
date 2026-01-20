@@ -16,7 +16,7 @@ typeCheckingMode = "standard"
 
 [[tool.uv.index]]
 name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
+url = "https://mirrors.seu.edu.cn/pytorch/whl/cu130/simple"
 explicit = true
 
 [tool.uv.sources]

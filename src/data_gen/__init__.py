@@ -146,7 +146,7 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
 
     if not os.path.exists(raw_path):
         print(f"-> 未找到 {dataset_name} 的原始数据。正在处理...")
-        module = importlib.import_module(f"data_scripts.process_{dataset_name}")
+        module = importlib.import_module(f"src.data_gen.process_{dataset_name}")
         module.process(raw_dir)
 
     # 2. 准备分区文件夹名

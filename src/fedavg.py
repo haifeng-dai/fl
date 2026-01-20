@@ -3,8 +3,7 @@ import copy
 
 import torch
 
-from .utils import BaseServer, run_parallel_clients, evaluate_model, ce_loss, get_model
-
+from .utils import BaseServer, ce_loss, evaluate_model, get_model, run_parallel_clients
 
 # class Client(BaseClient):
 #     def __init__(self, *args, **kwargs):
@@ -68,10 +67,12 @@ class Server(BaseServer):
                 gpu_pools=self.gpu_pools,
                 no_mp=self.no_mp,
             )
-            avg_loss = sum(results[0]) / self.num_clients
+            avg_loss = (
+                sum([results[i][0] for i in range(self.num_clients)]) / self.num_clients
+            )
             self.loss.append(avg_loss)
 
-            clients_params = [results[1][i] for i in range(self.num_clients)]
+            clients_params = [results[i][1] for i in range(self.num_clients)]
             self.aggregate(clients_params, weights=self.weights)
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
@@ -105,11 +106,11 @@ def client_worker(client_id, params):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             logits, _ = model(x)
-            loss = ce_loss(logits, y)
+            batch_loss = ce_loss(logits, y)
 
             optimizer.zero_grad()
-            loss.backward()
+            batch_loss.backward()
             optimizer.step()
 
-            loss.append(loss.item())
+            loss.append(batch_loss.item())
     return client_id, [sum(loss) / len(loss), model.state_dict()]
