@@ -2,7 +2,7 @@ import argparse
 
 import torch
 
-from .utils.fed_utils import StreamBaseClient, StreamBaseServer, param_aggregate
+from .utils.fed_utils import StreamBaseClient, StreamBaseServer
 
 
 class Client(StreamBaseClient):

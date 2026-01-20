@@ -271,19 +271,17 @@ class StreamBaseServer:
                 # 多 GPU 并行：每块 GPU 1 个 Stream
                 self.all_streams = {}
                 for gpu_id in self.gpus:
-                    with torch.cuda.device(gpu_id):
-                        self.all_streams[gpu_id] = torch.cuda.Stream()
+                    self.all_streams[gpu_id] = torch.cuda.Stream(gpu_id)
                 for i in range(self.num_clients):
                     self.clients_gpu[i] = self.gpus[i % len(self.gpus)]
 
             case "multi_stream":
                 # 多 GPU + 多 Stream：每块 GPU 多个 Streams（每个 Client 一个）
-                self.all_streams: dict[int, torch.cuda.Stream] = {}
+                self.all_streams = {}
                 for i in range(self.num_clients):
                     gpu_id = self.gpus[i % len(self.gpus)]
-                    with torch.cuda.device(gpu_id):
-                        self.all_streams[i] = torch.cuda.Stream()
-                        self.clients_gpu[i] = gpu_id
+                    self.all_streams[i] = torch.cuda.Stream(gpu_id)
+                    self.clients_gpu[i] = gpu_id
 
     def train_client(self, client_id, global_params):
         """训练所有客户端"""

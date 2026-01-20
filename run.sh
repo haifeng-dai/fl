@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # 通过环境变量配置实验参数
-export ALGO="fedavg"
+export ALGO="fedavg_stream"
 export DATASETS="mnist"
 export MODELS="cnn"
 export NUM_CLIENTS="10"
 export PARTITIONS="iid"
 export ROUND="2"
-export EPOCHS="2"
+export EPOCHS="20"
 export LRS="0.01"
 export GPUS="0,1,2,3"
 # export NO_MP="--no_mp"
@@ -48,6 +48,9 @@ case $ALGO in
         ;;
     "fedproto")
         bash ./scripts/fedproto.sh
+        ;;
+    "fedavg_stream")
+        bash ./scripts/fedavg_stream.sh
         ;;
     *)
         echo "未知算法: $ALGO. 支持的算法: fedavg, moon, fedpln, feddpl, fedproto"
