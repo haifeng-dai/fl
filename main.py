@@ -4,7 +4,7 @@ import time
 
 import torch
 
-from src import CNN, ResNet18, prepare_data
+from src import prepare_data
 
 
 def main():
@@ -14,9 +14,9 @@ def main():
         "--algo",
         type=str,
         default="fedavg",
-        choices=["fedavg", "fedavg_stream", "moon", "fedpln", "feddpl", "fedproto"],
+        choices=["fedavg", "fedavg_stream", "moon", "fedpln", "feddpl", "fedproto", "fedkd"],
     )
-    parser.add_argument("--test", type=bool, default=True, help="Test or train")
+    parser.add_argument("--test", type=int, default=1, help="Test or train")
     args, _ = parser.parse_known_args()
 
     # 2. Build Full Parser
@@ -68,7 +68,7 @@ def main():
         "--gpus", type=str, default="0", help="Comma separated list of GPU ids"
     )
     train_group.add_argument(
-        "--no_mp", action="store_true", help="Disable multiprocessing training"
+        "--mp", type=int, default=0, help="Enable multiprocessing training"
     )
     train_group.add_argument(
         "--parallel_mode",
@@ -76,6 +76,12 @@ def main():
         default="stream",
         choices=["sequential", "stream", "multi_stream"],
         help="Parallel mode for stream training: sequential, stream (1 per GPU), multi_stream (N per GPU)",
+    )
+    train_group.add_argument(
+        "--max_workers_per_gpu",
+        type=int,
+        default=1,
+        help="Maximum number of parallel workers per GPU to avoid OOM",
     )
 
     # Algorithm Specific Args

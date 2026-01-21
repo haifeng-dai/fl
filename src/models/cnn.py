@@ -4,17 +4,14 @@ import torch.nn as nn
 class CNN(nn.Module):
     def __init__(self, num_classes=10, feature_dim=64, input_channels=1):
         super(CNN, self).__init__()
-        self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(2, 2)
         # Feature extractor
         self.features = nn.Sequential(
-            self.conv1,
+            nn.Conv2d(input_channels, 32, kernel_size=3, padding=1),
             nn.ReLU(),
-            self.pool,
-            self.conv2,
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
-            self.pool,
+            nn.MaxPool2d(2, 2),
             nn.Flatten(),
         )
 

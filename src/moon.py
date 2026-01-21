@@ -1,12 +1,14 @@
+import copy
+
 import torch
-import copy, os
 import argparse
 
 from .utils import (
-    BaseClient,
     BaseServer,
     run_parallel_clients,
-    compare_model_parameters,
+    ce_loss,
+    evaluate_model,
+    get_model,
 )
 
 
@@ -24,103 +26,125 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-class Client(BaseClient):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.mu = self.args.mu
-        self.tau = self.args.tau
-        # MOON 需要两个额外的辅助模型
-        self.global_model = copy.deepcopy(self.model).to(self.device)
-        self.prev_model = copy.deepcopy(self.model).to(self.device)
+def client_worker(client_id, params):
+    device = params[0]
+    global_state = params[1]
+    prev_state = params[2]
+    train_set = params[3]
+    model_name = params[4]
+    dataset_name = params[5]
+    lr = params[6]
+    batch_size = params[7]
+    epochs = params[8]
+    mu = params[9]
+    tau = params[10]
 
-        self.ce_moon = torch.nn.CosineSimilarity(dim=-1)
+    model = get_model(model_name, dataset_name).to(device)
+    model.load_state_dict(global_state)
 
-    def moon_loss(self, z, z_glob, z_prev):
-        pos_sim = self.ce_moon(z, z_glob)
-        neg_sim = self.ce_moon(z, z_prev)
-        logits = torch.cat([pos_sim.reshape(-1, 1), neg_sim.reshape(-1, 1)], dim=1)
-        logits /= self.tau
-        labels = torch.zeros(z.size(0)).to(z.device).long()
-        return self.ce(logits, labels)
+    global_model = copy.deepcopy(model).to(device)
+    global_model.eval()
 
-    def train(self):
-        self.model.train()
-        self.global_model.eval()
-        self.prev_model.eval()
+    prev_model = get_model(model_name, dataset_name).to(device)
+    prev_model.load_state_dict(prev_state)
+    prev_model.eval()
 
-        optimizer = torch.optim.SGD(
-            self.model.parameters(),
-            lr=self.lr,
-        )
-        loss_ = []
-        train_loader = self.build_train_loader()
-        for _ in range(self.epochs):
-            for data, target in train_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                optimizer.zero_grad()
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    loader = torch.utils.data.DataLoader(
+        train_set, batch_size=batch_size, shuffle=True
+    )
+    ce_moon = torch.nn.CosineSimilarity(dim=-1)
 
-                y, z = self.model(data)
-                with torch.no_grad():
-                    _, z_glob = self.global_model(data)
-                    _, z_prev = self.prev_model(data)
+    total_loss = 0.0
+    num_batches = 0
+    for _ in range(epochs):
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
 
-                loss_ce = self.ce(y, target)
-                loss_con = self.moon_loss(z, z_glob, z_prev)
-                loss = loss_ce + self.mu * loss_con
+            output, z = model(x)
+            with torch.no_grad():
+                _, z_glob = global_model(x)
+                _, z_prev = prev_model(x)
 
-                loss.backward()
-                optimizer.step()
-                loss_.append(loss.item())
-        self.prev_model.load_state_dict(self.model.state_dict())
-        return sum(loss_) / len(loss_)
+            loss_ce = ce_loss(output, y)
 
-    def set_client(self, parameters):
-        self.model.load_state_dict(parameters)
-        self.global_model.load_state_dict(parameters)
+            pos_sim = ce_moon(z, z_glob)
+            neg_sim = ce_moon(z, z_prev)
+            logits = torch.cat([pos_sim.reshape(-1, 1), neg_sim.reshape(-1, 1)], dim=1)
+            logits /= tau
+            labels = torch.zeros(z.size(0)).to(device).long()
+            loss_con = ce_loss(logits, labels)
+
+            loss = loss_ce + mu * loss_con
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            num_batches += 1
+
+    avg_loss = total_loss / num_batches
+    return client_id, [avg_loss, model.state_dict()]
 
 
 class Server(BaseServer):
-    def __init__(
-        self,
-        model: torch.nn.Module,
-        args: argparse.Namespace,
-    ):
+    def __init__(self, args: argparse.Namespace):
+        model = get_model(args.model, args.dataset)
         super().__init__(model, False, args)
-        for i in range(args.num_clients):
-            self.clients[i] = Client(
-                client_id=i, model=model, train_set=self.train_sets[i], args=args
-            )
+        # Initialize previous model states for all clients with the initial global model
+        self.client_prev_states = [
+            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
+        ]
 
     def fit(self):
         for r in range(self.rounds):
             print(f"\n--- MOON Round {r + 1}/{self.rounds} ---")
             global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
-            # clients_params_old = copy.deepcopy([self.clients[i].model.state_dict() for i in range(self.num_clients)])
-
-            # 准备每个客户端的个性化参数包
-            parameters_per_client = [global_params] * self.num_clients
+            
+            # Prepare parameters for each client
+            parameters_per_client = []
+            for i in range(self.num_clients):
+                p = [
+                    self.client_gpu[i],
+                    global_params,
+                    self.client_prev_states[i],
+                    self.train_sets[i],
+                    self.args.model,
+                    self.args.dataset,
+                    self.args.lr,
+                    self.args.batch_size,
+                    self.args.epochs,
+                    self.args.mu,
+                    self.args.tau,
+                ]
+                parameters_per_client.append(p)
 
             results = run_parallel_clients(
-                clients=self.clients,
+                client_worker=client_worker,
+                num_clients=self.num_clients,
                 parameters=parameters_per_client,
                 gpu_pools=self.gpu_pools,
-                no_mp=self.no_mp,
+                mp=self.mp,
             )
-            loss_avg = sum(results) / len(results)
-            self.loss.append(loss_avg)
-            # updated = [compare_model_parameters(clients_params_old[i], self.clients[i].prev_model.state_dict()) for i in range(self.num_clients)]
-            # print(updated)
-            # updated_1 = [compare_model_parameters(global_params, self.clients[i].model.state_dict()) for i in range(self.num_clients)]
 
-            clients_params = [
-                self.clients[i].model.state_dict() for i in range(self.num_clients)
-            ]
+            # Calculate average loss using incremental summation
+            total_loss = 0.0
+            for res in results:
+                total_loss += res[0]
+            avg_loss = total_loss / self.num_clients
+            self.loss.append(avg_loss)
+
+            clients_params = [res[1] for res in results]
+            
+            # Update previous states with the newly trained models
+            for i, state in enumerate(clients_params):
+                self.client_prev_states[i] = {k: v.cpu() for k, v in state.items()}
+
             self.aggregate(clients_params, weights=self.weights)
             self.evaluate()
-            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {loss_avg:.4f}")
-            # updated_2 = compare_model_parameters(global_params, self.model.state_dict())
-            # updated_3 = [compare_model_parameters(clients_params_old[i], clients_params[i]) for i in range(self.num_clients)]
-            # print(f"Updated Parameters: \nupdated: \n{updated}, \nupdated_1: \n{updated_1}, \nupdated_2: \n{updated_2}, \nupdated_3: \n{updated_3}")
+            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+
+    def evaluate(self):
+        self.acc.append(evaluate_model(self.model, self.test_set, self.device))
 
     def save(self, test):
         file_name: str = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"

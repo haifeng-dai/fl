@@ -9,8 +9,9 @@ ROUND=${ROUND:-2}
 EPOCHS=${EPOCHS:-1}
 LRS=${LRS:-0.01}
 GPUS=${GPUS:-"0,1,2,3"}
-TEST=${TEST:-True}
-NO_MP=${NO_MP:-}
+TEST=${TEST:-1}
+MP=${MP:-0}
+MAX_WORKERS_PER_GPU=${MAX_WORKERS_PER_GPU:-1}  # 默认为1
 
 ALPHAS=${ALPHAS:-0.5}
 N_CLASS=${N_CLASS:-2}
@@ -24,9 +25,9 @@ BATCH_SIZE_PLNS=${BATCH_SIZE_PLNS:-32}
 FEATURE_DIMS=${FEATURE_DIMS:-128}
 DEPTH_PLNS=${DEPTH_PLNS:-2}
 WIDTH_PLNS=${WIDTH_PLNS:-128}
-FIXED_PROTOS=${FIXED_PROTOS:-False}
+FIXED_PROTOS=${FIXED_PROTOS:-0}
 INIT_EMBS=${INIT_EMBS:-0}
-HARS=${HARS:-False}
+HARS=${HARS:-0}
 
 for DATASET in ${DATASETS//,/ }; do
     for MODEL in ${MODELS//,/ }; do
@@ -68,8 +69,9 @@ for DATASET in ${DATASETS//,/ }; do
                                                                         --alpha $ALPHAS \
                                                                         --n_classes $N_CLASS \
                                                                         --gpus $GPUS \
-                                                                        $NO_MP \
-                                                                        --test $TEST
+                                                                        --mp $MP \
+                                                                        --test $TEST \
+                                                                        --max_workers_per_gpu $MAX_WORKERS_PER_GPU
                                                                 done
                                                             done
                                                         done

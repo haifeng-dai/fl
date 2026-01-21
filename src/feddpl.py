@@ -1,14 +1,16 @@
 import copy
-from pydoc import cli
+
 import torch
 import argparse
 
 from .utils import (
-    BaseClient,
     BaseServer,
     run_parallel_clients,
     evaluate_prototype,
     param_aggregate,
+    ce_loss,
+    get_model,
+    evaluate_model,
 )
 
 
@@ -39,12 +41,12 @@ def add_args(parser: argparse.ArgumentParser):
         help="Task mode",
     )
     group.add_argument(
-        "--har", type=bool, default=False, help="Whether to use HAR dataset"
+        "--har", type=int, default=0, help="Whether to use HAR dataset"
     )
     group.add_argument(
         "--fixed_proto",
-        type=bool,
-        default=False,
+        type=int,
+        default=0,
         help="Whether to fix the prototypes during training",
     )
     group.add_argument(
@@ -109,83 +111,100 @@ class PLN(torch.nn.Module):
         return out
 
 
-class Client(BaseClient):
-    def __init__(self, pln: PLN, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.lambda_ = self.args.lambda_
-        self.epoch_pln = self.args.epoch_pln
-        self.lr_pln = self.args.lr_pln
-        self.batch_size_pln = self.args.batch_size_pln
-        self.mode = self.args.mode
-        self.har = self.args.har
-        self.pln = copy.deepcopy(pln).to(self.device)
-        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings).to(
-            self.device
-        )
+def client_worker(client_id, params):
+    device = params[0]
+    model_state = params[1]
+    pln_state = params[2]
+    train_set = params[3]
+    
+    model_name = params[4]
+    dataset_name = params[5]
+    lr = params[6]
+    batch_size = params[7]
+    epochs = params[8]
+    
+    num_classes = params[9]
+    width_pln = params[10]
+    feature_dim = params[11]
+    depth_pln = params[12]
+    fixed_proto = params[13]
+    init_emb = params[14]
+    lambda_ = params[15]
+    lr_pln = params[16]
+    epoch_pln = params[17]
 
-    def train(self, *args, **kwargs):
-        loss_m = self.train_model()
-        loss_p = self.pln_learning()
-        return loss_m, loss_p
+    model = get_model(model_name, dataset_name).to(device)
+    model.load_state_dict(model_state)
 
-    def train_model(self):
-        self.model.train()
-        self.pln.eval()
-        opt = torch.optim.SGD(self.model.parameters(), lr=self.lr)
-        loss_ = []
-        for _ in range(self.epochs):
-            for x, y in self.train_loader:
-                x, y = x.to(self.device), y.to(self.device)
-                output, feature = self.model(x)
-                loss_ce = self.ce(output, y)
+    pln = PLN(
+        num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb
+    ).to(device)
+    pln.load_state_dict(pln_state)
 
-                protos = self.pln(self.all_classes).detach()
-                dist = torch.cdist(feature, protos, p=2) ** 2
-                loss_proto = self.ce(-torch.sqrt(dist), y)
+    all_classes = torch.arange(0, num_classes).to(device)
 
-                loss = loss_ce + self.lambda_ * loss_proto
+    # Train Model
+    model.train()
+    pln.eval()
+    opt = torch.optim.SGD(model.parameters(), lr=lr)
+    total_loss_m = 0.0
+    num_batches_m = 0
+    loader = torch.utils.data.DataLoader(
+        train_set, batch_size=batch_size, shuffle=True
+    )
 
-                opt.zero_grad()
-                loss.backward()
-                opt.step()
-                loss_.append(loss.item())
-        return sum(loss_) / len(loss_)
+    for _ in range(epochs):
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            output, feature = model(x)
+            loss_ce = ce_loss(output, y)
 
-    def pln_learning(self):
-        self.model.eval()
-        self.pln.train()
-        opt_pln = torch.optim.SGD(self.pln.parameters(), lr=self.lr_pln)
-        loss_ = []
-        train_loader = self.build_train_loader()
-        for _ in range(self.epoch_pln):
-            for x, y in train_loader:
-                x, y = x.to(self.device), y.to(self.device)
-                protos = self.pln(self.all_classes)
+            with torch.no_grad():
+                protos = pln(all_classes)
+            dist = torch.cdist(feature, protos, p=2) ** 2
+            loss_proto = ce_loss(-torch.sqrt(dist), y)
 
-                _, feature = self.model(x)
-                dist = torch.cdist(feature.detach(), protos, p=2) ** 2
-                loss = self.ce(-torch.sqrt(dist), y)
+            loss = loss_ce + lambda_ * loss_proto
 
-                opt_pln.zero_grad()
-                loss.backward()
-                opt_pln.step()
-                loss_.append(loss.item())
-        return sum(loss_) / len(loss_)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            total_loss_m += loss.item()
+            num_batches_m += 1
 
-    def evaluate(self, test_set, *args, **kwargs):
-        prototype = self.pln(self.all_classes)
-        acc = super().evaluate(test_set, *args, **kwargs)
-        acc_p = evaluate_prototype(self.model, prototype, test_set, self.device)
-        return acc, acc_p
+    avg_loss_m = total_loss_m / num_batches_m
 
-    def set_client(self, parameters):
-        model_params, pln_params = parameters
-        self.model.load_state_dict(model_params)
-        self.pln.load_state_dict(pln_params)
+    # Train PLN
+    model.eval()
+    pln.train()
+    opt_pln = torch.optim.SGD(pln.parameters(), lr=lr_pln)
+    total_loss_p = 0.0
+    num_batches_p = 0
+
+    for _ in range(epoch_pln):
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            protos = pln(all_classes)
+
+            with torch.no_grad():
+                _, feature = model(x)
+            dist = torch.cdist(feature, protos, p=2) ** 2
+            loss = ce_loss(-torch.sqrt(dist), y)
+
+            opt_pln.zero_grad()
+            loss.backward()
+            opt_pln.step()
+            total_loss_p += loss.item()
+            num_batches_p += 1
+
+    avg_loss_p = total_loss_p / num_batches_p
+
+    return client_id, [avg_loss_m, avg_loss_p, model.state_dict(), pln.state_dict()]
 
 
 class Server(BaseServer):
-    def __init__(self, model: torch.nn.Module, args: argparse.Namespace):
+    def __init__(self, args: argparse.Namespace):
+        model = get_model(args.model, args.dataset)
         super().__init__(model, True, args)
         self.pln = PLN(
             num_classes=self.num_class,
@@ -195,66 +214,99 @@ class Server(BaseServer):
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
         ).to(self.device)
-        for i in range(args.num_clients):
-            self.clients[i] = Client(
-                client_id=i,
-                model=model,
-                train_set=self.train_sets[i],
-                pln=self.pln,
-                args=args,
-            )
+        
+        self.client_model_states = [
+            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
+        ]
+        
+        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings).to(
+            self.device
+        )
         self.acc_p: list[float] = []
         self.loss_p: list[float] = []
 
     def fit(self):
-        model_param = {k: v.cpu() for k, v in self.model.state_dict().items()}
-        pln_param = {k: v.cpu() for k, v in self.pln.state_dict().items()}
-        parameters_per_client = [(model_param, pln_param)] * self.num_clients
         for r in range(self.rounds):
             print(f"\n--- FedDPL Round {r + 1}/{self.rounds} ---")
+            
+            pln_param = {k: v.cpu() for k, v in self.pln.state_dict().items()}
+            
+            parameters_per_client = []
+            for i in range(self.num_clients):
+                p = [
+                    self.client_gpu[i],
+                    self.client_model_states[i],
+                    pln_param,
+                    self.train_sets[i],
+                    self.args.model,
+                    self.args.dataset,
+                    self.args.lr,
+                    self.args.batch_size,
+                    self.args.epochs,
+                    self.num_class,
+                    self.args.width_pln,
+                    self.args.feature_dim,
+                    self.args.depth_pln,
+                    self.args.fixed_proto,
+                    self.args.init_emb,
+                    self.args.lambda_,
+                    self.args.lr_pln,
+                    self.args.epoch_pln
+                ]
+                parameters_per_client.append(p)
 
             results = run_parallel_clients(
-                clients=self.clients,
+                client_worker=client_worker,
+                num_clients=self.num_clients,
                 parameters=parameters_per_client,
                 gpu_pools=self.gpu_pools,
-                no_mp=self.no_mp,
+                mp=self.mp,
             )
-            loss_model_epoch = [res[0] for res in results]
-            loss_pln_epoch = [res[1] for res in results]
-            self.loss.append(sum(loss_model_epoch) / len(loss_model_epoch))
-            self.loss_p.append(sum(loss_pln_epoch) / len(loss_pln_epoch))
 
-            # # Update global PLN
-            clients_params = [
-                self.clients[i].model.state_dict() for i in range(self.num_clients)
-            ]
-            plns_params = [self.clients[i].pln.state_dict() for i in range(self.num_clients)]  # type: ignore
+            # Calculate average losses using incremental summation
+            total_loss_model = 0.0
+            total_loss_pln = 0.0
+            for res in results:
+                total_loss_model += res[0]
+                total_loss_pln += res[1]
+            self.loss.append(total_loss_model / self.num_clients)
+            self.loss_p.append(total_loss_pln / self.num_clients)
 
-            # Aggregate model parameters
-            self.aggregate(plns_params)
+            clients_model_states = [res[2] for res in results]
+            plns_states = [res[3] for res in results]
 
-            parameters_per_client = [
-                (clients_params[i], self.pln.state_dict())
-                for i in range(self.num_clients)
-            ]
+            # Update local models
+            for i, state in enumerate(clients_model_states):
+                self.client_model_states[i] = {k: v.cpu() for k, v in state.items()}
 
-            self.evaluate(clients_params, plns_params)
+            # Aggregate PLN parameters
+            self.aggregate(plns_states)
 
+            self.evaluate()
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
 
     def aggregate(self, pln_params, *args, **kwargs):
         self.pln.load_state_dict(param_aggregate(pln_params, self.weights))
 
-    def evaluate(self, clients_state, plns_state, *args, **kwargs):
+    def evaluate(self, *args, **kwargs):
         current_acc = []
         current_acc_p = []
-        for client_id in self.clients:
-            self.clients[client_id].set_client(
-                (clients_state[client_id], plns_state[client_id])
-            )
-            acc, acc_p = self.clients[client_id].evaluate(self.test_set[client_id])
+        
+        # Global PLN prototype for evaluation
+        prototype = self.pln(self.all_classes)
+        
+        for i in range(self.num_clients):
+            # Load local model
+            self.model.load_state_dict(self.client_model_states[i])
+            
+            # Evaluate model accuracy on local test set
+            acc = evaluate_model(self.model, self.test_set[i], self.device)
             current_acc.append(acc)
+            
+            # Evaluate prototype accuracy on local test set
+            acc_p = evaluate_prototype(self.model, prototype, self.test_set[i], self.device)
             current_acc_p.append(acc_p)
+            
         self.acc.append(sum(current_acc) / len(current_acc))
         self.acc_p.append(sum(current_acc_p) / len(current_acc_p))
 

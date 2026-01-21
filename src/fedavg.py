@@ -1,52 +1,58 @@
 import argparse
-import copy
 
 import torch
 
-from .utils import BaseServer, ce_loss, evaluate_model, get_model, run_parallel_clients
+from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
 
-# class Client(BaseClient):
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
 
-#     def train(self):
-#         self.model.train()
-#         optimizer = torch.optim.SGD(
-#             self.model.parameters(),
-#             lr=self.lr,
-#         )
-#         loss_ = []
-#         train_loader = self.build_train_loader()
-#         for _ in range(self.epochs):
-#             for data, target in train_loader:
-#                 data, target = data.to(self.device), target.to(self.device)
-#                 optimizer.zero_grad()
-#                 output, _ = self.model(data)
-#                 loss = self.ce(output, target)
-#                 loss.backward()
-#                 optimizer.step()
-#                 loss_.append(loss.item())
-#         return sum(loss_) / len(loss_)
+def client_worker(client_id, params):
+    device = params[0]
+    model_state = params[1]
+    train_set = params[2]
+    model_name = params[3]
+    dataset_name = params[4]
+    lr = params[5]
+    batch_size = params[6]
+    epochs = params[7]
 
-#     def set_client(self, parameters):
-#         self.model.load_state_dict(parameters)
+    model = get_model(model_name, dataset_name).to(device)
+    model.load_state_dict(model_state)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    loader = torch.utils.data.DataLoader(
+        train_set,
+        batch_size=batch_size,
+        shuffle=True,
+    )
+    total_loss = 0.0
+    num_batches = 0
+    for _ in range(epochs):
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            logits, _ = model(x)
+            batch_loss = ce_loss(logits, y)
+
+            optimizer.zero_grad()
+            batch_loss.backward()
+            optimizer.step()
+
+            total_loss += batch_loss.item()
+            num_batches += 1
+
+    avg_loss = total_loss / num_batches
+    return client_id, [avg_loss, model.state_dict()]
 
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         model = get_model(args.model, args.dataset)
         super().__init__(model, False, args)
-        # for i in range(args.num_clients):
-        #     self.clients[i] = Client(
-        #         client_id=i, model=model, train_set=self.train_sets[i], args=args
-        #     )
 
     def fit(self):
         for r in range(self.rounds):
             print(f"\n--- FedAvg Round {r + 1}/{self.rounds} ---")
             global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
 
-            parameters_per_client = [
+            p = [
                 [
                     v,
                     global_params,
@@ -63,22 +69,22 @@ class Server(BaseServer):
             results = run_parallel_clients(
                 client_worker=client_worker,
                 num_clients=self.num_clients,
-                parameters=parameters_per_client,
+                parameters=p,
                 gpu_pools=self.gpu_pools,
-                no_mp=self.no_mp,
+                mp=self.mp,
             )
-            avg_loss = (
-                sum([results[i][0] for i in range(self.num_clients)]) / self.num_clients
-            )
+
+            # Calculate average loss using incremental summation
+            total_loss = 0.0
+            for i in range(self.num_clients):
+                total_loss += results[i][0]
+            avg_loss = total_loss / self.num_clients
             self.loss.append(avg_loss)
 
             clients_params = [results[i][1] for i in range(self.num_clients)]
             self.aggregate(clients_params, weights=self.weights)
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
-
-    def evaluate(self):
-        self.acc.append(evaluate_model(self.model, self.test_set, self.device))
 
     def save(self, test):
         f = {
@@ -87,30 +93,3 @@ class Server(BaseServer):
             "state_dict": self.model.state_dict(),
         }
         super().deal_save(test, f)
-
-
-def client_worker(client_id, params):
-    device = params[0]
-    param_state = params[1]
-    model = get_model(params[3], params[4])
-    model = copy.deepcopy(model).to(device)
-    model.load_state_dict(param_state)
-    optimizer = torch.optim.SGD(model.parameters(), lr=params[5])
-    loader = torch.utils.data.DataLoader(
-        params[2],
-        batch_size=params[6],
-        shuffle=True,
-    )
-    loss = []
-    for _ in range(params[7]):
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            logits, _ = model(x)
-            batch_loss = ce_loss(logits, y)
-
-            optimizer.zero_grad()
-            batch_loss.backward()
-            optimizer.step()
-
-            loss.append(batch_loss.item())
-    return client_id, [sum(loss) / len(loss), model.state_dict()]

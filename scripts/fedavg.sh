@@ -9,8 +9,9 @@ ROUND=${ROUND:-2}
 EPOCHS=${EPOCHS:-1}
 LRS=${LRS:-0.01}
 GPUS=${GPUS:-"0,1,2,3"}
-TEST=${TEST:-True}
-NO_MP=${NO_MP:-}
+TEST=${TEST:-1}
+MP=${MP:-0}
+MAX_WORKERS_PER_GPU=${MAX_WORKERS_PER_GPU:-1}  # 默认为1
 
 ALPHAS=${ALPHAS:-0.5}
 N_CLASS=${N_CLASS:-2}
@@ -31,8 +32,9 @@ for DATASET in ${DATASETS//,/ }; do
                             --epochs $EPOCH \
                             --lr $LR \
                             --gpus $GPUS \
-                            $NO_MP \
-                            --test $TEST
+                            --mp $MP \
+                            --test $TEST \
+                            --max_workers_per_gpu $MAX_WORKERS_PER_GPU
                     done
                 done
             done

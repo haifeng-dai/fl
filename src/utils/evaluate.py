@@ -3,7 +3,6 @@ import torch
 
 
 def evaluate_model(model, test_set, device) -> float:
-    print(device)
     loader = torch.utils.data.DataLoader(test_set, batch_size=128, shuffle=False)
 
     eval_model = copy.deepcopy(model)
