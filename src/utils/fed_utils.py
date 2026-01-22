@@ -30,7 +30,7 @@ class BaseServer:
             partition=args.partition,
             num_clients=args.num_clients,
             alpha=args.alpha,
-            n_classes=args.n_classes,
+            n_classes=args.n_class,
             pfl=self.pfl,
         )
         self.fold_path = os.path.join(
@@ -39,7 +39,7 @@ class BaseServer:
         if args.partition == "dirichlet":
             self.fold_path += f"_{args.alpha}"
         elif args.partition == "pathological":
-            self.fold_path += f"_{args.n_classes}"
+            self.fold_path += f"_{args.n_class}"
         os.makedirs(self.fold_path, exist_ok=True)
 
         # Use pre-calculated counts for sample weights
@@ -78,12 +78,14 @@ class BaseServer:
                 device_counts[device] += 1
 
             # 获取最大worker数限制（如果设置了的话）
-            max_workers = getattr(self.args, 'max_workers_per_gpu', None)
+            max_workers = getattr(self.args, "max_workers_per_gpu", None)
 
             for device, count in device_counts.items():
                 # 限制每个GPU的最大并行worker数，避免OOM
                 actual_workers = min(count, max_workers) if max_workers else count
-                print(f"-> 为设备 {device} 分配并行池 (Worker: {actual_workers}/{count})")
+                print(
+                    f"-> 为设备 {device} 分配并行池 (Worker: {actual_workers}/{count})"
+                )
                 self.gpu_pools[device] = mp.Pool(processes=actual_workers)
         else:
             print(f"-> 未启用多进程训练，将使用顺序训练 (设备: {self.client_gpu[0]})")
@@ -91,6 +93,8 @@ class BaseServer:
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
     ):
+        if weights is None:
+            weights = self.weights
         aggregated_state = param_aggregate(client_state_dicts, weights)
         self.model.load_state_dict(aggregated_state)
 

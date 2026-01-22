@@ -38,9 +38,7 @@ def add_args(parser: argparse.ArgumentParser):
         choices=["normal", "pln", "model", "all"],
         help="Task mode",
     )
-    group.add_argument(
-        "--har", type=int, default=0, help="Whether to use HAR dataset"
-    )
+    group.add_argument("--har", type=int, default=0, help="Whether to use HAR dataset")
     group.add_argument(
         "--fixed_proto",
         type=int,
@@ -109,7 +107,7 @@ class PLN(torch.nn.Module):
         return out
 
 
-def client_worker(client_id, params):
+def client_worker(params):
     device = params[0]
     model_state = params[1]
     pln_state = params[2]
@@ -134,9 +132,9 @@ def client_worker(client_id, params):
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
 
-    pln = PLN(
-        num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb
-    ).to(device)
+    pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
+        device
+    )
     pln.load_state_dict(pln_state)
 
     all_classes = torch.arange(0, num_classes).to(device)
@@ -147,9 +145,7 @@ def client_worker(client_id, params):
     opt = torch.optim.SGD(model.parameters(), lr=lr)
     total_loss_m = 0.0
     num_batches_m = 0
-    loader = torch.utils.data.DataLoader(
-        train_set, batch_size=batch_size, shuffle=True
-    )
+    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     for _ in range(epochs):
         for x, y in loader:
@@ -197,7 +193,7 @@ def client_worker(client_id, params):
 
     avg_loss_p = total_loss_p / num_batches_p
 
-    return client_id, [avg_loss_m, avg_loss_p, model.state_dict(), pln.state_dict()]
+    return [avg_loss_m, avg_loss_p, model.state_dict(), pln.state_dict()]
 
 
 class Server(BaseServer):
@@ -244,7 +240,7 @@ class Server(BaseServer):
                     self.args.init_emb,
                     self.args.lambda_,
                     self.args.lr_pln,
-                    self.args.epoch_pln
+                    self.args.epoch_pln,
                 ]
                 parameters_per_client.append(p)
 
@@ -268,13 +264,13 @@ class Server(BaseServer):
             # Update global model and PLN
             clients_params = [res[2] for res in results]
             plns_params = [res[3] for res in results]
-            
+
             self.aggregate(clients_params, plns_params)
             self.evaluate()
 
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
 
-    def aggregate(self, clients_params=None, plns_params=None, *args, **kwargs):
+    def aggregate(self, clients_params=None, plns_params=None):
         # Handle optional arguments or direct passing
         if clients_params:
             self.model.load_state_dict(param_aggregate(clients_params, self.weights))
@@ -284,7 +280,7 @@ class Server(BaseServer):
     def evaluate(self):
         # Evaluate global model
         self.acc.append(evaluate_model(self.model, self.test_set, self.device))
-        
+
         # Evaluate prototype
         prototype = self.pln(self.all_classes)
         acc_p = evaluate_prototype(self.model, prototype, self.test_set, self.device)

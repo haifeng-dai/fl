@@ -25,9 +25,7 @@ class CNN(nn.Module):
 
         # Projection head (for MOON)
         self.proj = nn.Sequential(
-            nn.Linear(flattened_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, feature_dim)
+            nn.Linear(flattened_dim, 128), nn.ReLU(), nn.Linear(128, feature_dim)
         )
         # Classification head
         self.fc = nn.Linear(feature_dim, num_classes)

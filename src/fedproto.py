@@ -1,6 +1,8 @@
 import torch
 import argparse
 import copy
+
+from src.utils.evaluate import evaluate_prototype
 from .utils import (
     BaseServer,
     run_parallel_clients,
@@ -18,7 +20,7 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def client_worker(client_id, params):
+def client_worker(params):
     device = params[0]
     model_state = params[1]
     global_protos = params[2]
@@ -35,9 +37,7 @@ def client_worker(client_id, params):
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     mse_loss = torch.nn.MSELoss()
-    loader = torch.utils.data.DataLoader(
-        train_set, batch_size=batch_size, shuffle=True
-    )
+    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     total_loss = 0.0
     num_batches = 0
@@ -89,7 +89,7 @@ def client_worker(client_id, params):
 
     # Return client_id, avg_loss, new_model_state, local_protos
     avg_loss = total_loss / num_batches
-    return client_id, [avg_loss, model.state_dict(), local_protos]
+    return [avg_loss, model.state_dict(), local_protos]
 
 
 class Server(BaseServer):
@@ -101,14 +101,14 @@ class Server(BaseServer):
             copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
         ]
         self.global_protos: dict[int, torch.Tensor] = {}
+        self.acc_p: list[float] = []
 
     def fit(self):
         for r in range(self.rounds):
             print(f"\n--- FedProto Round {r + 1}/{self.rounds} ---")
 
-            parameters_per_client = []
-            for i in range(self.num_clients):
-                p = [
+            p = [
+                [
                     self.client_gpu[i],
                     self.client_model_states[i],
                     self.global_protos,
@@ -119,13 +119,13 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.args.mu,
-                ]
-                parameters_per_client.append(p)
+                ] for i in range(self.num_clients)
+            ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
                 num_clients=self.num_clients,
-                parameters=parameters_per_client,
+                parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
@@ -145,11 +145,13 @@ class Server(BaseServer):
             for i, state in enumerate(new_model_states):
                 self.client_model_states[i] = {k: v.cpu() for k, v in state.items()}
 
-            # Aggregate prototypes from all clients
             self.global_protos = self.aggregate_protos(all_local_protos)
-
             self.evaluate()
-            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+            print(
+                f"Global Accuracy: {self.acc[-1]:.2f}%, "
+                f"Proto Accuracy: {self.acc_p[-1]:.2f}%, "
+                f"Avg Loss: {avg_loss:.4f}"
+            )
 
     def aggregate_protos(self, all_local_protos):
         global_protos = {}
@@ -171,15 +173,29 @@ class Server(BaseServer):
     def evaluate(self):
         # Evaluate each client's personalized model on its local test set
         accs = []
+        acc_ps = []
+
+        # Prepare prototype tensor from dict for evaluation
+        proto_tensor = None
+        if self.global_protos:
+            max_label = max(self.global_protos.keys())
+            dim = next(iter(self.global_protos.values())).shape[0]
+            proto_tensor = torch.zeros(max_label + 1, dim).to(self.device)
+            for label, proto in self.global_protos.items():
+                proto_tensor[label] = proto.to(self.device)
+
         for i in range(self.num_clients):
             # Load client i's model state into self.model for evaluation
             self.model.load_state_dict(self.client_model_states[i])
-            # evaluate_model handles device movement, we pass self.device (Server's device)
+
             acc = evaluate_model(self.model, self.test_set[i], self.device)
             accs.append(acc)
 
-        acc = sum(accs) / len(accs)
-        self.acc.append(acc)
+            acc_p = evaluate_prototype(self.model, proto_tensor, self.test_set[i], self.device)
+            acc_ps.append(acc_p)
+
+        self.acc.append(sum(accs) / (len(accs) if accs else 1))
+        self.acc_p.append(sum(acc_ps) / (len(acc_ps) if acc_ps else 1))
 
     def save(self, test):
         f = {

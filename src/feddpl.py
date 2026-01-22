@@ -41,9 +41,6 @@ def add_args(parser: argparse.ArgumentParser):
         help="Task mode",
     )
     group.add_argument(
-        "--har", type=int, default=0, help="Whether to use HAR dataset"
-    )
-    group.add_argument(
         "--fixed_proto",
         type=int,
         default=0,
@@ -55,6 +52,7 @@ def add_args(parser: argparse.ArgumentParser):
         default=0,
         help="Initialization strategy for PLN embeddings",
     )
+    group.add_argument("--har", type=int, default=0, help="Whether to use HAR dataset")
     return parser
 
 
@@ -111,18 +109,18 @@ class PLN(torch.nn.Module):
         return out
 
 
-def client_worker(client_id, params):
+def client_worker(params):
     device = params[0]
     model_state = params[1]
     pln_state = params[2]
     train_set = params[3]
-    
+
     model_name = params[4]
     dataset_name = params[5]
     lr = params[6]
     batch_size = params[7]
     epochs = params[8]
-    
+
     num_classes = params[9]
     width_pln = params[10]
     feature_dim = params[11]
@@ -136,9 +134,9 @@ def client_worker(client_id, params):
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
 
-    pln = PLN(
-        num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb
-    ).to(device)
+    pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
+        device
+    )
     pln.load_state_dict(pln_state)
 
     all_classes = torch.arange(0, num_classes).to(device)
@@ -149,9 +147,7 @@ def client_worker(client_id, params):
     opt = torch.optim.SGD(model.parameters(), lr=lr)
     total_loss_m = 0.0
     num_batches_m = 0
-    loader = torch.utils.data.DataLoader(
-        train_set, batch_size=batch_size, shuffle=True
-    )
+    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     for _ in range(epochs):
         for x, y in loader:
@@ -199,7 +195,7 @@ def client_worker(client_id, params):
 
     avg_loss_p = total_loss_p / num_batches_p
 
-    return client_id, [avg_loss_m, avg_loss_p, model.state_dict(), pln.state_dict()]
+    return [avg_loss_m, avg_loss_p, model.state_dict(), pln.state_dict()]
 
 
 class Server(BaseServer):
@@ -214,11 +210,11 @@ class Server(BaseServer):
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
         ).to(self.device)
-        
+
         self.client_model_states = [
             copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
         ]
-        
+
         self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings).to(
             self.device
         )
@@ -228,9 +224,9 @@ class Server(BaseServer):
     def fit(self):
         for r in range(self.rounds):
             print(f"\n--- FedDPL Round {r + 1}/{self.rounds} ---")
-            
+
             pln_param = {k: v.cpu() for k, v in self.pln.state_dict().items()}
-            
+
             parameters_per_client = []
             for i in range(self.num_clients):
                 p = [
@@ -251,7 +247,7 @@ class Server(BaseServer):
                     self.args.init_emb,
                     self.args.lambda_,
                     self.args.lr_pln,
-                    self.args.epoch_pln
+                    self.args.epoch_pln,
                 ]
                 parameters_per_client.append(p)
 
@@ -285,28 +281,30 @@ class Server(BaseServer):
             self.evaluate()
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
 
-    def aggregate(self, pln_params, *args, **kwargs):
+    def aggregate(self, pln_params):
         self.pln.load_state_dict(param_aggregate(pln_params, self.weights))
 
-    def evaluate(self, *args, **kwargs):
+    def evaluate(self):
         current_acc = []
         current_acc_p = []
-        
+
         # Global PLN prototype for evaluation
         prototype = self.pln(self.all_classes)
-        
+
         for i in range(self.num_clients):
             # Load local model
             self.model.load_state_dict(self.client_model_states[i])
-            
+
             # Evaluate model accuracy on local test set
             acc = evaluate_model(self.model, self.test_set[i], self.device)
             current_acc.append(acc)
-            
+
             # Evaluate prototype accuracy on local test set
-            acc_p = evaluate_prototype(self.model, prototype, self.test_set[i], self.device)
+            acc_p = evaluate_prototype(
+                self.model, prototype, self.test_set[i], self.device
+            )
             current_acc_p.append(acc_p)
-            
+
         self.acc.append(sum(current_acc) / len(current_acc))
         self.acc_p.append(sum(current_acc_p) / len(current_acc_p))
 

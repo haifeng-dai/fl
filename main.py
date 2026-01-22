@@ -14,7 +14,7 @@ def main():
         "--algo",
         type=str,
         default="fedavg",
-        choices=["fedavg", "fedavg_stream", "moon", "fedpln", "feddpl", "fedproto", "fedkd"],
+        choices=["fedavg", "fedavg_stream", "moon", "fedpln", "feddpl", "fedproto", "fedkd", "fml", "proxyfl"],
     )
     parser.add_argument("--test", type=int, default=1, help="Test or train")
     args, _ = parser.parse_known_args()
@@ -39,30 +39,30 @@ def main():
         choices=["cnn", "resnet18"],
     )
     data_group.add_argument(
+        "--num_clients", type=int, default=10, help="Number of clients"
+    )
+    data_group.add_argument(
         "--partition",
         type=str,
         default="iid",
         choices=["iid", "dirichlet", "pathological"],
         help="Data partitioning strategy",
     )
-    data_group.add_argument(
-        "--num_clients", type=int, default=10, help="Number of clients"
-    )
+    data_group.add_argument("--alpha", type=float, default=0.5, help="For Dirichlet")
+    data_group.add_argument("--n_class", type=int, default=2, help="For Pathological")
     data_group.add_argument(
         "--test_ratio", type=float, default=0.2, help="Ratio of test data"
     )
-    data_group.add_argument("--alpha", type=float, default=0.5, help="For Dirichlet")
-    data_group.add_argument("--n_classes", type=int, default=2, help="For Pathological")
 
     # Training Args
     train_group = full_parser.add_argument_group("Training Arguments")
     train_group.add_argument(
-        "--rounds", type=int, default=5, help="Number of communication rounds"
-    )
-    train_group.add_argument(
         "--epochs", type=int, default=1, help="Number of local epochs"
     )
     train_group.add_argument("--lr", type=float, default=0.01, help="Learning rate")
+    train_group.add_argument(
+        "--rounds", type=int, default=5, help="Number of communication rounds"
+    )
     train_group.add_argument("--batch_size", type=int, default=64, help="Batch size")
     train_group.add_argument(
         "--gpus", type=str, default="0", help="Comma separated list of GPU ids"
@@ -71,17 +71,17 @@ def main():
         "--mp", type=int, default=0, help="Enable multiprocessing training"
     )
     train_group.add_argument(
+        "--max_workers_per_gpu",
+        type=int,
+        default=1,
+        help="Maximum number of parallel workers per GPU to avoid OOM",
+    )
+    train_group.add_argument(
         "--parallel_mode",
         type=str,
         default="stream",
         choices=["sequential", "stream", "multi_stream"],
         help="Parallel mode for stream training: sequential, stream (1 per GPU), multi_stream (N per GPU)",
-    )
-    train_group.add_argument(
-        "--max_workers_per_gpu",
-        type=int,
-        default=1,
-        help="Maximum number of parallel workers per GPU to avoid OOM",
     )
 
     # Algorithm Specific Args
@@ -100,7 +100,7 @@ def main():
         partition_method=args.partition,
         num_clients=args.num_clients,
         alpha=args.alpha,
-        n_classes=args.n_classes,
+        n_classes=args.n_class,
         test_ratio=args.test_ratio,
     )
 

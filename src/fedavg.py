@@ -5,7 +5,7 @@ import torch
 from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
 
 
-def client_worker(client_id, params):
+def client_worker(params):
     device = params[0]
     model_state = params[1]
     train_set = params[2]
@@ -39,7 +39,7 @@ def client_worker(client_id, params):
             num_batches += 1
 
     avg_loss = total_loss / num_batches
-    return client_id, [avg_loss, model.state_dict()]
+    return [avg_loss, model.state_dict()]
 
 
 class Server(BaseServer):
@@ -82,7 +82,7 @@ class Server(BaseServer):
             self.loss.append(avg_loss)
 
             clients_params = [results[i][1] for i in range(self.num_clients)]
-            self.aggregate(clients_params, weights=self.weights)
+            self.aggregate(clients_params)
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
 

@@ -11,7 +11,9 @@ class ResNet18(nn.Module):
 
         # 修改第一层卷积以适应CIFAR10的3通道输入
         # CIFAR10图片是32x32，比ImageNet的224x224小很多
-        self.resnet.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.resnet.conv1 = nn.Conv2d(
+            3, 64, kernel_size=3, stride=1, padding=1, bias=False
+        )
 
         # 移除自适应平均池化和全连接层，替换为适合CIFAR10的版本
         self.resnet.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -26,7 +28,7 @@ class ResNet18(nn.Module):
             self.resnet.layer3,
             self.resnet.layer4,
             self.resnet.avgpool,
-            nn.Flatten()
+            nn.Flatten(),
         )
 
         # 获取特征维度
@@ -36,9 +38,7 @@ class ResNet18(nn.Module):
 
         # 投影头（用于MOON等算法）
         self.proj = nn.Sequential(
-            nn.Linear(feature_size, 128),
-            nn.ReLU(),
-            nn.Linear(128, feature_dim)
+            nn.Linear(feature_size, 128), nn.ReLU(), nn.Linear(128, feature_dim)
         )
 
         # 分类头

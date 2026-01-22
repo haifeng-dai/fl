@@ -26,7 +26,7 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def client_worker(client_id, params):
+def client_worker(params):
     device = params[0]
     global_state = params[1]
     prev_state = params[2]
@@ -50,9 +50,7 @@ def client_worker(client_id, params):
     prev_model.eval()
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(
-        train_set, batch_size=batch_size, shuffle=True
-    )
+    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
     ce_moon = torch.nn.CosineSimilarity(dim=-1)
 
     total_loss = 0.0
@@ -83,7 +81,7 @@ def client_worker(client_id, params):
             num_batches += 1
 
     avg_loss = total_loss / num_batches
-    return client_id, [avg_loss, model.state_dict()]
+    return [avg_loss, model.state_dict()]
 
 
 class Server(BaseServer):
@@ -99,7 +97,7 @@ class Server(BaseServer):
         for r in range(self.rounds):
             print(f"\n--- MOON Round {r + 1}/{self.rounds} ---")
             global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
-            
+
             # Prepare parameters for each client
             parameters_per_client = []
             for i in range(self.num_clients):
@@ -134,19 +132,20 @@ class Server(BaseServer):
             self.loss.append(avg_loss)
 
             clients_params = [res[1] for res in results]
-            
+
             # Update previous states with the newly trained models
             for i, state in enumerate(clients_params):
                 self.client_prev_states[i] = {k: v.cpu() for k, v in state.items()}
 
-            self.aggregate(clients_params, weights=self.weights)
+            self.aggregate(clients_params)
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
 
-    def evaluate(self):
-        self.acc.append(evaluate_model(self.model, self.test_set, self.device))
-
     def save(self, test):
-        file_name: str = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"
-        f = {"acc": self.acc, "loss": self.loss, "state_dict": self.model.state_dict()}
+        file_name: str = f"{self.args.mu}_{self.args.tau}"
+        f = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "state_dict": self.model.state_dict()
+        }
         super().deal_save(test, f, file_name)

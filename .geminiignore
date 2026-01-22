@@ -1,0 +1,10 @@
+__pycache__/
+datasets/
+test/
+.venv/
+.vscode/
+.zed/
+.ruff_cache/
+.claude/
+
+uv.lock

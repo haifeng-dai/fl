@@ -1,47 +1,98 @@
 #!/bin/bash
 
-# 通过环境变量配置实验参数
-export ALGO="fedkd" # fedavg,moon,fedpln,feddpl,fedproto,fedkd
+# =============
+# Global Config
+# =============
+# fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl
+export ALGO="proxyfl"
+
+# =============
+# Data
+# =============
 export DATASETS="mnist"
 export MODELS="cnn"
 export NUM_CLIENTS="10"
+
+# =============
+# Partition
+# =============
 export PARTITIONS="iid"
-export ROUND="2"
-export EPOCHS="10"
-export LRS="0.01"
-export GPUS="1,2,3"  # 0,1,2,3
-export MP=1
-export TEST=1
-export MAX_WORKERS_PER_GPU=1  # 每个GPU的最大并行worker数，避免OOM
-
 export ALPHAS="0.1"
-export N_CLASS="2"
+export N_CLASSES="2"
 
-# 算法特定参数
-export MUS="1.0"
-export TAUS="0.5"
+# =============
+# Training
+# =============
+export EPOCHS="2"
+export LRS="0.01"
+export ROUNDS="2"
+export BATCH_SIZES="64"
 
-export TEMPERATURES="3.0"
-export ALPHA_KDS="0.5"
-export BETA_KDS="0.5"
-export T_STARTS="0.9"
-export T_ENDS="0.95"
-export HIDDEN_DIMS="512"
+# =============
+# Compute
+# =============
+export GPUS="1,2,3"
+export MP=1
+export MAX_WORKERS_PER_GPU=4
+export PARALLEL_MODES="stream"          # sequential, stream, multi_stream
 
-export LAMBDAS="1.0"
-export EPOCH_PLNS="2"
-export LR_PLNS="0.01"
-export MODES="normal"
-export BATCH_SIZE_PLNS="32"
-export FEATURE_DIMS="64"
-export DEPTH_PLNS="2"
-export WIDTH_PLNS="12"
-export FIXED_PROTOS=0
-export INIT_EMBS="0"
-export HARS=0
+# =============
+# Test
+# =============
+export TEST=1
 
-# 根据算法选择启动对应的脚本
-# 将逗号分隔的 ALGO 转换为数组并遍历
+# =============
+# Algorithm Specific
+# =============
+
+# FedDPL
+export LAMBDAS_DPL="1.0"
+export EPOCH_PLNS_DPL="2"
+export LRS_DPL="0.01"
+export BATCH_SIZE_PLNS_DPL="32"
+export FEATURE_DIMS_DPL="64"
+export DEPTH_PLNS_DPL="2"
+export WIDTH_PLNS_DPL="12"
+export MODES_DPL="normal"
+export FIXED_PROTOS_DPL=0
+export INIT_EMBS_DPL="0"
+export HARS_DPL="0"
+
+# FedKD
+export LR_GS_KD="0.01"
+export ENERGIES_KD="0.9"
+
+# FedPLN
+export LAMBDAS_PLN="1.0"
+export EPOCH_PLNS_PLN="2"
+export LR_PLNS_PLN="0.01"
+export BATCH_SIZE_PLNS_PLN="32"
+export FEATURE_DIMS_PLN="64"
+export DEPTH_PLNS_PLN="2"
+export WIDTH_PLNS_PLN="12"
+export MODES_PLN="normal"
+export FIXED_PROTOS_PLN=0
+export INIT_EMBS_PLN="0"
+export HARS_PLN="0"
+
+# FedProto
+export MUS_PROTO="1.0"
+
+# FML
+export ALPHAS_FML="1.0"
+export BETAS_FML="1.0"
+
+# MOON
+export MUS_MOON="1.0"
+export TAUS_MOON="0.5"
+
+# ProxyFL
+export MUS_PROXY="1.0"
+
+# ==============================================================================
+# Execution
+# ==============================================================================
+
 for ALG in ${ALGO//,/ }; do
     echo "Starting experiment for algorithm: $ALG"
     case $ALG in
@@ -63,8 +114,14 @@ for ALG in ${ALGO//,/ }; do
         "fedkd")
             bash ./scripts/fedkd.sh
             ;;
+        "fml")
+            bash ./scripts/fml.sh
+            ;;
+        "proxyfl")
+            bash ./scripts/proxyfl.sh
+            ;;
         *)
-            echo "未知算法: $ALG. 支持的算法: fedavg, moon, fedpln, feddpl, fedproto, fedkd"
+            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl"
             exit 1
             ;;
     esac

@@ -68,26 +68,30 @@ def mse_loss(predictions, targets):
     return loss_fn(predictions, targets)
 
 
-def kl_divergence_loss(student_logits, teacher_logits, temperature):
+def kl_loss(student_logits, teacher_logits, temperature=1.0):
     """
-    Calculate KL divergence loss for knowledge distillation
+    计算知识蒸馏的 KL 散度损失
 
     Args:
-        student_logits: Student model output logits
-        teacher_logits: Teacher model output logits (detached)
-        temperature: Temperature parameter for softening distributions
+        student_logits: 学生模型的输出 logits
+        teacher_logits: 教师模型的输出 logits (已 detach)
+        temperature: 软化分布的温度参数 (默认: 1.0)
 
     Returns:
-        KL divergence loss
+        KL 散度损失值
     """
-    student_soft = torch.nn.functional.log_softmax(student_logits / temperature, dim=1)
-    teacher_soft = torch.nn.functional.softmax(teacher_logits / temperature, dim=1)
+    if temperature != 1.0:
+        student_logits = student_logits / temperature
+        teacher_logits = teacher_logits / temperature
 
-    kl_loss = torch.nn.functional.kl_div(
-        student_soft, teacher_soft, reduction='batchmean'
-    ) * (temperature ** 2)
+    student_soft = torch.nn.functional.log_softmax(student_logits, dim=1)
+    teacher_soft = torch.nn.functional.softmax(teacher_logits, dim=1)
 
-    return kl_loss
+    loss = torch.nn.functional.kl_div(
+        student_soft, teacher_soft, reduction="batchmean"
+    ) * (temperature**2)
+
+    return loss
 
 
 def get_model(model_name, dataset):

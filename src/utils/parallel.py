@@ -17,17 +17,16 @@ def run_parallel_clients(
     if not mp:
         # 顺序执行：结果天然有序，无需排序
         return [
-            client_worker(client_id, parameters[client_id])[1]
-            for client_id in range(num_clients)
+            client_worker(parameters[client_id]) for client_id in range(num_clients)
         ]
 
     # 并行执行：按顺序提交任务
     async_results = [
         gpu_pools[parameters[client_id][0]].apply_async(
-            client_worker, (client_id, parameters[client_id])
+            client_worker, (parameters[client_id],)
         )
         for client_id in range(num_clients)
     ]
 
     # 按提交顺序获取结果，天然有序，无需排序
-    return [r.get()[1] for r in async_results]
+    return [r.get() for r in async_results]
