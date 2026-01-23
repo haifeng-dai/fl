@@ -1,5 +1,6 @@
 import copy
 import argparse
+import time
 import torch
 
 from .utils import (
@@ -146,12 +147,12 @@ class Server(BaseServer):
 
     def fit(self):
         for r in range(self.rounds):
+            t0 = time.time()
             print(f"\n--- ProxyFL Round {r + 1}/{self.rounds} ---")
 
             # 1. Neighbor Aggregation for each client
             # Each client aggregates models from its neighbors based on the adjacency matrix
-            parameters_per_client = []
-            for i in range(self.num_clients):
+            def get_client_param(i):
                 # Identify neighbors and their weights
                 neighbor_indices = torch.where(self.adj_matrix[i] > 0)[0].tolist()
                 neighbor_weights = self.adj_matrix[i, neighbor_indices].tolist()
@@ -160,7 +161,7 @@ class Server(BaseServer):
                 neighbor_states = [self.proxy_model_states[j] for j in neighbor_indices]
                 aggregated_proxy_state = param_aggregate(neighbor_states, neighbor_weights)
 
-                p = [
+                return [
                     self.client_gpu[i],
                     aggregated_proxy_state,
                     self.client_model_states[i],
@@ -172,13 +173,14 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.mu,
                 ]
-                parameters_per_client.append(p)
+
+            p = [get_client_param(i) for i in range(self.num_clients)]
 
             # 2. Parallel Client Training
             results = run_parallel_clients(
                 client_worker=client_worker,
                 num_clients=self.num_clients,
-                parameters=parameters_per_client,
+                parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
@@ -212,6 +214,7 @@ class Server(BaseServer):
             print(
                 f"Avg Local Accuracy: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}"
             )
+            print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def evaluate(self):
         # Evaluate Personalized Local Models on Local Test Sets

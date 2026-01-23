@@ -3,6 +3,7 @@ from .parallel import run_parallel_clients
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 import torch
+import torch.nn as nn
 
 from ..models import ResNet18, CNN
 

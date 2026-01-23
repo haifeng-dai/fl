@@ -1,5 +1,6 @@
 import torch
 import argparse
+import time
 
 from .utils import (
     BaseServer,
@@ -252,6 +253,7 @@ class Server(BaseServer):
 
     def fit(self):
         for r in range(self.rounds):
+            t0 = time.time()
             print(f"\n--- FedKD Round {r + 1}/{self.rounds} ---")
 
             # 向客户端发送压缩后的全局参数
@@ -297,6 +299,7 @@ class Server(BaseServer):
 
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+            print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def evaluate(self):
         acc = 0.0

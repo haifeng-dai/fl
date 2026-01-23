@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# 变量已从 run.sh 通过 export 继承
-
 for DATASET in ${DATASETS//,/ }; do
     for MODEL in ${MODELS//,/ }; do
         for NUM_CLIENT in ${NUM_CLIENTS//,/ }; do
@@ -14,7 +12,7 @@ for DATASET in ${DATASETS//,/ }; do
                                     for BATCH_SIZE in ${BATCH_SIZES//,/ }; do
                                         for PARALLEL_MODE in ${PARALLEL_MODES//,/ }; do
                                             uv run main.py \
-                                                --algo fedavg \
+                                                --algo fedper \
                                                 --test $TEST \
                                                 --dataset $DATASET \
                                                 --model $MODEL \

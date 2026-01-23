@@ -1,4 +1,5 @@
 import copy
+import time
 
 import torch
 import argparse
@@ -7,7 +8,6 @@ from .utils import (
     BaseServer,
     run_parallel_clients,
     ce_loss,
-    evaluate_model,
     get_model,
 )
 
@@ -95,13 +95,12 @@ class Server(BaseServer):
 
     def fit(self):
         for r in range(self.rounds):
+            t0 = time.time()
             print(f"\n--- MOON Round {r + 1}/{self.rounds} ---")
             global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
 
-            # Prepare parameters for each client
-            parameters_per_client = []
-            for i in range(self.num_clients):
-                p = [
+            p = [
+                [
                     self.client_gpu[i],
                     global_params,
                     self.client_prev_states[i],
@@ -114,12 +113,13 @@ class Server(BaseServer):
                     self.args.mu,
                     self.args.tau,
                 ]
-                parameters_per_client.append(p)
+                for i in range(self.num_clients)
+            ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
                 num_clients=self.num_clients,
-                parameters=parameters_per_client,
+                parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
@@ -140,6 +140,7 @@ class Server(BaseServer):
             self.aggregate(clients_params)
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+            print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self, test):
         file_name: str = f"{self.args.mu}_{self.args.tau}"

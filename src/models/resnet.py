@@ -4,7 +4,7 @@ import torchvision.models as models
 
 
 class ResNet18(nn.Module):
-    def __init__(self, num_classes=10, feature_dim=64):
+    def __init__(self, num_classes=10, feature_dim=512):
         super(ResNet18, self).__init__()
         # 使用预训练的ResNet18作为基础
         self.resnet = models.resnet18(weights=None)
@@ -19,7 +19,7 @@ class ResNet18(nn.Module):
         self.resnet.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         # 特征提取器
-        self.features = nn.Sequential(
+        self.extractor = nn.Sequential(
             self.resnet.conv1,
             self.resnet.bn1,
             self.resnet.relu,
@@ -33,20 +33,16 @@ class ResNet18(nn.Module):
 
         # 获取特征维度
         with torch.no_grad():
-            dummy_input = torch.randn(1, 3, 32, 32)
-            feature_size = self.features(dummy_input).shape[1]
-
-        # 投影头（用于MOON等算法）
-        self.proj = nn.Sequential(
-            nn.Linear(feature_size, 128), nn.ReLU(), nn.Linear(128, feature_dim)
-        )
+            if feature_dim is not None:
+                self.feature_dim = feature_dim
+            else:
+                dummy_input = torch.randn(1, 3, 32, 32)
+                self.feature_dim = self.extractor(dummy_input).shape[1]
 
         # 分类头
-        self.fc = nn.Linear(feature_size, num_classes)
+        self.classifier = nn.Linear(self.feature_dim, num_classes)
 
     def forward(self, x):
-        h = self.features(x)
-        # MOON使用投影头，其他算法直接使用特征
-        z = self.proj(h)
-        y = self.fc(h)  # 注意：这里直接使用特征h而不是z进行分类
-        return y, z
+        feature = self.extractor(x)
+        logits = self.classifier(feature)
+        return logits, feature

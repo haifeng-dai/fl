@@ -1,6 +1,7 @@
 import torch
 import argparse
 import copy
+import time
 
 from src.utils.evaluate import evaluate_prototype
 from .utils import (
@@ -105,6 +106,7 @@ class Server(BaseServer):
 
     def fit(self):
         for r in range(self.rounds):
+            t0 = time.time()
             print(f"\n--- FedProto Round {r + 1}/{self.rounds} ---")
 
             p = [
@@ -152,6 +154,7 @@ class Server(BaseServer):
                 f"Proto Accuracy: {self.acc_p[-1]:.2f}%, "
                 f"Avg Loss: {avg_loss:.4f}"
             )
+            print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def aggregate_protos(self, all_local_protos):
         global_protos = {}

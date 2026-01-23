@@ -1,5 +1,6 @@
 import torch
 import argparse
+import time
 
 from .utils import (
     BaseServer,
@@ -120,14 +121,17 @@ def client_worker(params):
     epochs = params[8]
 
     num_classes = params[9]
-    width_pln = params[10]
-    feature_dim = params[11]
-    depth_pln = params[12]
-    fixed_proto = params[13]
-    init_emb = params[14]
-    lambda_ = params[15]
-    lr_pln = params[16]
-    epoch_pln = params[17]
+    lambda_ = params[10]
+    epoch_pln = params[11]
+    lr_pln = params[12]
+    batch_size_pln = params[13]
+    feature_dim = params[14]
+    depth_pln = params[15]
+    width_pln = params[16]
+    mode = params[17]
+    fixed_proto = params[18]
+    init_emb = params[19]
+    har = params[20]
 
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
@@ -140,6 +144,7 @@ def client_worker(params):
     all_classes = torch.arange(0, num_classes).to(device)
 
     # Train Model
+    avg_loss_m = 0.0
     model.train()
     pln.eval()
     opt = torch.optim.SGD(model.parameters(), lr=lr)
@@ -166,17 +171,25 @@ def client_worker(params):
             total_loss_m += loss.item()
             num_batches_m += 1
 
-    avg_loss_m = total_loss_m / num_batches_m
+    avg_loss_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
 
     # Train PLN
+    avg_loss_p = 0.0
     model.eval()
     pln.train()
     opt_pln = torch.optim.SGD(pln.parameters(), lr=lr_pln)
     total_loss_p = 0.0
     num_batches_p = 0
 
+    if batch_size_pln != batch_size:
+        loader_pln = torch.utils.data.DataLoader(
+            train_set, batch_size=batch_size_pln, shuffle=True
+        )
+    else:
+        loader_pln = loader
+
     for _ in range(epoch_pln):
-        for x, y in loader:
+        for x, y in loader_pln:
             x, y = x.to(device), y.to(device)
             protos = pln(all_classes)
 
@@ -191,7 +204,7 @@ def client_worker(params):
             total_loss_p += loss.item()
             num_batches_p += 1
 
-    avg_loss_p = total_loss_p / num_batches_p
+        avg_loss_p = total_loss_p / num_batches_p if num_batches_p > 0 else 0.0
 
     return [avg_loss_m, avg_loss_p, model.state_dict(), pln.state_dict()]
 
@@ -200,10 +213,14 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         model = get_model(args.model, args.dataset)
         super().__init__(model, False, args)
+        
+        # Update feature_dim based on model output
+        self.args.feature_dim = self._get_feature_dim(args.dataset)
+
         self.pln = PLN(
             num_classes=self.num_class,
             width=args.width_pln,
-            feature_dim=args.feature_dim,
+            feature_dim=self.args.feature_dim,
             depth=args.depth_pln,
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
@@ -214,15 +231,26 @@ class Server(BaseServer):
         self.acc_p: list[float] = []
         self.loss_p: list[float] = []
 
+    def _get_feature_dim(self, dataset_name):
+        if dataset_name == "mnist":
+            dummy_input = torch.randn(1, 1, 28, 28)
+        else:
+            dummy_input = torch.randn(1, 3, 32, 32)
+        
+        self.model.eval()
+        with torch.no_grad():
+            _, feat = self.model(dummy_input)
+        return feat.shape[1]
+
     def fit(self):
         for r in range(self.rounds):
+            t0 = time.time()
             print(f"\n--- FedPLN Round {r + 1}/{self.rounds} ---")
             global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
             pln_params = {k: v.cpu() for k, v in self.pln.state_dict().items()}
 
-            parameters_per_client = []
-            for i in range(self.num_clients):
-                p = [
+            p = [
+                [
                     self.client_gpu[i],
                     global_params,
                     pln_params,
@@ -233,21 +261,25 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.num_class,
-                    self.args.width_pln,
+                    self.args.lambda_,
+                    self.args.epoch_pln,
+                    self.args.lr_pln,
+                    self.args.batch_size_pln,
                     self.args.feature_dim,
                     self.args.depth_pln,
+                    self.args.width_pln,
+                    self.args.mode,
                     self.args.fixed_proto,
                     self.args.init_emb,
-                    self.args.lambda_,
-                    self.args.lr_pln,
-                    self.args.epoch_pln,
+                    self.args.har,
                 ]
-                parameters_per_client.append(p)
+                for i in range(self.num_clients)
+            ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
                 num_clients=self.num_clients,
-                parameters=parameters_per_client,
+                parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
@@ -269,6 +301,7 @@ class Server(BaseServer):
             self.evaluate()
 
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
+            print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def aggregate(self, clients_params=None, plns_params=None):
         # Handle optional arguments or direct passing

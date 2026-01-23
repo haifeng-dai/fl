@@ -1,5 +1,6 @@
 import copy
 import argparse
+import time
 import torch
 
 from .utils import (
@@ -125,14 +126,14 @@ class Server(BaseServer):
 
     def fit(self):
         for r in range(self.rounds):
+            t0 = time.time()
             print(f"\n--- FML Round {r + 1}/{self.rounds} ---")
 
             # Global model state (on CPU)
             global_state = {k: v.cpu() for k, v in self.model.state_dict().items()}
 
-            parameters_per_client = []
-            for i in range(self.num_clients):
-                p = [
+            p = [
+                [
                     self.client_gpu[i],
                     global_state,
                     self.client_model_states[i],  # Local state
@@ -145,12 +146,13 @@ class Server(BaseServer):
                     self.args.alpha_fml,
                     self.args.beta_fml,
                 ]
-                parameters_per_client.append(p)
+                for i in range(self.num_clients)
+            ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
                 num_clients=self.num_clients,
-                parameters=parameters_per_client,
+                parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
@@ -184,6 +186,7 @@ class Server(BaseServer):
             print(
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}"
             )
+            print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def evaluate(self):
         # In FML, we usually evaluate the Personalized Local Models

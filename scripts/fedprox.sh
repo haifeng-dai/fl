@@ -13,9 +13,9 @@ for DATASET in ${DATASETS//,/ }; do
                                 for ROUND in ${ROUNDS//,/ }; do
                                     for BATCH_SIZE in ${BATCH_SIZES//,/ }; do
                                         for PARALLEL_MODE in ${PARALLEL_MODES//,/ }; do
-                                            for MU_PROXY in ${MUS_PROXY//,/ }; do
+                                            for MU in ${MUS_PROX//,/ }; do
                                                 uv run main.py \
-                                                    --algo proxyfl \
+                                                    --algo fedprox \
                                                     --test $TEST \
                                                     --dataset $DATASET \
                                                     --model $MODEL \
@@ -31,7 +31,7 @@ for DATASET in ${DATASETS//,/ }; do
                                                     --mp $MP \
                                                     --max_workers_per_gpu $MAX_WORKERS_PER_GPU \
                                                     --parallel_mode $PARALLEL_MODE \
-                                                    --mu $MU_PROXY
+                                                    --mu $MU
                                             done
                                         done
                                     done

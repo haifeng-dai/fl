@@ -14,7 +14,7 @@ def main():
         "--algo",
         type=str,
         default="fedavg",
-        choices=["fedavg", "fedavg_stream", "moon", "fedpln", "feddpl", "fedproto", "fedkd", "fml", "proxyfl"],
+        choices=["fedavg", "fedavg_stream", "moon", "fedpln", "feddpl", "fedproto", "fedkd", "fml", "proxyfl", "fedper", "fedprox"],
     )
     parser.add_argument("--test", type=int, default=1, help="Test or train")
     args, _ = parser.parse_known_args()
@@ -116,4 +116,4 @@ if __name__ == "__main__":
     main()
 
     b = time.time()
-    print(f"Total time: {b - a} seconds")
+    print(f"\nTotal time: {b - a} seconds\n")

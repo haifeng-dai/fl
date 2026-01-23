@@ -1,6 +1,7 @@
 __pycache__/
 datasets/
 test/
+results/
 .venv/
 .vscode/
 .zed/

@@ -34,7 +34,7 @@ class BaseServer:
             pfl=self.pfl,
         )
         self.fold_path = os.path.join(
-            "results", f"{args.dataset}_{args.partition}_{args.num_clients}"
+            "results", f"{args.algo}", f"{args.dataset}_{args.partition}_{args.num_clients}"
         )
         if args.partition == "dirichlet":
             self.fold_path += f"_{args.alpha}"
@@ -124,7 +124,7 @@ class BaseServer:
             new_name += f"_{file_name}"
         path = os.path.join(self.fold_path, f"{new_name}.pt")
         if test:
-            print(f"not save to {path}")
+            print(f"\nnot save to {path}\n")
         else:
-            print(f"saved to {path}")
+            print(f"\nsaved to {path}\n")
             torch.save(params, path)

@@ -3,8 +3,8 @@
 # =============
 # Global Config
 # =============
-# fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl
-export ALGO="proxyfl"
+# fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox
+export ALGO="fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox"
 
 # =============
 # Data
@@ -23,36 +23,37 @@ export N_CLASSES="2"
 # =============
 # Training
 # =============
-export EPOCHS="2"
+export EPOCHS="10"
 export LRS="0.01"
-export ROUNDS="2"
+export ROUNDS="200"
 export BATCH_SIZES="64"
 
 # =============
 # Compute
 # =============
-export GPUS="1,2,3"
+export GPUS="0,1,2,3"
 export MP=1
-export MAX_WORKERS_PER_GPU=4
-export PARALLEL_MODES="stream"          # sequential, stream, multi_stream
+export MAX_WORKERS_PER_GPU=10
+# sequential, stream, multi_stream
+export PARALLEL_MODES="stream"
 
 # =============
 # Test
 # =============
-export TEST=1
+export TEST=0
 
 # =============
 # Algorithm Specific
 # =============
 
 # FedDPL
-export LAMBDAS_DPL="1.0"
-export EPOCH_PLNS_DPL="2"
+export LAMBDAS_DPL="10.0"
+export EPOCH_PLNS_DPL="10"
 export LRS_DPL="0.01"
-export BATCH_SIZE_PLNS_DPL="32"
-export FEATURE_DIMS_DPL="64"
-export DEPTH_PLNS_DPL="2"
-export WIDTH_PLNS_DPL="12"
+export BATCH_SIZE_PLNS_DPL="64"
+export FEATURE_DIMS_DPL="512"
+export DEPTH_PLNS_DPL="1"
+export WIDTH_PLNS_DPL="512"
 export MODES_DPL="normal"
 export FIXED_PROTOS_DPL=0
 export INIT_EMBS_DPL="0"
@@ -63,13 +64,13 @@ export LR_GS_KD="0.01"
 export ENERGIES_KD="0.9"
 
 # FedPLN
-export LAMBDAS_PLN="1.0"
-export EPOCH_PLNS_PLN="2"
+export LAMBDAS_PLN="10.0"
+export EPOCH_PLNS_PLN="10"
 export LR_PLNS_PLN="0.01"
-export BATCH_SIZE_PLNS_PLN="32"
-export FEATURE_DIMS_PLN="64"
-export DEPTH_PLNS_PLN="2"
-export WIDTH_PLNS_PLN="12"
+export BATCH_SIZE_PLNS_PLN="64"
+export FEATURE_DIMS_PLN="512"
+export DEPTH_PLNS_PLN="1"
+export WIDTH_PLNS_PLN="512"
 export MODES_PLN="normal"
 export FIXED_PROTOS_PLN=0
 export INIT_EMBS_PLN="0"
@@ -88,6 +89,9 @@ export TAUS_MOON="0.5"
 
 # ProxyFL
 export MUS_PROXY="1.0"
+
+# FedProx
+export MUS_PROX="0.01"
 
 # ==============================================================================
 # Execution
@@ -111,6 +115,9 @@ for ALG in ${ALGO//,/ }; do
         "fedproto")
             bash ./scripts/fedproto.sh
             ;;
+        "fedper")
+            bash ./scripts/fedper.sh
+            ;;
         "fedkd")
             bash ./scripts/fedkd.sh
             ;;
@@ -120,8 +127,11 @@ for ALG in ${ALGO//,/ }; do
         "proxyfl")
             bash ./scripts/proxyfl.sh
             ;;
+        "fedprox")
+            bash ./scripts/fedprox.sh
+            ;;
         *)
-            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl"
+            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl, fedper, fedprox"
             exit 1
             ;;
     esac
