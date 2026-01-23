@@ -21,6 +21,13 @@ def add_args(parser: argparse.ArgumentParser):
         default=1.0,
         help="Weight for Mutual Learning Distillation",
     )
+    group.add_argument(
+        "--adj_type",
+        type=str,
+        default="ring",
+        choices=["ring", "centralized"],
+        help="Topology of the decentralized network",
+    )
     return parser
 
 
@@ -109,25 +116,53 @@ class Server(BaseServer):
         # ProxyFL is a personalized method
         super().__init__(model, True, args)
 
-        # Initialize local models for each client
+        # Initialize local models for each client (Private)
         self.client_model_states = [
             copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
         ]
+        # Initialize proxy models for each client (Public/Shared)
+        self.proxy_model_states = [
+            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
+        ]
+        
         self.loss_p = []
+        self.adj_matrix = self.generate_adj_matrix()
+
+    def generate_adj_matrix(self):
+        num_clients = self.num_clients
+        adj = torch.zeros(num_clients, num_clients)
+        if self.args.adj_type == "ring":
+            for i in range(num_clients):
+                adj[i, i] = 1.0
+                adj[i, (i - 1) % num_clients] = 1.0
+                adj[i, (i + 1) % num_clients] = 1.0
+        elif self.args.adj_type == "centralized":
+            adj.fill_(1.0)
+        
+        # Normalize weights for each client
+        row_sums = adj.sum(dim=1, keepdim=True)
+        adj = adj / row_sums
+        return adj
 
     def fit(self):
         for r in range(self.rounds):
             print(f"\n--- ProxyFL Round {r + 1}/{self.rounds} ---")
 
-            # Global Proxy state (on CPU)
-            # In ProxyFL, the "Global Model" is the aggregated Proxy
-            proxy_state = {k: v.cpu() for k, v in self.model.state_dict().items()}
-
+            # 1. Neighbor Aggregation for each client
+            # Each client aggregates models from its neighbors based on the adjacency matrix
             parameters_per_client = []
             for i in range(self.num_clients):
+                # Identify neighbors and their weights
+                neighbor_indices = torch.where(self.adj_matrix[i] > 0)[0].tolist()
+                neighbor_weights = self.adj_matrix[i, neighbor_indices].tolist()
+                
+                # Perform local aggregation
+                neighbor_states = [self.proxy_model_states[j] for j in neighbor_indices]
+                aggregated_proxy_state = param_aggregate(neighbor_states, neighbor_weights)
+
                 p = [
                     self.client_gpu[i],
-                    proxy_state,
+                    aggregated_proxy_state,
                     self.client_model_states[i],
                     self.train_sets[i],
                     self.args.model,
@@ -139,6 +174,7 @@ class Server(BaseServer):
                 ]
                 parameters_per_client.append(p)
 
+            # 2. Parallel Client Training
             results = run_parallel_clients(
                 client_worker=client_worker,
                 num_clients=self.num_clients,
@@ -147,11 +183,9 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # results: [avg_loss_p, avg_loss_l, proxy_state, local_state]
-
+            # 3. Update states and calculate average losses
             total_loss_p = 0.0
             total_loss_l = 0.0
-            proxy_states_to_agg = []
 
             for i, res in enumerate(results):
                 loss_p = res[0]
@@ -161,9 +195,11 @@ class Server(BaseServer):
 
                 total_loss_p += loss_p
                 total_loss_l += loss_l
-                proxy_states_to_agg.append(new_proxy_state)
 
-                # Update stored local state (move to CPU)
+                # Update stored states (move to CPU to save GPU memory)
+                self.proxy_model_states[i] = {
+                    k: v.cpu() for k, v in new_proxy_state.items()
+                }
                 self.client_model_states[i] = {
                     k: v.cpu() for k, v in new_local_state.items()
                 }
@@ -171,14 +207,10 @@ class Server(BaseServer):
             self.loss.append(total_loss_l / self.num_clients)
             self.loss_p.append(total_loss_p / self.num_clients)
 
-            # Aggregate Proxy Models
-            self.model.load_state_dict(
-                param_aggregate(proxy_states_to_agg, self.weights)
-            )
-
+            # 4. Evaluation (using local personalized models)
             self.evaluate()
             print(
-                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}"
+                f"Avg Local Accuracy: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}"
             )
 
     def evaluate(self):
