@@ -14,15 +14,17 @@ from .utils import (
 
 
 def client_worker(params):
-    device = params[0]
-    global_body_state = params[1]
-    local_head_state = params[2]
-    train_set = params[3]
-    model_name = params[4]
-    dataset_name = params[5]
-    lr = params[6]
-    batch_size = params[7]
-    epochs = params[8]
+    (
+        device,
+        global_body_state,
+        local_head_state,
+        train_set,
+        model_name,
+        dataset_name,
+        lr,
+        batch_size,
+        epochs,
+    ) = params
 
     # Initialize model
     model = get_model(model_name, dataset_name).to(device)
@@ -66,8 +68,7 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        model = get_model(args.model, args.dataset)
-        super().__init__(model, True, args)
+        super().__init__(True, args)
         assert isinstance(self.model.extractor, torch.nn.Sequential) and isinstance(self.model.classifier, torch.nn.Linear)
 
         # Initialize local heads for each client using the initial classifier state
@@ -83,13 +84,10 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- FedPer Round {r + 1}/{self.rounds} ---")
 
-            # Prepare global body state (extractor)
-            global_body = {k: v.cpu() for k, v in self.model.extractor.state_dict().items()}
-
             p = [
                 [
                     self.client_gpu[i],
-                    global_body,
+                    self.model.extractor.state_dict(),
                     self.client_head_states[i],
                     self.train_sets[i],
                     self.args.model,

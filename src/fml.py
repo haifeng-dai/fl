@@ -32,18 +32,19 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
-    device = params[0]
-    global_state = params[1]
-    local_state = params[2]
-    train_set = params[3]
-
-    model_name = params[4]
-    dataset_name = params[5]
-    lr = params[6]
-    batch_size = params[7]
-    epochs = params[8]
-    alpha = params[9]
-    beta = params[10]
+    (
+        device,
+        global_state,
+        local_state,
+        train_set,
+        model_name,
+        dataset_name,
+        lr,
+        batch_size,
+        epochs,
+        alpha,
+        beta,
+    ) = params
 
     # 1. Initialize Global Model (MEME)
     global_model = get_model(model_name, dataset_name).to(device)
@@ -115,9 +116,7 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        model = get_model(args.model, args.dataset)
-        # FML is Personalized FL (maintains local models)
-        super().__init__(model, True, args)
+        super().__init__(True, args)
 
         # Initialize local models for each client
         self.client_model_states = [
@@ -129,13 +128,10 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- FML Round {r + 1}/{self.rounds} ---")
 
-            # Global model state (on CPU)
-            global_state = {k: v.cpu() for k, v in self.model.state_dict().items()}
-
             p = [
                 [
                     self.client_gpu[i],
-                    global_state,
+                    self.model.state_dict(),
                     self.client_model_states[i],  # Local state
                     self.train_sets[i],
                     self.args.model,

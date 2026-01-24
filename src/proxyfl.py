@@ -33,17 +33,18 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
-    device = params[0]
-    proxy_state = params[1]
-    local_state = params[2]
-    train_set = params[3]
-
-    model_name = params[4]
-    dataset_name = params[5]
-    lr = params[6]
-    batch_size = params[7]
-    epochs = params[8]
-    mu = params[9]
+    (
+        device,
+        proxy_state,
+        local_state,
+        train_set,
+        model_name,
+        dataset_name,
+        lr,
+        batch_size,
+        epochs,
+        mu,
+    ) = params
 
     # 1. Initialize Proxy Model (Shared)
     proxy_model = get_model(model_name, dataset_name).to(device)
@@ -113,9 +114,7 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        model = get_model(args.model, args.dataset)
-        # ProxyFL is a personalized method
-        super().__init__(model, True, args)
+        super().__init__(True, args)
 
         # Initialize local models for each client (Private)
         self.client_model_states = [
@@ -125,7 +124,7 @@ class Server(BaseServer):
         self.proxy_model_states = [
             copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
         ]
-        
+
         self.loss_p = []
         self.adj_matrix = self.generate_adj_matrix()
 
@@ -139,7 +138,7 @@ class Server(BaseServer):
                 adj[i, (i + 1) % num_clients] = 1.0
         elif self.args.adj_type == "centralized":
             adj.fill_(1.0)
-        
+
         # Normalize weights for each client
         row_sums = adj.sum(dim=1, keepdim=True)
         adj = adj / row_sums
@@ -156,7 +155,7 @@ class Server(BaseServer):
                 # Identify neighbors and their weights
                 neighbor_indices = torch.where(self.adj_matrix[i] > 0)[0].tolist()
                 neighbor_weights = self.adj_matrix[i, neighbor_indices].tolist()
-                
+
                 # Perform local aggregation
                 neighbor_states = [self.proxy_model_states[j] for j in neighbor_indices]
                 aggregated_proxy_state = param_aggregate(neighbor_states, neighbor_weights)

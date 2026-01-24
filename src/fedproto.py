@@ -22,16 +22,18 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
-    device = params[0]
-    model_state = params[1]
-    global_protos = params[2]
-    train_set = params[3]
-    model_name = params[4]
-    dataset_name = params[5]
-    lr = params[6]
-    batch_size = params[7]
-    epochs = params[8]
-    mu = params[9]
+    (
+        device,
+        model_state,
+        global_protos,
+        train_set,
+        model_name,
+        dataset_name,
+        lr,
+        batch_size,
+        epochs,
+        mu,
+    ) = params
 
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
@@ -95,8 +97,7 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        model = get_model(args.model, args.dataset)
-        super().__init__(model, True, args)
+        super().__init__(True, args)
         # Initialize personalized models for each client
         self.client_model_states = [
             copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)

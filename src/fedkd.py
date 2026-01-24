@@ -118,19 +118,21 @@ def reconstruct_param(compressed_param, device):
 
 def client_worker(params):
     # 安全解包参数（避免变量名冲突）
-    device = params[0]
-    model_name = params[1]
-    dataset_name = params[2]
-    feature_dim = params[3]
-    train_set = params[4]
-    compressed_params_g = params[5]
-    prev_local_state = params[6]
-    wh_state = params[7]
-    lr = params[8]
-    lr_g = params[9]
-    batch_size = params[10]
-    epochs = params[11]
-    energy_threshold = params[12]
+    (
+        device,
+        model_name,
+        dataset_name,
+        feature_dim,
+        train_set,
+        compressed_params_g,
+        prev_local_state,
+        wh_state,
+        lr,
+        lr_g,
+        batch_size,
+        epochs,
+        energy_threshold,
+    ) = params
     # print(f"Client on device {device} starting training.")
 
     # 1. 初始化模型
@@ -225,8 +227,7 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        model = get_model(args.model, args.dataset)
-        super().__init__(model, True, args)
+        super().__init__(True, args)
 
         # 初始分解
         self.compressed_params = {}

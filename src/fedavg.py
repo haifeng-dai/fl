@@ -7,14 +7,16 @@ from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
 
 
 def client_worker(params):
-    device = params[0]
-    model_state = params[1]
-    train_set = params[2]
-    model_name = params[3]
-    dataset_name = params[4]
-    lr = params[5]
-    batch_size = params[6]
-    epochs = params[7]
+    (
+        device,
+        model_state,
+        train_set,
+        model_name,
+        dataset_name,
+        lr,
+        batch_size,
+        epochs,
+    ) = params
 
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
@@ -45,27 +47,25 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        model = get_model(args.model, args.dataset)
-        super().__init__(model, False, args)
+        super().__init__(False, args)
 
     def fit(self):
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedAvg Round {r + 1}/{self.rounds} ---")
-            global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
 
             p = [
                 [
-                    v,
-                    global_params,
-                    self.train_sets[k],
+                    self.client_gpu[i],
+                    self.model.state_dict(),
+                    self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
                     self.args.lr,
                     self.args.batch_size,
                     self.args.epochs,
                 ]
-                for k, v in self.client_gpu.items()
+                for i in range(self.num_clients)
             ]
 
             results = run_parallel_clients(

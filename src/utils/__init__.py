@@ -1,11 +1,8 @@
-from .fed_utils import BaseServer
+from .fed_utils import BaseServer, get_model
 from .parallel import run_parallel_clients
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 import torch
-import torch.nn as nn
-
-from ..models import ResNet18, CNN
 
 
 def compare_model_parameters(params1: dict, params2: dict) -> bool:
@@ -93,16 +90,3 @@ def kl_loss(student_logits, teacher_logits, temperature=1.0):
     ) * (temperature**2)
 
     return loss
-
-
-def get_model(model_name, dataset):
-    if model_name == "resnet18":
-        global_model = ResNet18()
-    elif model_name == "cnn":
-        # 根据数据集选择输入通道数
-        input_channels = 1 if dataset == "mnist" else 3
-        global_model = CNN(input_channels=input_channels)
-    else:
-        raise ValueError(f"Unsupported model name: {model_name}")
-
-    return global_model

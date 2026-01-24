@@ -11,15 +11,17 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
-    device = params[0]
-    model_state = params[1]
-    train_set = params[2]
-    model_name = params[3]
-    dataset_name = params[4]
-    lr = params[5]
-    batch_size = params[6]
-    epochs = params[7]
-    mu = params[8]
+    (
+        device,
+        model_state,
+        train_set,
+        model_name,
+        dataset_name,
+        lr,
+        batch_size,
+        epochs,
+        mu,
+    ) = params
 
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
@@ -34,25 +36,25 @@ def client_worker(params):
         batch_size=batch_size,
         shuffle=True,
     )
-    
+
     total_loss = 0.0
     num_batches = 0
-    
+
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             logits, _ = model(x)
-            
+
             # Calculate Cross Entropy Loss
             loss = ce_loss(logits, y)
-            
+
             # Calculate Proximal Term
             prox_term = sum(
                 ((param - global_model_params[name]) ** 2).sum()
                 for name, param in model.named_parameters()
                 if name in global_model_params
             )
-            
+
             # Total Loss
             loss += (mu / 2) * prox_term
 
@@ -69,8 +71,7 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        model = get_model(args.model, args.dataset)
-        super().__init__(model, False, args)
+        super().__init__(False, args)
 
     def fit(self):
         print(f"FedProx with mu={self.args.mu}")
@@ -81,9 +82,9 @@ class Server(BaseServer):
 
             p = [
                 [
-                    v,
-                    global_params,
-                    self.train_sets[k],
+                    self.client_gpu[i],
+                    self.model.state_dict(),
+                    self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
                     self.args.lr,
@@ -91,7 +92,7 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.mu,
                 ]
-                for k, v in self.client_gpu.items()
+                for i in range(self.num_clients)
             ]
 
             results = run_parallel_clients(

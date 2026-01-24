@@ -111,29 +111,29 @@ class PLN(torch.nn.Module):
 
 
 def client_worker(params):
-    device = params[0]
-    model_state = params[1]
-    pln_state = params[2]
-    train_set = params[3]
-
-    model_name = params[4]
-    dataset_name = params[5]
-    lr = params[6]
-    batch_size = params[7]
-    epochs = params[8]
-
-    num_classes = params[9]
-    lambda_ = params[10]
-    epoch_pln = params[11]
-    lr_pln = params[12]
-    batch_size_pln = params[13]
-    feature_dim = params[14]
-    depth_pln = params[15]
-    width_pln = params[16]
-    mode = params[17]
-    fixed_proto = params[18]
-    init_emb = params[19]
-    har = params[20]
+    (
+        device,
+        model_state,
+        pln_state,
+        train_set,
+        model_name,
+        dataset_name,
+        lr,
+        batch_size,
+        epochs,
+        num_classes,
+        lambda_,
+        epoch_pln,
+        lr_pln,
+        batch_size_pln,
+        feature_dim,
+        depth_pln,
+        width_pln,
+        mode,
+        fixed_proto,
+        init_emb,
+        har,
+    ) = params
 
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
@@ -221,12 +221,11 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        model = get_model(args.model, args.dataset)
-        super().__init__(model, True, args)
-        
+        super().__init__(True, args)
+
         # Update feature_dim based on model output
         self.args.feature_dim = self._get_feature_dim(args.dataset)
-        
+
         self.pln = PLN(
             num_classes=self.num_class,
             width=args.width_pln,
@@ -251,7 +250,7 @@ class Server(BaseServer):
             dummy_input = torch.randn(1, 1, 28, 28)
         else:
             dummy_input = torch.randn(1, 3, 32, 32)
-        
+
         self.model.eval()
         with torch.no_grad():
             _, feat = self.model(dummy_input)
@@ -262,13 +261,11 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- FedDPL Round {r + 1}/{self.rounds} ---")
 
-            pln_param = {k: v.cpu() for k, v in self.pln.state_dict().items()}
-
             p = [
                 [
                     self.client_gpu[i],
                     self.client_model_states[i],
-                    pln_param,
+                    self.pln.state_dict(),
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,

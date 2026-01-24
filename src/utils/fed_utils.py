@@ -7,11 +7,12 @@ import torch.multiprocessing as mp
 from .aggregate import param_aggregate
 from .load_data import load_data
 from .evaluate import evaluate_model
+from ..models import ResNet18, CNN
 
 
 class BaseServer:
-    def __init__(self, model: torch.nn.Module, pfl: bool, args: argparse.Namespace):
-        self.model = copy.deepcopy(model).cpu()
+    def __init__(self, pfl: bool, args: argparse.Namespace):
+        self.model = get_model(args.model, args.dataset).cpu()
         self.args = args
         self.rounds: int = args.rounds
         self.mp: bool = bool(self.args.mp)
@@ -128,3 +129,16 @@ class BaseServer:
         else:
             print(f"\nsaved to {path}\n")
             torch.save(params, path)
+
+
+def get_model(model_name, dataset):
+    if model_name == "resnet18":
+        global_model = ResNet18()
+    elif model_name == "cnn":
+        # 根据数据集选择输入通道数
+        input_channels = 1 if dataset == "mnist" else 3
+        global_model = CNN(input_channels=input_channels)
+    else:
+        raise ValueError(f"Unsupported model name: {model_name}")
+
+    return global_model

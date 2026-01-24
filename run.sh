@@ -4,7 +4,7 @@
 # Global Config
 # =============
 # fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox
-export ALGO="fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox"
+export ALGO="fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa"
 
 # =============
 # Data
@@ -25,22 +25,22 @@ export N_CLASSES="2"
 # =============
 export EPOCHS="10"
 export LRS="0.01"
-export ROUNDS="200"
+export ROUNDS="2"
 export BATCH_SIZES="64"
 
 # =============
 # Compute
 # =============
-export GPUS="0,1,2,3"
-export MP=1
-export MAX_WORKERS_PER_GPU=10
+export GPUS="3"
+export MP=0
+export MAX_WORKERS_PER_GPU=1
 # sequential, stream, multi_stream
-export PARALLEL_MODES="stream"
+export PARALLEL_MODES="sequential"
 
 # =============
 # Test
 # =============
-export TEST=0
+export TEST=1
 
 # =============
 # Algorithm Specific
@@ -79,6 +79,15 @@ export HARS_PLN="0"
 # FedProto
 export MUS_PROTO="1.0"
 
+# FedProx
+export MUS_PROX="0.01"
+
+# FedSA
+export ALPHAS_SA="0.5"
+export LAMBDAS_R_SA="0.1"
+export LAMBDAS_MCL_SA="0.1"
+export LAMBDAS_CC_SA="0.1"
+
 # FML
 export ALPHAS_FML="1.0"
 export BETAS_FML="1.0"
@@ -89,9 +98,6 @@ export TAUS_MOON="0.5"
 
 # ProxyFL
 export MUS_PROXY="1.0"
-
-# FedProx
-export MUS_PROX="0.01"
 
 # ==============================================================================
 # Execution
@@ -130,8 +136,11 @@ for ALG in ${ALGO//,/ }; do
         "fedprox")
             bash ./scripts/fedprox.sh
             ;;
+        "fedsa")
+            bash ./scripts/fedsa.sh
+            ;;
         *)
-            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl, fedper, fedprox"
+            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl, fedper, fedprox, fedsa"
             exit 1
             ;;
     esac

@@ -4,7 +4,7 @@ import torchvision.models as models
 
 
 class ResNet18(nn.Module):
-    def __init__(self, num_classes=10, feature_dim=512):
+    def __init__(self, num_classes=10, feature_dim=None):
         super(ResNet18, self).__init__()
         # 使用预训练的ResNet18作为基础
         self.resnet = models.resnet18(weights=None)

@@ -27,17 +27,19 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
-    device = params[0]
-    global_state = params[1]
-    prev_state = params[2]
-    train_set = params[3]
-    model_name = params[4]
-    dataset_name = params[5]
-    lr = params[6]
-    batch_size = params[7]
-    epochs = params[8]
-    mu = params[9]
-    tau = params[10]
+    (
+        device,
+        global_state,
+        prev_state,
+        train_set,
+        model_name,
+        dataset_name,
+        lr,
+        batch_size,
+        epochs,
+        mu,
+        tau,
+    ) = params
 
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(global_state)
@@ -86,8 +88,7 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        model = get_model(args.model, args.dataset)
-        super().__init__(model, False, args)
+        super().__init__(False, args)
         # Initialize previous model states for all clients with the initial global model
         self.client_prev_states = [
             copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
@@ -97,12 +98,11 @@ class Server(BaseServer):
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- MOON Round {r + 1}/{self.rounds} ---")
-            global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
 
             p = [
                 [
                     self.client_gpu[i],
-                    global_params,
+                    self.model.state_dict(),
                     self.client_prev_states[i],
                     self.train_sets[i],
                     self.args.model,
