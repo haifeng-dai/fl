@@ -1,16 +1,18 @@
-import copy
 import argparse
+import copy
 import time
+
+import numpy as np
 import torch
 
 from .utils import (
     BaseServer,
-    run_parallel_clients,
     ce_loss,
     evaluate_model,
     get_model,
-    param_aggregate,
     kl_loss,
+    param_aggregate,
+    run_parallel_clients,
 )
 
 
@@ -111,7 +113,9 @@ def client_worker(params):
     avg_loss_l = total_loss_l / num_batches
 
     # Return: client_id, [avg_loss, new_global_state, new_local_state]
-    return [avg_loss_l, global_model.state_dict(), local_model.state_dict()]
+    global_state = {k: v.cpu() for k, v in global_model.state_dict().items()}
+    local_state = {k: v.cpu() for k, v in local_model.state_dict().items()}
+    return [avg_loss_l, avg_loss_g, global_state, local_state]
 
 
 class Server(BaseServer):
@@ -119,20 +123,29 @@ class Server(BaseServer):
         super().__init__(True, args)
 
         # Initialize local models for each client
-        self.client_model_states = [
+        self.client_states = [
             copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
         ]
+        self.loss_g = []
 
     def fit(self):
+        num_join_clients = int(self.num_clients * self.args.join_ratio)
+        num_join_clients = max(1, num_join_clients)
+
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FML Round {r + 1}/{self.rounds} ---")
+
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+            print(f"Selected clients: {selected_clients}")
 
             p = [
                 [
                     self.client_gpu[i],
                     self.model.state_dict(),
-                    self.client_model_states[i],  # Local state
+                    self.client_states[i],
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
@@ -142,40 +155,50 @@ class Server(BaseServer):
                     self.args.alpha_fml,
                     self.args.beta_fml,
                 ]
-                for i in range(self.num_clients)
+                for i in selected_clients
             ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=self.num_clients,
+                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
-            # results: [avg_loss_l, global_state, local_state]
+            # results: [avg_loss_l, avg_loss_g, global_state, local_state]
 
             total_loss = 0.0
+            total_loss_g = 0.0
             global_states_to_agg = []
 
             for i, res in enumerate(results):
                 loss_l = res[0]
-                new_g_state = res[1]
-                new_l_state = res[2]
+                loss_g = res[1]
+                new_g_state = res[2]
+                new_l_state = res[3]
 
                 total_loss += loss_l
+                total_loss_g += loss_g
                 global_states_to_agg.append(new_g_state)
 
                 # Update stored local state (move to CPU)
-                self.client_model_states[i] = {
+                client_idx = selected_clients[i]
+                self.client_states[client_idx] = {
                     k: v.cpu() for k, v in new_l_state.items()
                 }
 
-            self.loss.append(total_loss / self.num_clients)
+            self.loss.append(total_loss / num_join_clients)
+            self.loss_g.append(total_loss_g / num_join_clients)
+
+            # Calculate weights for selected clients
+            current_weights = [self.weights[i] for i in selected_clients]
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
 
             # Aggregate Global Models
             self.model.load_state_dict(
-                param_aggregate(global_states_to_agg, self.weights)
+                param_aggregate(global_states_to_agg, norm_weights)
             )
 
             self.evaluate()
@@ -185,26 +208,23 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def evaluate(self):
-        # In FML, we usually evaluate the Personalized Local Models
-        # But we can also evaluate the Global Model.
-        # Standard: Evaluate Local Models on Local Test Sets
-
         accs = []
         for i in range(self.num_clients):
-            self.model.load_state_dict(self.client_model_states[i])
+            self.model.load_state_dict(self.client_states[i])
             acc = evaluate_model(self.model, self.test_set[i], self.device)
             accs.append(acc)
 
         avg_acc = sum(accs) / len(accs)
         self.acc.append(avg_acc)
 
-        # Restore global model for next round (though it's overwritten by aggregate anyway)
-        # But good practice if evaluate used self.model
-        # self.model.load_state_dict(...) -> done in fit loop next time
-
-    def save(self, test):
-        file_name: str = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"
-        # Save Global Model state
-        # Optionally save local states if needed, but standard is global + metrics
-        f = {"acc": self.acc, "loss": self.loss, "state_dict": self.model.state_dict()}
-        super().deal_save(test, f, file_name)
+    def save(self):
+        file_name: str = f"{self.args.alpha_fml}_{self.args.beta_fml}"
+        f = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "state_dict": {
+                "global": self.model.state_dict(),
+                "local": self.client_states,
+            },
+        }
+        super().deal_save(f, file_name)

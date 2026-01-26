@@ -1,6 +1,9 @@
 import argparse
 import time
+
+import numpy as np
 import torch
+
 from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
 
 
@@ -26,8 +29,6 @@ def client_worker(params):
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
 
-    # Keep a copy of global model weights for the proximal term
-    # Since model_state is passed in, we can convert it to device tensors once
     global_model_params = {k: v.to(device) for k, v in model_state.items()}
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
@@ -66,7 +67,8 @@ def client_worker(params):
             num_batches += 1
 
     avg_loss = total_loss / num_batches
-    return [avg_loss, model.state_dict()]
+    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    return [avg_loss, model_state]
 
 
 class Server(BaseServer):
@@ -74,11 +76,18 @@ class Server(BaseServer):
         super().__init__(False, args)
 
     def fit(self):
+        num_join_clients = int(self.num_clients * self.args.join_ratio)
+        num_join_clients = max(1, num_join_clients)
+
         print(f"FedProx with mu={self.args.mu}")
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedProx Round {r + 1}/{self.rounds} ---")
-            global_params = {k: v.cpu() for k, v in self.model.state_dict().items()}
+
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+            print(f"Selected clients: {selected_clients}")
 
             p = [
                 [
@@ -92,32 +101,38 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.mu,
                 ]
-                for i in range(self.num_clients)
+                for i in selected_clients
             ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=self.num_clients,
+                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
             # Process results
-            avg_loss = sum(res[0] for res in results) / self.num_clients
+            avg_loss = sum(res[0] for res in results) / num_join_clients
             self.loss.append(avg_loss)
 
             clients_params = [res[1] for res in results]
-            self.aggregate(clients_params)
+
+            # Calculate weights for selected clients
+            current_weights = [self.weights[i] for i in selected_clients]
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
+
+            self.aggregate(clients_params, weights=norm_weights)
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def save(self, test):
+    def save(self):
+        file_name = f"{self.args.mu}"
         f = {
             "acc": self.acc,
             "loss": self.loss,
             "state_dict": self.model.state_dict(),
-            "mu": self.args.mu
         }
-        super().deal_save(test, f)
+        super().deal_save(f, file_name)

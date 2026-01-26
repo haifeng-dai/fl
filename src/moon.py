@@ -1,14 +1,15 @@
+import argparse
 import copy
 import time
 
+import numpy as np
 import torch
-import argparse
 
 from .utils import (
     BaseServer,
-    run_parallel_clients,
     ce_loss,
     get_model,
+    run_parallel_clients,
 )
 
 
@@ -83,7 +84,8 @@ def client_worker(params):
             num_batches += 1
 
     avg_loss = total_loss / num_batches
-    return [avg_loss, model.state_dict()]
+    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    return [avg_loss, model_state]
 
 
 class Server(BaseServer):
@@ -95,9 +97,17 @@ class Server(BaseServer):
         ]
 
     def fit(self):
+        num_join_clients = int(self.num_clients * self.args.join_ratio)
+        num_join_clients = max(1, num_join_clients)
+
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- MOON Round {r + 1}/{self.rounds} ---")
+
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+            print(f"Selected clients: {selected_clients}")
 
             p = [
                 [
@@ -113,12 +123,12 @@ class Server(BaseServer):
                     self.args.mu,
                     self.args.tau,
                 ]
-                for i in range(self.num_clients)
+                for i in selected_clients
             ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=self.num_clients,
+                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
@@ -128,25 +138,28 @@ class Server(BaseServer):
             total_loss = 0.0
             for res in results:
                 total_loss += res[0]
-            avg_loss = total_loss / self.num_clients
+            avg_loss = total_loss / num_join_clients
             self.loss.append(avg_loss)
 
             clients_params = [res[1] for res in results]
 
-            # Update previous states with the newly trained models
-            for i, state in enumerate(clients_params):
-                self.client_prev_states[i] = {k: v.cpu() for k, v in state.items()}
+            # Update previous states with the newly trained models (only for selected clients)
+            for idx, client_idx in enumerate(selected_clients):
+                self.client_prev_states[client_idx] = {
+                    k: v.cpu() for k, v in clients_params[idx].items()
+                }
 
-            self.aggregate(clients_params)
+            # Calculate weights for selected clients
+            current_weights = [self.weights[i] for i in selected_clients]
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
+
+            self.aggregate(clients_params, weights=norm_weights)
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def save(self, test):
+    def save(self):
         file_name: str = f"{self.args.mu}_{self.args.tau}"
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": self.model.state_dict()
-        }
-        super().deal_save(test, f, file_name)
+        f = {"acc": self.acc, "loss": self.loss, "state_dict": self.model.state_dict()}
+        super().deal_save(f, file_name)

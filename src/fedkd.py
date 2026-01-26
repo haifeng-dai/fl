@@ -1,15 +1,17 @@
-import torch
 import argparse
 import time
 
+import numpy as np
+import torch
+
 from .utils import (
     BaseServer,
-    run_parallel_clients,
     ce_loss,
-    mse_loss,
+    evaluate_model,
     get_model,
     kl_loss,
-    evaluate_model,
+    mse_loss,
+    run_parallel_clients,
 )
 
 
@@ -235,7 +237,6 @@ class Server(BaseServer):
             self.compressed_params[name] = decompose_param(param, args.energy)
 
         # 存储每个客户端的私有本地模型状态（用于模拟本地持久化）
-        self.client_states = [None for _ in range(self.num_clients)]
         self.client_wh_states = [None for _ in range(self.num_clients)]
 
         # 预先计算特征维度，避免客户端重复计算
@@ -253,9 +254,17 @@ class Server(BaseServer):
         return feat.shape[1]
 
     def fit(self):
+        num_join_clients = int(self.num_clients * self.args.join_ratio)
+        num_join_clients = max(1, num_join_clients)
+
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedKD Round {r + 1}/{self.rounds} ---")
+
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+            print(f"Selected clients: {selected_clients}")
 
             # 向客户端发送压缩后的全局参数
             p = [
@@ -266,7 +275,7 @@ class Server(BaseServer):
                     self.feature_dim,
                     self.train_sets[i],
                     self.compressed_params,
-                    self.client_states[i],
+                    self.clients_state[i],
                     self.client_wh_states[i],
                     self.args.lr,
                     self.args.lr_g,
@@ -274,29 +283,36 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.energy,
                 ]
-                for i in range(self.num_clients)
+                for i in selected_clients
             ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=self.num_clients,
+                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
             total_loss = sum(res[0] for res in results)
-            avg_loss = total_loss / self.num_clients
+            avg_loss = total_loss / num_join_clients
             self.loss.append(avg_loss)
 
             # 更新服务器端存储的客户端本地状态
             for i, res in enumerate(results):
-                self.client_states[i] = res[2]
-                self.client_wh_states[i] = res[3]
+                client_idx = selected_clients[i]
+                self.clients_state[client_idx] = res[2]
+                self.client_wh_states[client_idx] = res[3]
 
             # 聚合 SVD 参数 (仅聚合 model_g)
             client_compressed_params_list = [res[1] for res in results]
-            self.aggregate_svd(client_compressed_params_list)
+
+            # Calculate weights for selected clients
+            current_weights = [self.weights[i] for i in selected_clients]
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
+
+            self.aggregate_svd(client_compressed_params_list, weights=norm_weights)
 
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
@@ -307,12 +323,12 @@ class Server(BaseServer):
         for i in range(self.num_clients):
             model = get_model(self.args.model, self.args.dataset).to(self.device)
             with torch.no_grad():
-                model.load_state_dict(self.client_states[i])  # type: ignore
+                model.load_state_dict(self.clients_state[i])
             acc_i = evaluate_model(model, self.test_set[i], self.device)
             acc += acc_i
         self.acc.append(acc / self.num_clients)
 
-    def aggregate_svd(self, client_params_list):
+    def aggregate_svd(self, client_params_list, weights):
         """聚合 SVD 压缩的参数"""
         # 1. 将所有参数重构到 CPU
         aggregated_state_dict = {}
@@ -321,14 +337,14 @@ class Server(BaseServer):
         # 用第一个客户端初始化
         for name in ref_params.keys():
             param_0 = reconstruct_param(ref_params[name], torch.device("cpu"))
-            aggregated_state_dict[name] = param_0 * self.weights[0]
+            aggregated_state_dict[name] = param_0 * weights[0]
 
         # 累积其余客户端
         for i in range(1, len(client_params_list)):
             client_params = client_params_list[i]
             for name in client_params.keys():
                 param = reconstruct_param(client_params[name], torch.device("cpu"))
-                aggregated_state_dict[name] += param * self.weights[i]
+                aggregated_state_dict[name] += param * weights[i]
 
         # 2. 更新服务器模型
         self.model.load_state_dict(aggregated_state_dict)
@@ -338,11 +354,15 @@ class Server(BaseServer):
         for name, param in self.model.state_dict().items():
             self.compressed_params[name] = decompose_param(param, self.args.energy)
 
-    def save(self, test):
-        file_name: str = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"
+    def save(self):
+        file_name: str = f"{self.args.lr_g}_{self.args.energy}"
         f = {
             "acc": self.acc,
             "loss": self.loss,
-            "state_dict": self.model.state_dict()
+            "state_dict": {
+                "global": self.model.state_dict(),
+                "clients": self.clients_state,
+                "wh": self.client_wh_states,
+            },
         }
-        super().deal_save(test, f, file_name)
+        super().deal_save(f, file_name)

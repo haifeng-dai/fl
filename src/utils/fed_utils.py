@@ -1,13 +1,14 @@
+import argparse
 import copy
 import os
-import argparse
 
 import torch
 import torch.multiprocessing as mp
+
+from ..models import CNN, ResNet18
 from .aggregate import param_aggregate
-from .load_data import load_data
 from .evaluate import evaluate_model
-from ..models import ResNet18, CNN
+from .load_data import load_data
 
 
 class BaseServer:
@@ -18,10 +19,6 @@ class BaseServer:
         self.mp: bool = bool(self.args.mp)
 
         self.num_clients = self.args.num_clients
-        self.device = (
-            torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-        )
-        # self.clients: dict[int, BaseClient] = {}
         self.pfl = pfl
         self.acc: list[float] = []
         self.loss: list[float] = []
@@ -35,7 +32,9 @@ class BaseServer:
             pfl=self.pfl,
         )
         self.fold_path = os.path.join(
-            "results", f"{args.algo}", f"{args.dataset}_{args.partition}_{args.num_clients}"
+            "results",
+            f"{args.algo}",
+            f"{args.dataset}_{args.partition}_{args.num_clients}",
         )
         if args.partition == "dirichlet":
             self.fold_path += f"_{args.alpha}"
@@ -44,6 +43,9 @@ class BaseServer:
         os.makedirs(self.fold_path, exist_ok=True)
 
         # Use pre-calculated counts for sample weights
+        self.clients_state = [
+            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
+        ]
         total_samples = sum(train_counts.values())
         self.weights = [
             train_counts[i] / total_samples for i in range(len(train_counts))
@@ -90,6 +92,7 @@ class BaseServer:
                 self.gpu_pools[device] = mp.Pool(processes=actual_workers)
         else:
             print(f"-> 未启用多进程训练，将使用顺序训练 (设备: {self.client_gpu[0]})")
+        self.device = self.client_gpu[0]
 
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
@@ -116,28 +119,27 @@ class BaseServer:
             # 防止重复关闭
             self.gpu_pools = {}
 
-    def __del__(self):
-        self.close()
-
-    def deal_save(self, test, params, file_name: str | None = None):
+    def deal_save(self, params, file_name: str | None = None):
         new_name = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}"
         if file_name:
             new_name += f"_{file_name}"
         path = os.path.join(self.fold_path, f"{new_name}.pt")
-        if test:
+        if self.args.test:
             print(f"\nnot save to {path}\n")
         else:
             print(f"\nsaved to {path}\n")
             torch.save(params, path)
+        self.close()
 
 
 def get_model(model_name, dataset):
+    num_classes = 100 if dataset == "cifar100" else 10
     if model_name == "resnet18":
-        global_model = ResNet18()
+        global_model = ResNet18(num_classes=num_classes)
     elif model_name == "cnn":
         # 根据数据集选择输入通道数
         input_channels = 1 if dataset == "mnist" else 3
-        global_model = CNN(input_channels=input_channels)
+        global_model = CNN(num_classes=num_classes, input_channels=input_channels)
     else:
         raise ValueError(f"Unsupported model name: {model_name}")
 

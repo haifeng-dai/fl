@@ -3,13 +3,13 @@
 # =============
 # Global Config
 # =============
-# fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox
-export ALGO="fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa"
+# fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg
+export ALGO="fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg"
 
 # =============
 # Data
 # =============
-export DATASETS="mnist"
+export DATASETS="cifar100"
 export MODELS="cnn"
 export NUM_CLIENTS="10"
 
@@ -27,15 +27,16 @@ export EPOCHS="10"
 export LRS="0.01"
 export ROUNDS="2"
 export BATCH_SIZES="64"
+export JOIN_RATIOS="0.2"
 
 # =============
 # Compute
 # =============
-export GPUS="3"
-export MP=0
-export MAX_WORKERS_PER_GPU=1
+export GPUS="0,1,2"
+export MP=1
+export MAX_WORKERS_PER_GPU=4
 # sequential, stream, multi_stream
-export PARALLEL_MODES="sequential"
+export PARALLEL_MODES="multi_stream"
 
 # =============
 # Test
@@ -88,6 +89,13 @@ export LAMBDAS_R_SA="0.1"
 export LAMBDAS_MCL_SA="0.1"
 export LAMBDAS_CC_SA="0.1"
 
+# FedLSA
+export LAMBDAS_COM_LSA="0.1"
+export ALPHAS_SEP_LSA="0.1"
+export SERVER_EPOCHS_LSA="1"
+export SERVER_LRS_LSA="0.01"
+export TAUS_LSA="0.1"
+
 # FML
 export ALPHAS_FML="1.0"
 export BETAS_FML="1.0"
@@ -139,8 +147,14 @@ for ALG in ${ALGO//,/ }; do
         "fedsa")
             bash ./scripts/fedsa.sh
             ;;
+        "fedlsa")
+            bash ./scripts/fedlsa.sh
+            ;;
+        "lgfedavg")
+            bash ./scripts/lgfedavg.sh
+            ;;
         *)
-            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl, fedper, fedprox, fedsa"
+            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl, fedper, fedprox, fedsa, fedlsa, lgfedavg"
             exit 1
             ;;
     esac

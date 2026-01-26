@@ -1,15 +1,17 @@
-import torch
 import argparse
 import time
 
+import numpy as np
+import torch
+
 from .utils import (
     BaseServer,
-    run_parallel_clients,
-    evaluate_prototype,
-    param_aggregate,
     ce_loss,
-    get_model,
     evaluate_model,
+    evaluate_prototype,
+    get_model,
+    param_aggregate,
+    run_parallel_clients,
 )
 
 
@@ -135,12 +137,10 @@ def client_worker(params):
 
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
-
     pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
         device
     )
     pln.load_state_dict(pln_state)
-
     all_classes = torch.arange(0, num_classes).to(device)
 
     # Train Model
@@ -206,7 +206,9 @@ def client_worker(params):
 
         avg_loss_p = total_loss_p / num_batches_p if num_batches_p > 0 else 0.0
 
-    return [avg_loss_m, avg_loss_p, model.state_dict(), pln.state_dict()]
+    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    pln_state = {k: v.cpu() for k, v in pln.state_dict().items()}
+    return [avg_loss_m, avg_loss_p, model_state, pln_state]
 
 
 class Server(BaseServer):
@@ -223,10 +225,8 @@ class Server(BaseServer):
             depth=args.depth_pln,
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
-        ).to(self.device)
-        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings).to(
-            self.device
         )
+        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings)
         self.acc_p: list[float] = []
         self.loss_p: list[float] = []
 
@@ -242,9 +242,17 @@ class Server(BaseServer):
         return feat.shape[1]
 
     def fit(self):
+        num_join_clients = int(self.num_clients * self.args.join_ratio)
+        num_join_clients = max(1, num_join_clients)
+
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedPLN Round {r + 1}/{self.rounds} ---")
+
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+            print(f"Selected clients: {selected_clients}")
 
             p = [
                 [
@@ -270,12 +278,12 @@ class Server(BaseServer):
                     self.args.init_emb,
                     self.args.har,
                 ]
-                for i in range(self.num_clients)
+                for i in selected_clients
             ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=self.num_clients,
+                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
@@ -287,25 +295,30 @@ class Server(BaseServer):
             for res in results:
                 total_loss_model += res[0]
                 total_loss_pln += res[1]
-            self.loss.append(total_loss_model / self.num_clients)
-            self.loss_p.append(total_loss_pln / self.num_clients)
+            self.loss.append(total_loss_model / num_join_clients)
+            self.loss_p.append(total_loss_pln / num_join_clients)
 
             # Update global model and PLN
             clients_params = [res[2] for res in results]
             plns_params = [res[3] for res in results]
 
-            self.aggregate(clients_params, plns_params)
+            # Calculate weights for selected clients
+            current_weights = [self.weights[i] for i in selected_clients]
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
+
+            self.aggregate(clients_params, plns_params, weights=norm_weights)
             self.evaluate()
 
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def aggregate(self, clients_params=None, plns_params=None):
+    def aggregate(self, clients_params=None, plns_params=None, weights=None):
         # Handle optional arguments or direct passing
         if clients_params:
-            self.model.load_state_dict(param_aggregate(clients_params, self.weights))
+            self.model.load_state_dict(param_aggregate(clients_params, weights))
         if plns_params:
-            self.pln.load_state_dict(param_aggregate(plns_params, self.weights))
+            self.pln.load_state_dict(param_aggregate(plns_params, weights))
 
     def evaluate(self):
         # Evaluate global model
@@ -316,6 +329,14 @@ class Server(BaseServer):
         acc_p = evaluate_prototype(self.model, prototype, self.test_set, self.device)
         self.acc_p.append(acc_p)
 
-    def save(self, test):
-        file_name: str = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"
-        super().deal_save(test, self.model.state_dict(), file_name)
+    def save(self):
+        file_name: str = f"{self.args.lambda_}_{self.args.epoch_pln}_{self.args.lr_pln}_{self.args.batch_size_pln}_{self.args.feature_dim}_{self.args.depth_pln}_{self.args.width_pln}_{self.args.mode}_{self.args.har}_{self.args.fixed_proto}_{self.args.init_emb}"
+        f = {
+            "acc": self.acc,
+            "acc_p": self.acc_p,
+            "state_dict": {
+                "model": self.model.state_dict(),
+                "pln": self.pln.state_dict(),
+            },
+        }
+        super().deal_save(f, file_name)

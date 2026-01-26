@@ -1,17 +1,18 @@
-import copy
+import argparse
 import time
 
+import numpy as np
 import torch
-import argparse
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    run_parallel_clients,
-    evaluate_prototype,
-    param_aggregate,
     ce_loss,
-    get_model,
     evaluate_model,
+    evaluate_prototype,
+    get_model,
+    param_aggregate,
+    run_parallel_clients,
 )
 
 
@@ -108,6 +109,26 @@ class PLN(torch.nn.Module):
         out = self.fc(mid)
 
         return out
+
+
+class DCL(torch.nn.Module):
+    def __init__(self, temperature: float = 0.1):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(
+        self, feature: torch.Tensor, protos: torch.Tensor, y: torch.Tensor
+    ) -> torch.Tensor:
+        feature_norm = F.normalize(feature, dim=1)
+        protos_norm = F.normalize(protos, dim=1)
+        sim = torch.mm(feature_norm, protos_norm.t()) / self.temperature
+        batch_indices = torch.arange(feature.size(0), device=feature.device)
+        pos_sim = sim[batch_indices, y]
+        mask = torch.ones_like(sim, dtype=torch.bool)
+        mask[batch_indices, y] = False
+        neg_sim = sim[mask].view(feature.size(0), -1)
+        loss = -pos_sim + torch.logsumexp(neg_sim, dim=1)
+        return loss.mean()
 
 
 def client_worker(params):
@@ -216,7 +237,9 @@ def client_worker(params):
 
         avg_loss_p = total_loss_p / num_batches_p if num_batches_p > 0 else 0.0
 
-    return [avg_loss_m, avg_loss_p, model.state_dict(), pln.state_dict()]
+    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    pln_state = {k: v.cpu() for k, v in pln.state_dict().items()}
+    return [avg_loss_m, avg_loss_p, model_state, pln_state]
 
 
 class Server(BaseServer):
@@ -235,13 +258,7 @@ class Server(BaseServer):
             init_emb=args.init_emb,
         ).to(self.device)
 
-        self.client_model_states = [
-            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
-        ]
-
-        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings).to(
-            self.device
-        )
+        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings)
         self.acc_p: list[float] = []
         self.loss_p: list[float] = []
 
@@ -257,14 +274,22 @@ class Server(BaseServer):
         return feat.shape[1]
 
     def fit(self):
+        num_join_clients = int(self.num_clients * self.args.join_ratio)
+        num_join_clients = max(1, num_join_clients)
+
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedDPL Round {r + 1}/{self.rounds} ---")
 
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+            print(f"Selected clients: {selected_clients}")
+
             p = [
                 [
                     self.client_gpu[i],
-                    self.client_model_states[i],
+                    self.clients_state[i],
                     self.pln.state_dict(),
                     self.train_sets[i],
                     self.args.model,
@@ -285,12 +310,12 @@ class Server(BaseServer):
                     self.args.init_emb,
                     self.args.har,
                 ]
-                for i in range(self.num_clients)
+                for i in selected_clients
             ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=self.num_clients,
+                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
@@ -302,25 +327,31 @@ class Server(BaseServer):
             for res in results:
                 total_loss_model += res[0]
                 total_loss_pln += res[1]
-            self.loss.append(total_loss_model / self.num_clients)
-            self.loss_p.append(total_loss_pln / self.num_clients)
+            self.loss.append(total_loss_model / num_join_clients)
+            self.loss_p.append(total_loss_pln / num_join_clients)
 
             clients_model_states = [res[2] for res in results]
             plns_states = [res[3] for res in results]
 
             # Update local models
             for i, state in enumerate(clients_model_states):
-                self.client_model_states[i] = {k: v.cpu() for k, v in state.items()}
+                client_idx = selected_clients[i]
+                self.clients_state[client_idx] = {k: v.cpu() for k, v in state.items()}
+
+            # Calculate weights for selected clients
+            current_weights = [self.weights[i] for i in selected_clients]
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
 
             # Aggregate PLN parameters
-            self.aggregate(plns_states)
+            self.aggregate(plns_states, weights=norm_weights)
 
             self.evaluate()
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def aggregate(self, pln_params):
-        self.pln.load_state_dict(param_aggregate(pln_params, self.weights))
+    def aggregate(self, pln_params, weights=None):
+        self.pln.load_state_dict(param_aggregate(pln_params, weights))
 
     def evaluate(self):
         current_acc = []
@@ -331,7 +362,7 @@ class Server(BaseServer):
 
         for i in range(self.num_clients):
             # Load local model
-            self.model.load_state_dict(self.client_model_states[i])
+            self.model.load_state_dict(self.clients_state[i])
 
             # Evaluate model accuracy on local test set
             acc = evaluate_model(self.model, self.test_set[i], self.device)
@@ -346,6 +377,14 @@ class Server(BaseServer):
         self.acc.append(sum(current_acc) / len(current_acc))
         self.acc_p.append(sum(current_acc_p) / len(current_acc_p))
 
-    def save(self, test):
-        file_name: str = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"
-        super().deal_save(test, self.model.state_dict(), file_name)
+    def save(self):
+        file_name: str = f"{self.args.lambda_}_{self.args.epoch_pln}_{self.args.lr_pln}_{self.args.batch_size_pln}_{self.args.feature_dim}_{self.args.depth_pln}_{self.args.width_pln}_{self.args.mode}_{self.args.fixed_proto}_{self.args.init_emb}_{self.args.har}"
+        f = {
+            "acc": {"model": self.acc, "prototype": self.acc_p},
+            "loss": {"model": self.loss, "prototype": self.loss_p},
+            "state_dict": {
+                "model": self.clients_state,
+                "pln": self.pln.state_dict(),
+            },
+        }
+        super().deal_save(f, file_name)

@@ -18,8 +18,8 @@ from .utils import (
 def client_worker(params):
     (
         device,
-        global_body_state,
-        local_head_state,
+        local_body_state,
+        global_head_state,
         train_set,
         model_name,
         dataset_name,
@@ -32,11 +32,11 @@ def client_worker(params):
     model = get_model(model_name, dataset_name).to(device)
 
     # Load parameters directly into sub-modules
-    # 1. Load global body into extractor
-    model.extractor.load_state_dict(global_body_state)
-    # 2. Load local head into classifier
-    if local_head_state is not None:
-        model.classifier.load_state_dict(local_head_state)
+    # 1. Load local body into extractor
+    if local_body_state is not None:
+        model.extractor.load_state_dict(local_body_state)
+    # 2. Load global head into classifier
+    model.classifier.load_state_dict(global_head_state)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
@@ -71,21 +71,28 @@ def client_worker(params):
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
-        initial_head = {
-            k: v.cpu() for k, v in self.model.classifier.state_dict().items()
+        assert isinstance(self.model.extractor, torch.nn.Sequential) and isinstance(
+            self.model.classifier, torch.nn.Linear
+        )
+
+        initial_body = {
+            k: v.cpu() for k, v in self.model.extractor.state_dict().items()
         }
 
-        self.client_head_states = [
-            copy.deepcopy(initial_head) for _ in range(self.num_clients)
+        self.client_body_states = [
+            copy.deepcopy(initial_body) for _ in range(self.num_clients)
         ]
 
     def fit(self):
+        assert isinstance(self.model.extractor, torch.nn.Sequential) and isinstance(
+            self.model.classifier, torch.nn.Linear
+        )
         num_join_clients = int(self.num_clients * self.args.join_ratio)
         num_join_clients = max(1, num_join_clients)
 
         for r in range(self.rounds):
             t0 = time.time()
-            print(f"\n--- FedPer Round {r + 1}/{self.rounds} ---")
+            print(f"\n--- LG-FedAvg Round {r + 1}/{self.rounds} ---")
 
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
@@ -95,8 +102,8 @@ class Server(BaseServer):
             p = [
                 [
                     self.client_gpu[i],
-                    self.model.extractor.state_dict(),
-                    self.client_head_states[i],
+                    self.client_body_states[i],
+                    self.model.classifier.state_dict(),
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
@@ -116,7 +123,7 @@ class Server(BaseServer):
             )
 
             total_loss = 0.0
-            new_bodies = []
+            new_heads = []
 
             for i, res in enumerate(results):
                 loss = res[0]
@@ -124,11 +131,13 @@ class Server(BaseServer):
                 new_head = res[2]
 
                 total_loss += loss
-                new_bodies.append(new_body)
 
-                # Update local head state for the selected client
+                # Update Local Body for selected clients
                 client_idx = selected_clients[i]
-                self.client_head_states[client_idx] = new_head
+                self.client_body_states[client_idx] = new_body
+
+                # Collect Global Head updates
+                new_heads.append(new_head)
 
             avg_loss = total_loss / num_join_clients
             self.loss.append(avg_loss)
@@ -138,10 +147,10 @@ class Server(BaseServer):
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
-            # Aggregate Body Only
-            aggregated_body = param_aggregate(new_bodies, norm_weights)
-            # Load aggregated body directly into extractor
-            self.model.extractor.load_state_dict(aggregated_body)
+            # Aggregate Head Only
+            aggregated_head = param_aggregate(new_heads, norm_weights)
+            # Load aggregated head directly into classifier
+            self.model.classifier.load_state_dict(aggregated_head)
 
             # Evaluate
             self.evaluate()
@@ -156,13 +165,15 @@ class Server(BaseServer):
             self.model.classifier, torch.nn.Linear
         )
         accs = []
-        # Get current global body
-        global_body = {k: v.cpu() for k, v in self.model.extractor.state_dict().items()}
+        # Get current global head
+        global_head = {
+            k: v.cpu() for k, v in self.model.classifier.state_dict().items()
+        }
 
         for i in range(self.num_clients):
-            # Load global body and local head into self.model for evaluation
-            self.model.extractor.load_state_dict(global_body)
-            self.model.classifier.load_state_dict(self.client_head_states[i])
+            # Load local body and global head into self.model for evaluation
+            self.model.extractor.load_state_dict(self.client_body_states[i])
+            self.model.classifier.load_state_dict(global_head)
 
             acc = evaluate_model(self.model, self.test_set[i], self.device)
             accs.append(acc)
@@ -171,11 +182,11 @@ class Server(BaseServer):
 
     def save(self):
         client_states = []
-        global_body = self.model.extractor.state_dict()
+        global_head = self.model.classifier.state_dict()
         for i in range(self.num_clients):
-            full_state = copy.deepcopy(global_body)
-            full_state.update(self.client_head_states[i])
+            full_state = copy.deepcopy(self.client_body_states[i])
+            full_state.update(global_head)
             client_states.append(full_state)
 
-        f = {"acc": self.acc, "loss": self.loss, "client_states": client_states}
+        f = {"acc": self.acc, "loss": self.loss, "state_dict": client_states}
         super().deal_save(f)

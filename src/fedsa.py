@@ -1,15 +1,17 @@
-import time
 import argparse
+import time
+
+import numpy as np
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    mse_loss,
-    run_parallel_clients,
     ce_loss,
     get_model,
+    mse_loss,
     param_aggregate,
-    evaluate_model,
+    run_parallel_clients,
 )
 
 
@@ -19,45 +21,39 @@ def add_args(parser: argparse.ArgumentParser):
         "--alpha_sa",
         type=float,
         default=0.5,
-        help="Momentum factor for updating semantic anchors (语义锚点的动量更新因子)",
+        help="Momentum factor for updating semantic anchors",
     )
     group.add_argument(
         "--lambda_r",
         type=float,
         default=0.1,
-        help="Weight for regularization loss (正则化损失权重)",
+        help="Weight for regularization loss",
     )
     group.add_argument(
         "--lambda_mcl",
         type=float,
         default=0.1,
-        help="Weight for margin-enhanced contrastive loss (边缘增强对比损失权重)",
+        help="Weight for margin-enhanced contrastive loss",
     )
     group.add_argument(
         "--lambda_cc",
         type=float,
         default=0.1,
-        help="Weight for classifier calibration loss (分类器校准损失权重)",
+        help="Weight for classifier calibration loss",
     )
     return parser
 
 
-class MCL(torch.nn.Module):
-    def __init__(self, num_classes: int):
-        super().__init__()
-        self.num_classes = num_classes
-
-    def forward(
-        self, feature: torch.Tensor, protos: torch.Tensor, y: torch.Tensor, d: float
-    ):
-        feature_2 = torch.sum(torch.pow(feature, 2), dim=1, keepdim=True)
-        protos_2 = torch.sum(torch.pow(protos, 2), dim=1, keepdim=True)
-        feature_protos = torch.matmul(feature, protos.T)
-        dist = feature_2 + protos_2.T - 2 * feature_protos
-        dist_sqrt = torch.sqrt(dist)
-        one_hot = torch.nn.functional.one_hot(y, self.num_classes).to(y.device)
-        dist_final = dist_sqrt + one_hot * d
-        return ce_loss(-dist_final, y)
+def mcl_loss(
+    feature: torch.Tensor,
+    protos: torch.Tensor,
+    num_classes: int,
+    y: torch.Tensor,
+    d: float,
+):
+    one_hot = F.one_hot(y, num_classes)
+    dist_final = torch.cdist(feature, protos) + one_hot * d
+    return ce_loss(-dist_final, y)
 
 
 def margin(anchor: torch.Tensor) -> float:
@@ -97,9 +93,6 @@ def client_worker(params):
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # 初始化损失函数
-    mcl_loss = MCL(num_classes).to(device)
-
     model.train()
     total_loss = 0.0
     num_batches = 0
@@ -112,15 +105,11 @@ def client_worker(params):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             logits, features = model(x)
-
-            # Classifier Calibration: classify global anchors
             output = model.classifier(global_anchors)
 
             loss_ce = ce_loss(logits, y)
             loss_r = mse_loss(features, global_anchors[y])
-            loss_mcl = mcl_loss(features, global_anchors, y, d)
-
-            # Calibration loss: expect anchor i to be classified as i
+            loss_mcl = mcl_loss(features, global_anchors, num_classes, y, d)
             loss_cc = ce_loss(output, torch.arange(num_classes, device=device))
 
             loss = (
@@ -135,7 +124,7 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    avg_loss = total_loss / num_batches
 
     # Calculate new local anchors
     with torch.no_grad():
@@ -162,9 +151,10 @@ def client_worker(params):
 
         local_anchors_dict = {}
         for label, total in anchor_sums.items():
-            local_anchors_dict[label] = total / anchor_counts[label]
+            local_anchors_dict[label] = total.cpu() / anchor_counts[label]
 
-    return [avg_loss, model.state_dict(), local_anchors_dict]
+    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    return [avg_loss, model_state, local_anchors_dict]
 
 
 class Server(BaseServer):
@@ -172,23 +162,29 @@ class Server(BaseServer):
         super().__init__(False, args)
 
         # 全局语义锚点 (Prototypes)
-        self.anchors = torch.zeros(self.num_class, self.model.feature_dim).to(
-            self.device
-        )
+        self.anchors = torch.zeros(self.num_class, self.model.feature_dim)
         self.clients_anchors = [self.anchors.clone() for _ in range(self.num_clients)]
+        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
     def fit(self):
+        num_join_clients = int(self.num_clients * self.args.join_ratio)
+        num_join_clients = max(1, num_join_clients)
+
         print(f"FedSA Training with alpha_sa={self.args.alpha_sa}")
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedSA Round {r + 1}/{self.rounds} ---")
-            clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
+
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+            print(f"Selected clients: {selected_clients}")
 
             p = [
                 [
                     self.client_gpu[i],
-                    clients_state[i],
+                    self.clients_state[i],
                     self.clients_anchors[i],
                     self.anchors,
                     self.train_sets[i],
@@ -202,35 +198,50 @@ class Server(BaseServer):
                     self.args.lambda_cc,
                     self.num_class,
                 ]
-                for i in range(self.num_clients)
+                for i in selected_clients
             ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=self.num_clients,
+                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
             losses = [res[0] for res in results]
-            client_models = [res[1] for res in results]
+            new_client_states = [res[1] for res in results]
             client_anchors_dicts = [res[2] for res in results]
 
             avg_loss = sum(losses) / len(losses)
             self.loss.append(avg_loss)
 
-            # 1. 聚合全局模型
-            self.model.load_state_dict(param_aggregate(client_models, self.weights))
+            # Update local states for selected clients
+            for i, state in enumerate(new_client_states):
+                client_idx = selected_clients[i]
+                self.clients_state[client_idx] = state
+
+            # Calculate weights for selected clients
+            current_weights = [self.weights[i] for i in selected_clients]
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
+
+            # 1. 聚合全局模型 (只聚合参与的客户端)
+            # 注意: self.clients_state 中包含了所有客户端的状态，但我们只想聚合本轮更新过的
+            # 或者，我们可以只聚合本轮选中的客户端的更新
+            self.model.load_state_dict(param_aggregate(new_client_states, norm_weights))
 
             # 2. 更新全局语义锚点
             self.update_global_anchors(client_anchors_dicts)
 
             # 3. 更新 Server 端保存的 Client Anchors
             for i, anchors_dict in enumerate(client_anchors_dicts):
+                client_idx = selected_clients[i]
                 for label, anchor in anchors_dict.items():
                     # Update local copy on server device
-                    self.clients_anchors[i][label] = anchor.to(self.anchors.device)
+                    self.clients_anchors[client_idx][label] = anchor.to(
+                        self.anchors.device
+                    )
 
             self.evaluate()
             print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
@@ -255,14 +266,18 @@ class Server(BaseServer):
 
         alpha = self.args.alpha_sa
         for label, new_anchor in new_anchors.items():
-            self.anchors[label] = (1 - alpha) * self.anchors[label] + alpha * new_anchor
+            self.anchors[label] = (1 - alpha) * self.anchors[
+                label
+            ] + alpha * new_anchor.cpu()
 
-    def save(self, test):
+    def save(self):
+        file_name = f"{self.args.alpha_sa}_{self.args.lambda_r}_{self.args.lambda_mcl}_{self.args.lambda_cc}"
         f = {
             "acc": self.acc,
             "loss": self.loss,
-            "state_dict": self.model.state_dict(),
-            "global_anchors": self.anchors,
+            "state_dict": {
+                "anchors": self.anchors.data,
+                "clients": self.clients_state,
+            },
         }
-        file_name = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}.pt"
-        super().deal_save(test, f, file_name)
+        super().deal_save(f, file_name)

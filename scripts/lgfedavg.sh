@@ -13,7 +13,7 @@ for DATASET in ${DATASETS//,/ }; do
                                         for JOIN_RATIO in ${JOIN_RATIOS//,/ }; do
                                             for PARALLEL_MODE in ${PARALLEL_MODES//,/ }; do
                                                 uv run main.py \
-                                                    --algo fedavg \
+                                                    --algo lgfedavg \
                                                     --test $TEST \
                                                     --dataset $DATASET \
                                                     --model $MODEL \

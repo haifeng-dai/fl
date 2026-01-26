@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import importlib
 import time
 
@@ -7,8 +8,7 @@ import torch
 from src import prepare_data
 
 
-def main():
-    # 1. First-pass parsing for algo
+def get_args():
     parser = argparse.ArgumentParser(description="Unified FL Framework", add_help=False)
     parser.add_argument(
         "--algo",
@@ -27,9 +27,11 @@ def main():
             "fedper",
             "fedprox",
             "fedsa",
+            "fedlsa",
+            "lgfedavg",
         ],
     )
-    parser.add_argument("--test", type=int, default=1, help="Test or train")
+    parser.add_argument("--test", type=int, default=0, help="Test or train")
     args, _ = parser.parse_known_args()
 
     # 2. Build Full Parser
@@ -42,7 +44,7 @@ def main():
         type=str,
         default="mnist",
         help="Dataset name",
-        choices=["mnist", "cifar10"],
+        choices=["mnist", "cifar10", "cifar100"],
     )
     data_group.add_argument(
         "--model",
@@ -69,6 +71,12 @@ def main():
 
     # Training Args
     train_group = full_parser.add_argument_group("Training Arguments")
+    train_group.add_argument(
+        "--join_ratio",
+        type=float,
+        default=1.0,
+        help="Ratio of clients participating in each round",
+    )
     train_group.add_argument(
         "--epochs", type=int, default=1, help="Number of local epochs"
     )
@@ -106,8 +114,12 @@ def main():
         algo_module.add_args(full_parser)
 
     args = full_parser.parse_args()
+    return args, algo_module
 
-    # 3. Automatic Data Preparation
+
+def main():
+    args, algo_module = get_args()
+
     prepare_data(
         dataset_name=args.dataset,
         partition_method=args.partition,
@@ -117,16 +129,18 @@ def main():
         test_ratio=args.test_ratio,
     )
 
-    # 4. Instantiate and Run
     server = algo_module.Server(args=args)
+
     server.fit()
-    server.save(args.test)
+    server.save()
 
 
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn", force=True)
     a = time.time()
+
     main()
 
     b = time.time()
-    print(f"\nTotal time: {b - a} seconds\n")
+    delta = datetime.timedelta(seconds=int(b - a))
+    print(f"\nTotal time: {delta}\n")

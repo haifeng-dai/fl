@@ -1,15 +1,18 @@
-import torch
 import argparse
 import copy
 import time
 
+import numpy as np
+import torch
+
 from src.utils.evaluate import evaluate_prototype
+
 from .utils import (
     BaseServer,
-    run_parallel_clients,
     ce_loss,
     evaluate_model,
     get_model,
+    run_parallel_clients,
 )
 
 
@@ -92,28 +95,37 @@ def client_worker(params):
 
     # Return client_id, avg_loss, new_model_state, local_protos
     avg_loss = total_loss / num_batches
-    return [avg_loss, model.state_dict(), local_protos]
+    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    return [avg_loss, model_state, local_protos]
 
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
         # Initialize personalized models for each client
-        self.client_model_states = [
+        self.client_states = [
             copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
         ]
         self.global_protos: dict[int, torch.Tensor] = {}
         self.acc_p: list[float] = []
 
     def fit(self):
+        num_join_clients = int(self.num_clients * self.args.join_ratio)
+        num_join_clients = max(1, num_join_clients)
+
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedProto Round {r + 1}/{self.rounds} ---")
 
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+            print(f"Selected clients: {selected_clients}")
+
             p = [
                 [
                     self.client_gpu[i],
-                    self.client_model_states[i],
+                    self.client_states[i],
                     self.global_protos,
                     self.train_sets[i],
                     self.args.model,
@@ -122,12 +134,13 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.args.mu,
-                ] for i in range(self.num_clients)
+                ]
+                for i in selected_clients
             ]
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=self.num_clients,
+                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
@@ -141,12 +154,13 @@ class Server(BaseServer):
             total_loss = 0.0
             for res in results:
                 total_loss += res[0]
-            avg_loss = total_loss / self.num_clients
+            avg_loss = total_loss / num_join_clients
             self.loss.append(avg_loss)
 
             # Update client models
             for i, state in enumerate(new_model_states):
-                self.client_model_states[i] = {k: v.cpu() for k, v in state.items()}
+                client_idx = selected_clients[i]
+                self.client_states[client_idx] = {k: v.cpu() for k, v in state.items()}
 
             self.global_protos = self.aggregate_protos(all_local_protos)
             self.evaluate()
@@ -190,21 +204,27 @@ class Server(BaseServer):
 
         for i in range(self.num_clients):
             # Load client i's model state into self.model for evaluation
-            self.model.load_state_dict(self.client_model_states[i])
+            self.model.load_state_dict(self.client_states[i])
 
             acc = evaluate_model(self.model, self.test_set[i], self.device)
             accs.append(acc)
 
-            acc_p = evaluate_prototype(self.model, proto_tensor, self.test_set[i], self.device)
+            acc_p = evaluate_prototype(
+                self.model, proto_tensor, self.test_set[i], self.device
+            )
             acc_ps.append(acc_p)
 
         self.acc.append(sum(accs) / (len(accs) if accs else 1))
         self.acc_p.append(sum(acc_ps) / (len(acc_ps) if acc_ps else 1))
 
-    def save(self, test):
+    def save(self):
+        file_name = f"{self.args.mu}"
         f = {
-            "acc": self.acc,
+            "acc": {"model": self.acc, "proto": self.acc_p},
             "loss": self.loss,
-            "global_protos": self.global_protos,
+            "state_dict": {
+                "model": self.client_states,
+                "proto": self.global_protos,
+            },
         }
-        super().deal_save(test, f)
+        super().deal_save(f, file_name)
