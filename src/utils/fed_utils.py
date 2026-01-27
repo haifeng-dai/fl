@@ -31,16 +31,22 @@ class BaseServer:
             n_classes=args.n_class,
             pfl=self.pfl,
         )
-        self.fold_path = os.path.join(
-            "results",
+        fold_path = os.path.join(
             f"{args.algo}",
             f"{args.dataset}_{args.partition}_{args.num_clients}",
         )
         if args.partition == "dirichlet":
-            self.fold_path += f"_{args.alpha}"
+            fold_path += f"_{args.alpha}"
         elif args.partition == "pathological":
-            self.fold_path += f"_{args.n_class}"
-        os.makedirs(self.fold_path, exist_ok=True)
+            fold_path += f"_{args.n_class}"
+        self.save_path = os.path.join("results", fold_path)
+        self.log_path = os.path.join("logs", fold_path)
+
+        os.makedirs(self.save_path, exist_ok=True)
+        os.makedirs(self.log_path, exist_ok=True)
+
+        self.save_name_pre = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}"
+        self.file_name = ""
 
         # Use pre-calculated counts for sample weights
         self.clients_state = [
@@ -86,9 +92,6 @@ class BaseServer:
             for device, count in device_counts.items():
                 # 限制每个GPU的最大并行worker数，避免OOM
                 actual_workers = min(count, max_workers) if max_workers else count
-                print(
-                    f"-> 为设备 {device} 分配并行池 (Worker: {actual_workers}/{count})"
-                )
                 self.gpu_pools[device] = mp.Pool(processes=actual_workers)
         else:
             print(f"-> 未启用多进程训练，将使用顺序训练 (设备: {self.client_gpu[0]})")
@@ -119,11 +122,8 @@ class BaseServer:
             # 防止重复关闭
             self.gpu_pools = {}
 
-    def deal_save(self, params, file_name: str | None = None):
-        new_name = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}"
-        if file_name:
-            new_name += f"_{file_name}"
-        path = os.path.join(self.fold_path, f"{new_name}.pt")
+    def deal_save(self, params):
+        path = os.path.join(self.save_path, f"{self.file_name}.pt")
         if self.args.test:
             print(f"\nnot save to {path}\n")
         else:

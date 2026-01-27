@@ -1,6 +1,6 @@
 import argparse
 import copy
-import time
+import time, os
 
 import numpy as np
 import torch
@@ -196,3 +196,7 @@ class Server(BaseServer):
 
         f = {"acc": self.acc, "loss": self.loss, "state_dict": client_states}
         super().deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = self.save_name_pre
+        return os.path.join(self.log_path, f"{self.file_name}.log")

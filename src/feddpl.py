@@ -1,5 +1,6 @@
 import argparse
 import time
+import os
 
 import numpy as np
 import torch
@@ -385,9 +386,6 @@ class Server(BaseServer):
         self.acc_p.append(sum(current_acc_p) / len(current_acc_p))
 
     def save(self):
-        file_name: str = (
-            f"{self.args.lambda_}_{self.args.epoch_pln}_{self.args.lr_pln}_{self.args.batch_size_pln}_{self.args.feature_dim}_{self.args.depth_pln}_{self.args.width_pln}_{self.args.mode}_{self.args.fixed_proto}_{self.args.init_emb}_{self.args.har}"
-        )
         f = {
             "acc": {"model": self.acc, "prototype": self.acc_p},
             "loss": {"model": self.loss, "prototype": self.loss_p},
@@ -396,4 +394,8 @@ class Server(BaseServer):
                 "pln": self.pln.state_dict(),
             },
         }
-        super().deal_save(f, file_name)
+        self.deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = f"{self.save_name_pre}_{self.args.lambda_}_{self.args.epoch_pln}_{self.args.lr_pln}_{self.args.batch_size_pln}_{self.args.feature_dim}_{self.args.depth_pln}_{self.args.width_pln}_{self.args.mode}_{self.args.fixed_proto}_{self.args.init_emb}_{self.args.har}"
+        return os.path.join(self.log_path, f"{self.file_name}.log")

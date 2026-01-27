@@ -1,5 +1,5 @@
 import argparse
-import time
+import time, os
 
 import numpy as np
 import torch
@@ -37,11 +37,7 @@ def client_worker(params):
     global_model_params = {k: v.to(device) for k, v in model_state.items()}
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(
-        train_set,
-        batch_size=batch_size,
-        shuffle=True,
-    )
+    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     total_loss = 0.0
     num_batches = 0
@@ -134,10 +130,13 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
-        file_name = f"{self.args.mu}"
         f = {
             "acc": self.acc,
             "loss": self.loss,
             "state_dict": self.model.state_dict(),
         }
-        super().deal_save(f, file_name)
+        super().deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = f"{self.save_name_pre}_{self.args.mu}"
+        return os.path.join(self.log_path, f"{self.file_name}.log")

@@ -1,6 +1,6 @@
 import argparse
 import copy
-import time
+import time, os
 
 import numpy as np
 import torch
@@ -224,7 +224,6 @@ class Server(BaseServer):
         self.acc_p.append(sum(acc_ps) / (len(acc_ps) if acc_ps else 1))
 
     def save(self):
-        file_name = f"{self.args.mu}"
         f = {
             "acc": {"model": self.acc, "proto": self.acc_p},
             "loss": self.loss,
@@ -233,4 +232,8 @@ class Server(BaseServer):
                 "proto": self.global_protos,
             },
         }
-        super().deal_save(f, file_name)
+        self.deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = f"{self.save_name_pre}_{self.args.mu}"
+        return os.path.join(self.log_path, f"{self.file_name}.log")

@@ -2,6 +2,7 @@ import argparse
 import datetime
 import importlib
 import time
+import sys
 
 import torch
 
@@ -30,6 +31,8 @@ def get_args():
             "fedlsa",
             "lgfedavg",
             "fedrep",
+            "fedala",
+            "fedtgp",
         ],
     )
     parser.add_argument("--test", type=int, default=0, help="Test or train")
@@ -111,6 +114,7 @@ def get_args():
         algo_module = importlib.import_module(f"src.{args.algo}")
     except ModuleNotFoundError:
         raise ValueError(f"Algorithm module src.{args.algo} not found.")
+
     if hasattr(algo_module, "add_args"):
         algo_module.add_args(full_parser)
 
@@ -120,7 +124,7 @@ def get_args():
 
 def main():
     args, algo_module = get_args()
-
+    server = algo_module.Server(args=args)
     prepare_data(
         dataset_name=args.dataset,
         partition_method=args.partition,
@@ -130,7 +134,11 @@ def main():
         test_ratio=args.test_ratio,
     )
 
-    server = algo_module.Server(args=args)
+    # 仅输出到文件
+    log_path = server.get_log_path()
+    log_f = open(log_path, "w", encoding="utf-8", buffering=1)
+    sys.stdout = log_f
+    sys.stderr = log_f
 
     server.fit()
     server.save()

@@ -1,5 +1,6 @@
 import argparse
 import time
+import os
 
 import numpy as np
 import torch
@@ -40,33 +41,37 @@ def decompose_param(param, energy_threshold):
     Returns:
         compressed_param: 压缩后的参数（字典或张量）
     """
-    # 分离并移到 CPU 进行 SVD
-    param_cpu = param.detach().cpu()
-    param_shape = param_cpu.shape
+    # 保持在原设备，不强制移到 CPU
+    param_shape = param.shape
 
     # 检查是否可以进行分解（2D 或 4D 张量）
     # 同时通常跳过 embedding 层
     if len(param_shape) not in [2, 4] or "embedding" in str(param.dtype):
-        return param_cpu
+        return param.detach().cpu()
 
     # 重塑为 2D 矩阵
     if len(param_shape) == 4:
         # 卷积层: (out, in, h, w) -> (out, in*h*w)
-        mat = param_cpu.view(param_shape[0], -1)
+        mat = param.view(param_shape[0], -1)
     else:
-        mat = param_cpu
+        mat = param
 
     # 执行 SVD 分解
     try:
+        # 优先在原设备（如 GPU）上执行
         u, s, vh = torch.linalg.svd(mat, full_matrices=False)
     except RuntimeError:
-        # SVD 失败时的回退方案
-        return param_cpu
+        # SVD 失败时的回退方案（如显存不足），回退到 CPU
+        mat = mat.cpu()
+        try:
+            u, s, vh = torch.linalg.svd(mat, full_matrices=False)
+        except RuntimeError:
+            return param.detach().cpu()
 
     # 基于能量阈值确定秩
     total_energy = torch.sum(s**2)
     if total_energy == 0:
-        return param_cpu
+        return param.detach().cpu()
 
     cumulative_energy = torch.cumsum(s**2, dim=0)
     # 找到累积能量超过 threshold * total 的第一个索引
@@ -76,10 +81,10 @@ def decompose_param(param, energy_threshold):
     else:
         rank = torch.searchsorted(mask.int(), 1).item() + 1
 
-    # 压缩
-    u_k = u[:, :rank]
-    s_k = s[:rank]
-    vh_k = vh[:rank, :]
+    # 压缩并立即移至 CPU 以节省显存和兼容通信
+    u_k = u[:, :rank].detach().cpu()
+    s_k = s[:rank].detach().cpu()
+    vh_k = vh[:rank, :].detach().cpu()
 
     return {
         "u": u_k,
@@ -362,7 +367,6 @@ class Server(BaseServer):
             self.compressed_params[name] = decompose_param(param, self.args.energy)
 
     def save(self):
-        file_name: str = f"{self.args.lr_g}_{self.args.energy}"
         f = {
             "acc": self.acc,
             "loss": self.loss,
@@ -372,4 +376,8 @@ class Server(BaseServer):
                 "wh": self.client_wh_states,
             },
         }
-        super().deal_save(f, file_name)
+        self.deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = f"{self.save_name_pre}_{self.args.lr_g}_{self.args.energy}"
+        return os.path.join(self.log_path, f"{self.file_name}.log")

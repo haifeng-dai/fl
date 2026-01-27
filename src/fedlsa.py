@@ -1,5 +1,6 @@
 import argparse
 import time
+import os
 
 import numpy as np
 import torch
@@ -268,7 +269,6 @@ class Server(BaseServer):
         self.anchors = self.anchors.detach()
 
     def save(self):
-        file_name = f"{self.args.lambda_com}_{self.args.alpha_sep}_{self.args.server_epochs}_{self.args.server_lr}_{self.args.tau}"
         f = {
             "acc": self.acc,
             "loss": self.loss,
@@ -277,4 +277,8 @@ class Server(BaseServer):
                 "clients": self.model.state_dict(),
             },
         }
-        super().deal_save(f, file_name)
+        super().deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = f"{self.save_name_pre}_{self.args.lambda_com}_{self.args.alpha_sep}_{self.args.server_epochs}_{self.args.server_lr}_{self.args.tau}"
+        return os.path.join(self.log_path, f"{self.file_name}.log")

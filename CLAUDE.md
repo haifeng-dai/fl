@@ -1,196 +1,115 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件为 Claude Code (claude.ai/code) 提供项目操作指南。
 
-## Project Overview
+## 项目概览
 
-This is a multi-GPU parallel federated learning framework (统一流水线) designed for efficient and scalable FL research. The framework supports multiple algorithms (FedAvg, MOON, FedPLN, FedDPL, FedProto) with automatic data management and high-performance multi-GPU client simulation.
+这是一个支持 **17 种算法**（包括 FedAvg, FedProto, FedALA, FedTGP 等）的多 GPU 并行联邦学习框架（Unified Pipeline）。该框架集成了自动数据管理和高性能多 GPU 客户端模拟。
 
-## Common Commands
+## 常用命令
 
-### Environment Setup
+### 环境配置
 ```bash
-# Install dependencies using uv
+# 使用 uv 安装依赖
 uv sync
 ```
 
-### Running Experiments
+### 运行实验
 
-**Main entry point**: All experiments run through `main.py` with `uv run`
+**主要入口**：所有实验均通过 `main.py` 运行。
 
 ```bash
-# Basic FedAvg with Dirichlet partitioning
+# 基础 FedAvg (Dirichlet 划分)
 uv run main.py --algo fedavg --dataset mnist --partition dirichlet --alpha 0.5 --num_clients 10 --gpus 0,1
 
-# MOON with pathological partitioning
-uv run main.py --algo moon --dataset mnist --partition pathological --n_classes 2 --num_clients 10 --gpus 0
+# 运行 FedALA (自定义参数)
+uv run main.py --algo fedala --dataset cifar10 --eta 1.0 --rand_percent 80
 
-# Run all configured experiments via scripts
+# 运行所有配置好的实验 (推荐)
 ./run.sh
 ```
 
-### Algorithm-Specific Scripts
+### 算法专属脚本
 
-Individual algorithm scripts are in `scripts/` directory:
-- `scripts/fedavg.sh` - FedAvg experiments
-- `scripts/moon.sh` - MOON experiments
-- `scripts/fedpln.sh` - FedPLN experiments
-- `scripts/feddpl.sh` - FedDPL experiments
-- `scripts/fedproto.sh` - FedProto experiments
+`scripts/` 目录下存放了各算法的专用脚本：
+- `scripts/fedavg.sh`, `scripts/moon.sh`, `scripts/fedpln.sh`
+- `scripts/fedala.sh` (新增), `scripts/fedtgp.sh` (新增)
+- ... (以及其他)
 
-These scripts support batch experiments with multiple hyperparameter configurations through environment variables set in `run.sh`.
+这些脚本支持通过 `run.sh` 设置环境变量来进行**嵌套循环参数搜索**。
 
-### Code Formatting
+### 代码格式化
 ```bash
 uv run black .
 ```
 
-## Architecture
+### 结果分析
+```bash
+# 使用 Jupyter Notebook 分析实验结果
+uv run jupyter notebook results_analysis.ipynb
+```
 
-### Entry Point Flow
+## 架构说明
 
-1. **`main.py`** - Single unified entry point:
-   - First-pass argument parsing to determine algorithm (`--algo`)
-   - Builds full parser with common args (data, training, GPU config)
-   - Dynamically imports algorithm module from `src/{algo}.py`
-   - Calls algorithm's `add_args()` to register algorithm-specific parameters
-   - Automatically triggers data preparation via `src.data_gen.prepare_data()`
-   - Instantiates `Server` class from algorithm module and runs `fit()`
+### 入口流程
 
-### Core Architecture Pattern
+1.  **`main.py`** - 统一入口：
+    - 第一阶段参数解析：确定算法 (`--algo`)。
+    - 动态导入算法模块 `src/{algo}.py`。
+    - 第二阶段参数解析：加载通用参数 + 算法专属参数 (`add_args`)。
+    - 自动触发数据准备 `src.data_gen.prepare_data()`。
+    - 实例化 `Server` 并运行 `fit()`。
 
-All federated learning algorithms follow a consistent structure:
+### 核心架构模式
 
-**Algorithm Module** (`src/{algorithm}.py`):
-- `add_args(parser)` - Registers algorithm-specific CLI arguments
-- `client_worker(client_id, params)` - Worker function for parallel client training
-- `Server(BaseServer)` - Main server class inheriting from `BaseServer`
+所有算法遵循一致的结构：
 
-**Client Worker Function**:
-- Receives parameters as a list (GPU device, model state, training data, hyperparameters)
-- Instantiates model on assigned GPU using `get_model(model_name, dataset_name)`
-- Performs local training epochs
-- Returns `(client_id, [loss, model.state_dict()])` or algorithm-specific results
+**算法模块** (`src/{algorithm}.py`):
+- `add_args(parser)`: 注册参数。
+- `client_worker(params)`: 并行客户端训练函数。
+  - **必须** 接收参数列表 (List)。
+  - **建议** 返回 `client_id, [loss, model_state...]` 以确保索引安全。
+- `Server(BaseServer)`: 服务器类。
 
-**Server Class**:
-- `__init__(args)` - Initialize model, call `super().__init__(model, personalized_flag, args)`
-- `fit()` - Main training loop coordinating rounds of client training and aggregation
-- `aggregate()` - Aggregates client models (inherits from BaseServer or customizes)
-- `evaluate()` - Evaluates global model performance
-- `save(test)` - Saves results and model checkpoints
+**客户端 Worker**:
+- 接收参数列表（GPU 设备, 模型状态, 数据集, 超参）。
+- 使用 `get_model(model_name, dataset_name)` 实例化模型。
+  - **优化**: 使用 `get_model` + `load_state_dict` 替代 `copy.deepcopy` 以提升多进程性能。
+- 执行本地训练。
+- 返回结果。
 
-### Multi-GPU Parallelization
+**Server 类**:
+- `fit()`: 主循环。
+  - 使用 `run_parallel_clients` 执行并行训练。
+  - **关键**: 更新 `self.clients_state` 时，必须使用 `selected_clients[i]` 作为索引，严禁直接使用 `i`。
 
-**GPU Assignment** (`src/utils/parallel.py`):
-- `run_parallel_clients()` orchestrates parallel client execution
-- Clients are dynamically assigned to GPUs based on `--gpus` argument
-- `BaseServer.__init__()` creates `self.client_gpu` mapping and `self.gpu_pools`
-- Supports three parallel modes (`--parallel_mode`):
-  - `sequential`: One client at a time
-  - `stream`: One client per GPU simultaneously
-  - `multi_stream`: Multiple clients per GPU (controlled by `--max_workers_per_gpu`)
+### 多 GPU 并行
 
-**Key implementation details**:
-- Model states are moved to CPU (`v.cpu()`) before passing to workers to avoid GPU memory conflicts
-- Workers load models onto their assigned GPU device
-- Results are collected and processed on the server
+**GPU 分配** (`src/utils/parallel.py`):
+- `run_parallel_clients()`: 编排并行执行。
+- **顺序保证**: 返回结果列表的顺序严格对应输入参数列表（即 `selected_clients` 的顺序）。
+- `BaseServer.__init__()` 负责创建 `self.client_gpu` 映射和进程池。
 
-### Data Management
+### 数据管理
 
-**Automatic Data Pipeline** (`src/data_gen/`):
-- `prepare_data()` in `__init__.py` checks if preprocessed data exists
-- If missing, calls dataset-specific `process_{dataset}.py` to download and partition
-- Saves partitioned data to `datasets/{dataset}/{partition}/` directory
-- `BaseServer` loads data via `load_data()` from `src/utils/load_data.py`
+- `src/data_gen/__init__.py`: 统一数据入口。
+- `src/utils/load_data.py`: `BaseServer` 加载数据的接口。
+- 支持策略: `iid`, `dirichlet` (`--alpha`), `pathological` (`--n_classes`)。
 
-**Partitioning Strategies**:
-- `iid`: Uniform random distribution
-- `dirichlet`: Non-IID with Dirichlet distribution (parameter: `--alpha`)
-- `pathological`: Each client has data from limited classes (parameter: `--n_classes`)
+### 扩展指南
 
-### Personalized FL Support
+**添加新算法**:
+1. 创建 `src/newalgo.py`。
+2. 在 `main.py` 的 `choices` 中添加新算法名。
+3. 创建 `scripts/newalgo.sh`。
+4. 在 `run.sh` 中添加配置和执行分支。
 
-The framework distinguishes between:
-- **Global FL** (e.g., FedAvg, MOON, FedPLN): `BaseServer(model, False, args)`
-  - Single `self.test_set` for global evaluation
-  - Model aggregation updates global model
+### 性能最佳实践 (Performance Tips)
 
-- **Personalized FL** (e.g., FedDPL): `BaseServer(model, True, args)`
-  - `self.test_set` is a list of per-client test sets
-  - Server maintains `self.client_model_states` for local models
-  - Only personalization network/prototypes are aggregated
+- **DataLoader 切片**: 严禁直接对 Dataset 进行切片 `dataset[0:100]`，这通常会返回 Tensor 元组导致 DataLoader 崩溃。**必须**使用 `torch.utils.data.Subset(dataset, indices)`。
+- **向量化操作**: 避免在训练循环中对 batch 内的样本进行 Python 循环和 GPU 传输（如原型匹配）。应使用 Tensor 向量化索引。
+- **模型复制**: 在 worker 进程中，优先使用 `get_model()` + `load_state_dict()`，避免 `copy.deepcopy()` 的序列化开销。
 
-### Model Architecture
+## 支持算法 (17种)
 
-Models defined in `src/models/`:
-- `CNN`: Configurable input channels (1 for MNIST, 3 for CIFAR-10)
-- `ResNet18`: Standard ResNet-18 architecture
-
-**Important**: Models return `(output, feature)` tuple for prototype-based algorithms.
-
-`get_model(model_name, dataset)` factory function handles model instantiation with correct configuration.
-
-## Key Implementation Patterns
-
-### Algorithm Extension
-
-To add a new algorithm `newalgo`:
-
-1. Create `src/newalgo.py` with:
-   ```python
-   def add_args(parser):
-       group = parser.add_argument_group("NewAlgo Specific Arguments")
-       group.add_argument("--param", type=float, default=1.0)
-       return parser
-
-   def client_worker(client_id, params):
-       # Unpack params and implement local training
-       return client_id, [loss, model.state_dict()]
-
-   class Server(BaseServer):
-       def __init__(self, args):
-           model = get_model(args.model, args.dataset)
-           super().__init__(model, personalized_flag, args)
-
-       def fit(self):
-           # Implement federated training rounds
-           pass
-   ```
-
-2. Add to `main.py` choices: `choices=["fedavg", "fedavg_stream", "moon", "fedpln", "feddpl", "fedproto", "newalgo"]`
-
-3. Create `scripts/newalgo.sh` for batch experiments
-
-### Dataset Extension
-
-To add a new dataset:
-
-1. Create `src/data_gen/process_{dataset}.py` with:
-   ```python
-   def process(save_dir, num_clients, partition_method, alpha=0.5, n_classes=2):
-       # Download, preprocess, partition, and save data
-       pass
-   ```
-
-2. Update `prepare_data()` in `src/data_gen/__init__.py` to handle the new dataset
-
-3. Add dataset to `main.py` choices: `choices=["mnist", "cifar10", "newdataset"]`
-
-### Avoiding Common Pitfalls
-
-- **Import statements**: Only use `import copy` if explicitly calling `copy.deepcopy()` in the module
-- **GPU memory**: Always move shared model states to CPU before passing to parallel workers
-- **Loss calculation**: Use incremental summation pattern to avoid list memory overhead:
-  ```python
-  total_loss = 0.0
-  for res in results:
-      total_loss += res[0]
-  avg_loss = total_loss / num_clients
-  ```
-- **Parameter passing**: Client workers receive parameters as lists, not kwargs. Maintain consistent ordering.
-
-## Results and Checkpoints
-
-- Results saved to `results/{dataset}/{partition}/{algo}/` directory
-- Test mode (`--test 1`): Saves to `test/` subdirectory
-- Checkpoint format varies by algorithm (see individual `save()` methods)
+FedAvg, FedAvg Stream, MOON, FedPLN, FedDPL, FedProto, FedKD, FML, ProxyFL, FedPer, FedProx, FedSA, FedLSA, LG-FedAvg, FedRep, FedALA (New), FedTGP (New).

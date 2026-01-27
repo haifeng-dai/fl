@@ -1,85 +1,72 @@
-# PROJECT KNOWLEDGE BASE
+# 项目知识库 (Project Knowledge Base)
 
-**Generated:** 2026-01-20
-**Type:** Federated Learning Research Framework
-**Stack:** Python 3.14, PyTorch 2.6+, CUDA 13.0, uv
+**生成日期:** 2026-01-27
+**类型:** 联邦学习研究框架 (Unified Pipeline)
+**技术栈:** Python 3.14, PyTorch 2.6+, CUDA 13.0, uv
 
-## OVERVIEW
+## 概览 (Overview)
 
-Federated learning framework with multi-GPU parallel training support. Implements 5+ FL algorithms (FedAvg, MOON, FedProto, FedPLN, FedDPL) with IID/Dirichlet/Pathological data partitioning.
+这是一个支持多 GPU 并行训练的高效联邦学习框架。实现了 **17 种 FL 算法** (包括 FedAvg, MOON, FedProto, FedALA, FedTGP 等)，支持 IID、Dirichlet 和 Pathological 数据划分。
 
-## STRUCTURE
+## 目录结构 (Structure)
 
 ```
 ./
-├── main.py              # Entry: two-phase arg parsing → dynamic algo load
-├── run.sh               # Shell orchestrator → scripts/*.sh dispatch
-├── pyproject.toml       # uv + BasedPyright (standard mode)
-├── src/                 # Core package (18 .py files)
-│   ├── <algo>.py        # fedavg, moon, fedproto, fedpln, feddpl
-│   ├── models/          # CNN, ResNet18 (return tuple: logits, features)
-│   ├── utils/           # BaseClient, BaseServer, parallel, aggregate
-│   └── data_gen/        # Dataset prep (MNIST, CIFAR-10)
-├── scripts/             # Grid search shell scripts (12-13 nested loops)
-├── test/                # Manual test scripts (no pytest)
-└── datasets/            # Generated partition data
+├── main.py              # 入口：两阶段参数解析 → 动态算法加载
+├── run.sh               # 批量实验编排脚本 → 调度 scripts/*.sh
+├── pyproject.toml       # uv + BasedPyright 配置
+├── src/                 # 核心包
+│   ├── <algo>.py        # fedavg, moon, fedproto, fedala, fedtgp 等 17 个算法
+│   ├── models/          # CNN, ResNet18/50, HARCNN (返回 tuple: logits, features)
+│   ├── utils/           # BaseServer, 并行化 (parallel), 聚合 (aggregate), 评估
+│   └── data_gen/        # 数据集准备 (MNIST, CIFAR-10, HAR)
+├── scripts/             # 网格搜索 Shell 脚本 (嵌套循环支持批量实验)
+└── datasets/            # 生成的持久化分区数据
 ```
 
-## WHERE TO LOOK
+## 关键代码位置 (Where to Look)
 
-| Task | Location | Notes |
+| 任务 | 位置 | 备注 |
 |------|----------|-------|
-| Add algorithm | `src/<algo>.py` | Inherit BaseClient/BaseServer, export `add_args`, `Client`, `Server` |
-| Add model | `src/models/` | Must return `(logits, features)` tuple |
-| Multi-GPU training | `src/utils/fed_utils.py:94-116` | `__start_pools()` handles GPU allocation |
-| Data partitioning | `src/data_gen/__init__.py` | **CRITICAL BUG: line 149 uses wrong import path** |
-| Parallel execution | `src/utils/parallel.py` | `run_parallel_clients()` |
+| 添加算法 | `src/<algo>.py` | 继承 `BaseServer`, 导出 `add_args`, `client_worker`, `Server` |
+| 添加模型 | `src/models/` | 必须返回 `(logits, features)` 元组 |
+| 多 GPU 训练 | `src/utils/fed_utils.py` | `_BaseServer__start_pools()` 处理 GPU 分配 |
+| 数据划分 | `src/data_gen/__init__.py` | 统一的数据准备入口 |
+| 并行执行 | `src/utils/parallel.py` | `run_parallel_clients()` 保证结果顺序与输入一致 |
 
-## CONVENTIONS
+## 开发规范 (Conventions)
 
-- **Imports**: stdlib → third-party → local (blank lines between)
-- **Type hints**: Required, use `list[type]`, `float | None`
-- **Naming**: PascalCase (classes), snake_case (funcs/vars), UPPER_SNAKE_CASE (const)
-- **Formatting**: Black (88 char), 4 spaces, 2 blank lines (top-level)
-- **Multi-GPU**: Must call `set_start_method("spawn", force=True)` in main
-- **Cleanup**: Always call `server.close()` in finally block
+- **导入**: 推荐使用绝对导入 `from .utils.fed_utils import ...`
+- **类型提示**: 强烈建议使用
+- **命名**: PascalCase (类), snake_case (函数/变量), UPPER_SNAKE_CASE (常量)
+- **多 GPU**: 主进程必须调用 `set_start_method("spawn", force=True)`
+- **资源清理**: `Server.close()` 会自动清理进程池
 
-## ANTI-PATTERNS (THIS PROJECT)
+## 常见陷阱 (Anti-Patterns / Pitfalls)
 
-- **CRITICAL BUG**: `src/data_gen/__init__.py:149` → `data_scripts.process_X` should be `src.data_gen.process_X`
-- **Documentation mismatch**: README.md references non-existent `data_scripts/`
-- **Code duplication**: `fedpln.py` and `feddpl.py` are ~95% identical (copy-paste inheritance)
-- **Commented debug code**: `moon.py` lines 97, 110-112, 120-122 contain debug code
-- **Magic numbers**: CNN (7*7, 8*8, 128, 64), ResNet (32, 32, 128), PLN init values (-0.1, 0.1, 0.01)
-- **Hardcoded paths**: `./datasets/`, `./results/` scattered across data_gen/__init__.py, load_data.py, fed_utils.py
-- **Inconsistent device management**: Mixed `.to(device)` patterns, redundant deep copies in evaluate.py
-- **Unused import**: `feddpl.py:2` imports `cli` from pydoc (never used)
-- **Inconsistent return values**: Client.train() returns scalar (FedAvg) vs tuple (FedProto, FedPLN)
-- **Resource leak risk**: `__del__()` cleanup in fed_utils.py is unreliable; use try/finally instead
-- **No test framework**: Manual testing only via `uv run main.py --test`
-- **Deep nested loops**: `scripts/fedpln.sh` has 12-13 nested for loops (extreme)
+- **DataLoader 切片**: **严禁**直接切片 Dataset (如 `dataset[0:10]`)，这通常会返回 Tensor 元组导致 DataLoader 崩溃。**必须**使用 `torch.utils.data.Subset`。
+- **Python 循环 GPU 操作**: 在训练循环中避免使用 `for i in batch: tensor.to(device)`。这会严重阻塞 GPU 流水线。应使用向量化操作 (如 `global_protos[y]`)。
+- **模型复制**: 在多进程 worker 中，优先使用 `get_model()` + `load_state_dict()` 而非 `copy.deepcopy()`，前者更快且不仅限于 pickle。
+- **路径硬编码**: 尽量使用 `os.path.join`，避免硬编码路径分隔符。
 
-## COMMANDS
+## 常用命令 (Commands)
 
 ```bash
-# Setup
+# 安装依赖
 uv sync
 
-# Run experiment
+# 运行单个实验
 uv run main.py --algo fedavg --dataset mnist --gpus 0,1
 
-# Grid search
+# 运行批量实验 (推荐)
 ./run.sh
 
-# Format
-uvx black .
-
-# Type check (via editor - BasedPyright configured in pyproject.toml)
+# 格式化代码
+uv run black .
 ```
 
-## NOTES
+## 注意事项 (Notes)
 
-- Models MUST return `(logits, features)` tuple for contrastive algorithms
-- Use `.to(device)` for ALL tensors in training loops
-- Data auto-prepares if missing (calls `process_<dataset>()`)
-- Results saved to `results/<dataset>_<partition>_<num_clients>/<epochs>_<batch_size>_<lr>.pt`
+- **算法支持**: 目前支持 17 种算法，包括最新的 FedALA 和 FedTGP。
+- **结果保存**: 结果保存在 `results/<dataset>_<partition>_<num_clients>/` 目录下。
+- **数据准备**: 首次运行会自动下载和处理数据。

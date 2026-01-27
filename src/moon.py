@@ -1,6 +1,6 @@
 import argparse
 import copy
-import time
+import time, os
 
 import numpy as np
 import torch
@@ -171,6 +171,9 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
-        file_name: str = f"{self.args.mu}_{self.args.tau}"
         f = {"acc": self.acc, "loss": self.loss, "state_dict": self.model.state_dict()}
-        super().deal_save(f, file_name)
+        super().deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = f"{self.save_name_pre}_{self.args.mu}_{self.args.tau}"
+        return os.path.join(self.log_path, f"{self.file_name}.log")

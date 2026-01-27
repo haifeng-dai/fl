@@ -1,73 +1,81 @@
 # Gemini 代码理解报告
 
+**生成日期:** 2026-01-27
+**类型:** 联邦学习研究框架 (Unified Pipeline)
+**语言:** 中文 (Chinese)
+
 ## 项目概览
 
-本项目是一个具有统一流水线的多 GPU 并行联邦学习框架。它旨在通过不同的算法和数据划分策略进行联邦学习实验。
+本项目是一个具有统一流水线的高效多 GPU 并行联邦学习框架。它旨在简化不同算法（目前支持 17 种）在各种数据分布策略下的实验流程。
 
 **核心特性：**
 
-*   **统一入口点：** 所有实验都通过 `main.py` 运行，集成了数据准备、客户端分配和训练流程。
-*   **自动数据管理：** 框架会自动检测数据。如果 `datasets/` 目录下缺失数据，会自动调用 `data_scripts` 中的逻辑进行下载、预处理和划分。
-*   **算法与参数解耦：** 框架支持动态加载算法特定的参数。通过在算法脚本中定义 `add_args` 函数，实现通用参数与算法参数的隔离。
-*   **高性能模拟：** 支持多 GPU 并行进行客户端训练。每个客户端被分配到一个固定的 GPU，以最大化计算效率。
+*   **统一入口 (One-Stop Entry)**：所有实验（数据准备、训练、评估）均由 `main.py` 统一调度。
+*   **自动数据管理**: 自动检测、下载、预处理和划分数据集（MNIST, CIFAR-10, HAR 等）。
+*   **算法解耦**: 通过 `src/<algo>.py` 中的 `add_args` 动态加载算法特定参数，实现核心框架与算法逻辑的解耦。
+*   **高性能模拟**: 基于 `torch.multiprocessing` 的多 GPU 并行架构，支持为每个客户端动态分配 GPU 资源。
 
-**技术栈：**
+## 技术栈
 
-*   **语言：** Python
-*   **核心库：** PyTorch (深度学习), NumPy (数值计算)
-*   **依赖管理：** `uv` (现代 Python 包管理器)
+*   **语言**: Python 3.14
+*   **深度学习**: PyTorch 2.6+
+*   **依赖管理**: `uv`
+*   **并行计算**: CUDA 13.0
 
-**架构设计：**
+## 架构设计
 
-*   `main.py`：项目的中心枢纽，负责参数解析、数据加载触发、模型初始化以及联邦学习轮次的调度。
-*   `src/`：存放联邦学习核心算法。
-    *   `fedavg.py`：标准的联邦平均算法。
-    *   `moon.py`：基于模型对比学习的联邦学习算法。
-    *   `fedpln.py`：(待补充具体描述) 框架支持的另一种联邦学习算法。
-    *   `utils/`：包含聚合逻辑 (`aggregate.py`)、评估指标 (`evaluate.py`)、通用联邦工具 (`fed_utils.py`)、数据加载 (`load_data.py`) 和并行执行驱动 (`parallel.py`)。
-*   `models/`：定义神经网络架构，如 `cnn.py`。
-*   `data_scripts/`：数据集特定的处理脚本，如 `process_mnist.py`。
-*   `datasets/`：持久化存储原始数据及划分后的客户端数据。
+### 目录结构
 
-## 构建与运行
+*   `main.py`: 中央调度器。负责两阶段参数解析（通用+算法特定）、触发数据准备、初始化 Server 并运行。
+*   `run.sh`: 批量实验编排脚本。通过环境变量控制参数，调用 `scripts/` 下的脚本。
+*   `src/`: 核心代码库。
+    *   `fedavg.py`, `fedproto.py`, `fedala.py`, `fedtgp.py`: 具体算法实现。
+    *   `utils/`: 通用工具。
+        *   `fed_utils.py`: `BaseServer` 基类，处理 GPU 进程池初始化。
+        *   `parallel.py`: `run_parallel_clients` 函数，核心并行驱动，保证结果保序性。
+        *   `load_data.py`: 数据加载接口。
+    *   `models/`: 模型定义 (`cnn.py`, `resnet.py`)，**必须**返回 `(logits, features)` 元组。
+    *   `data_gen/`: 数据集处理逻辑。
+*   `datasets/`: 持久化存储处理后的数据。
 
-### 环境配置
+### 关键流程
 
-项目使用 `uv` 进行依赖管理。请确保已安装 `uv`，然后运行：
+1.  **启动**: `main.py` 解析 `--algo` -> 导入 `src/{algo}.py` -> 解析完整参数。
+2.  **数据**: 检查 `datasets/` -> 若缺失则调用 `src.data_gen` -> 生成分区数据。
+3.  **初始化**: `Server` 初始化模型 -> `BaseServer` 建立 `client_gpu` 映射和进程池。
+4.  **训练**: `Server.fit()` 循环 -> `run_parallel_clients` 分发任务到 Worker -> 收集结果 -> 聚合更新。
 
-```bash
-uv sync
-```
+## 支持算法 (17种)
 
-### 运行实验
-
-使用 `uv run main.py` 启动实验。
-
-**示例 1：使用 Dirichlet 划分运行 FedAvg**
-```bash
-uv run main.py --algo fedavg --dataset mnist --partition dirichlet --alpha 0.5 --num_clients 10 --gpus 0,1
-```
-
-**示例 2：使用病态划分运行 MOON**
-```bash
-uv run main.py --algo moon --dataset mnist --partition pathological --n_classes 2 --num_clients 10 --gpus 0
-```
+1.  **基础**: FedAvg, FedProx, LG-FedAvg, FedAvg Stream
+2.  **个性化**: FedPer, FedRep, FedProto, FedALA (New), FedTGP (New), FedPLN, FedDPL
+3.  **蒸馏**: FedKD, FedAMD, FML, ProxyFL
+4.  **其他**: MOON (对比学习), FedSA/FedLSA (语义锚点)
 
 ## 开发规范
 
-### 添加新数据集
-
-1.  在 `data_scripts/` 目录中创建一个新的 `process_xxx.py` 文件。
-2.  在该文件中实现一个 `process()` 函数。该函数应下载数据、执行预处理（如归一化），并根据 `data_scripts/__init__.py` 中的逻辑保存划分后的数据。
-
 ### 添加新算法
 
-1.  在 `src/` 目录中创建一个新的 Python 文件。
-2.  实现 `Server` 类（负责全局聚合和调度）和 `Client` 类（负责本地训练）。
-3.  实现一个 `add_args(parser)` 函数，用于向全局解析器添加该算法特有的命令行参数。
-4.  在 `main.py` 中确保该算法能被动态识别（通常通过文件名或显式注册）。
+1.  在 `src/` 下新建 `.py` 文件。
+2.  定义 `add_args(parser)`: 注册超参。
+3.  定义 `client_worker(params)`: 客户端训练逻辑（**必须**接收列表参数，建议返回 client_id）。
+4.  定义 `Server(BaseServer)`: 服务器聚合逻辑（**注意**: 更新状态时必须使用 `selected_clients[i]` 索引）。
 
-### 性能建议
+### 性能陷阱 (Critical Performance Tips)
 
-*   **GPU 分配：** 通过 `--gpus` 参数传入可用的 GPU 索引列表。框架会自动在客户端之间负载均衡。
-*   **多进程：** 客户端训练是在独立的进程中运行的，确保本地训练代码是线程/进程安全的。
+*   **Dataset 切片**: **严禁**使用 `dataset[start:end]` 直接切片（会导致 DataLoader 异常）。**必须**使用 `torch.utils.data.Subset(dataset, indices)`。
+*   **GPU 循环**: 避免在训练循环中对 batch 内的每个样本进行 Python 循环和 `to(device)` 操作（例如原型匹配）。这会造成 GPU 流水线严重阻塞（"卡死"现象）。**必须**使用 Tensor 向量化操作。
+*   **进程间通信**: 在 worker 中优先使用 `get_model()` + `load_state_dict()` 重新创建模型，这比 `copy.deepcopy()` 在多进程下更高效且兼容性更好。
+
+## 运行示例
+
+```bash
+# 安装依赖
+uv sync
+
+# 运行单个实验
+uv run main.py --algo fedavg --dataset mnist --gpus 0,1
+
+# 运行批量实验 (FedALA & FedTGP)
+./run.sh
+```

@@ -1,5 +1,6 @@
 import argparse
 import time
+import os
 
 import numpy as np
 import torch
@@ -28,11 +29,7 @@ def client_worker(params):
 
     # 2. Setup optimizer and data loader
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(
-        train_set,
-        batch_size=batch_size,
-        shuffle=True,
-    )
+    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     # 3. Local training loop
     total_loss = 0.0
@@ -126,4 +123,8 @@ class Server(BaseServer):
             "loss": self.loss,
             "state_dict": self.model.state_dict(),
         }
-        super().deal_save(f)
+        self.deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = self.save_name_pre
+        return os.path.join(self.log_path, f"{self.file_name}.log")

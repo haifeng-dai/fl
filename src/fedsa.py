@@ -1,4 +1,4 @@
-import argparse
+import argparse, os
 import time
 
 import numpy as np
@@ -285,7 +285,6 @@ class Server(BaseServer):
             ] + alpha * new_anchor.cpu()
 
     def save(self):
-        file_name = f"{self.args.alpha_sa}_{self.args.lambda_r}_{self.args.lambda_mcl}_{self.args.lambda_cc}"
         f = {
             "acc": self.acc,
             "loss": self.loss,
@@ -294,4 +293,8 @@ class Server(BaseServer):
                 "clients": self.clients_state,
             },
         }
-        super().deal_save(f, file_name)
+        super().deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = f"{self.save_name_pre}_{self.args.alpha_sa}_{self.args.lambda_r}_{self.args.lambda_mcl}_{self.args.lambda_cc}"
+        return os.path.join(self.log_path, f"{self.file_name}.log")

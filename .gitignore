@@ -2,6 +2,7 @@ __pycache__/
 datasets/
 test/
 results/
+logs/
 .venv/
 .vscode/
 .zed/
@@ -9,5 +10,3 @@ results/
 .claude/
 
 uv.lock
-test*
-#pyproject.toml

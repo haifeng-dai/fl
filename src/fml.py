@@ -1,6 +1,6 @@
 import argparse
 import copy
-import time
+import time, os
 
 import numpy as np
 import torch
@@ -221,7 +221,6 @@ class Server(BaseServer):
         self.acc.append(avg_acc)
 
     def save(self):
-        file_name: str = f"{self.args.alpha_fml}_{self.args.beta_fml}"
         f = {
             "acc": self.acc,
             "loss": self.loss,
@@ -230,4 +229,10 @@ class Server(BaseServer):
                 "local": self.client_states,
             },
         }
-        super().deal_save(f, file_name)
+        super().deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = (
+            f"{self.save_name_pre}_{self.args.alpha_fml}_{self.args.beta_fml}"
+        )
+        return os.path.join(self.log_path, f"{self.file_name}.log")

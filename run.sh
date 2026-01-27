@@ -3,21 +3,24 @@
 # =============
 # Global Config
 # =============
-# fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg,fedrep
-export ALGO="fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg,fedrep"
+# fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg,fedrep,fedala,fedtgp
+export ALGOS="fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg,fedrep,fedala,fedtgp"
 
 # =============
 # Data
 # =============
+# mnist,cifar10,cifar100,har,har_feat
 export DATASETS="mnist,cifar10"
+# cnn,resnet18,resnet50,harcnn,harmlp
 export MODELS="cnn"
 export NUM_CLIENTS="10"
 
 # =============
 # Partition
 # =============
-export PARTITIONS="iid,dirichlet,pathological"
-export ALPHAS="0.1"
+# iid,dirichlet,pathological
+export PARTITIONS="pathological"
+export ALPHAS="0.1,0.5"
 export N_CLASSES="2"
 
 # =============
@@ -25,14 +28,15 @@ export N_CLASSES="2"
 # =============
 export EPOCHS="10"
 export LRS="0.01"
-export ROUNDS="200"
+export ROUNDS="1000"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
 
 # =============
 # Compute
 # =============
-export GPUS="0"
+# 3,2,1,0  0,1,2,3
+export GPUS="0,1,2,3"
 export MP=1
 export MAX_WORKERS_PER_GPU=10
 # sequential, stream, multi_stream
@@ -110,13 +114,27 @@ export MUS_PROXY="1.0"
 # FedRep
 export EPOCHS_HEAD_REP="5"
 
+# FedALA
+export ETAS_ALA="1.0"
+export RAND_PERCENTS_ALA="80"
+export LAYER_IDXS_ALA="2"
+export ALA_THRESHOLDS_ALA="0.1"
+export NUM_PRE_LOSSES_ALA="10"
+
+# FedTGP
+export LAMDAS_TGP="10.0"
+export SERVER_EPOCHS_TGP="10"
+export SERVER_LRS_TGP="0.01"
+export MARGIN_THRESHOLDS_TGP="1.0"
+export FEATURE_DIMS_TGP="512"
+
 # ==============================================================================
 # Execution
 # ==============================================================================
 
-for ALG in ${ALGO//,/ }; do
-    echo "Starting experiment for algorithm: $ALG"
-    case $ALG in
+for ALGO in ${ALGOS//,/ }; do
+    echo "Starting experiment for algorithm: $ALGO"
+    case $ALGO in
         "fedavg")
             bash ./scripts/fedavg.sh
             ;;
@@ -159,11 +177,17 @@ for ALG in ${ALGO//,/ }; do
         "fedrep")
             bash ./scripts/fedrep.sh
             ;;
+        "fedala")
+            bash ./scripts/fedala.sh
+            ;;
+        "fedtgp")
+            bash ./scripts/fedtgp.sh
+            ;;
         *)
-            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl, fedper, fedprox, fedsa, fedlsa, lgfedavg, fedrep"
+            echo "Unknown algorithm: $ALGO. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl, fedper, fedprox, fedsa, fedlsa, lgfedavg, fedrep, fedala, fedtgp"
             exit 1
             ;;
     esac
-    echo "Finished experiment for algorithm: $ALG"
+    echo "Finished experiment for algorithm: $ALGO"
     echo "------------------------------------------------"
 done

@@ -1,7 +1,7 @@
 import argparse
 import copy
 import time
-import numpy as np
+import numpy as np, os
 import torch
 from .utils import (
     BaseServer,
@@ -259,19 +259,16 @@ class Server(BaseServer):
         self.acc.append(sum(current_acc) / len(current_acc))
 
     def save(self):
-        """
-        Save the model checkpoint.
-        """
-        file_name: str = (
-            f"{self.args.dataset}_{self.args.model}_{self.args.epochs}_{self.args.epochs_head}"
-        )
         f = {
             "acc": self.acc,
             "loss": self.loss,
-            # We save the global body and all local heads
-            "global_body": self.model.extractor.state_dict(),
-            "client_heads": self.client_heads,
+            "state_dict": {
+                "global_body": self.model.extractor.state_dict(),
+                "client_heads": self.client_heads,
+            },
         }
-        # Use BaseServer's deal_save (if it handles dicts) or custom save logic
-        # Here we assume BaseServer.deal_save works similarly to other files
-        super().deal_save(f, file_name)
+        super().deal_save(f)
+
+    def get_log_path(self):
+        self.file_name = f"{self.save_name_pre}_{self.args.dataset}_{self.args.model}_{self.args.epochs}_{self.args.epochs_head}"
+        return os.path.join(self.log_path, f"{self.file_name}.log")
