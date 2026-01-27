@@ -70,6 +70,9 @@ def margin(anchor: torch.Tensor) -> float:
 
 
 def client_worker(params):
+    """
+    FedSA local training with Semantic Anchors and multiple regularizations.
+    """
     (
         device,
         model_state,
@@ -87,6 +90,7 @@ def client_worker(params):
         num_classes,
     ) = params
 
+    # 1. Initialize Model
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
 
@@ -99,17 +103,27 @@ def client_worker(params):
 
     local_anchors = local_anchors.to(device)
     global_anchors = global_anchors.to(device)
+    # Calculate margin 'd' for MCL loss
     d = max(margin(global_anchors), margin(local_anchors))
 
+    # 2. Training Loop
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             logits, features = model(x)
+            # Classifier output for global anchors
             output = model.classifier(global_anchors)
 
+            # Standard Cross Entropy
             loss_ce = ce_loss(logits, y)
+
+            # Regression Loss (L_r): Align features with global anchors
             loss_r = mse_loss(features, global_anchors[y])
+
+            # Margin-enhanced Contrastive Loss (L_mcl)
             loss_mcl = mcl_loss(features, global_anchors, num_classes, y, d)
+
+            # Classifier Calibration Loss (L_cc)
             loss_cc = ce_loss(output, torch.arange(num_classes, device=device))
 
             loss = (
@@ -126,7 +140,7 @@ def client_worker(params):
 
     avg_loss = total_loss / num_batches
 
-    # Calculate new local anchors
+    # 3. Calculate new local anchors (average features per class)
     with torch.no_grad():
         anchor_sums = {}
         anchor_counts = {}

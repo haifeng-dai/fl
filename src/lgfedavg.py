@@ -16,6 +16,9 @@ from .utils import (
 
 
 def client_worker(params):
+    """
+    LG-FedAvg local training.
+    """
     (
         device,
         local_body_state,
@@ -28,19 +31,20 @@ def client_worker(params):
         epochs,
     ) = params
 
-    # Initialize model
+    # 1. Initialize model
     model = get_model(model_name, dataset_name).to(device)
 
-    # Load parameters directly into sub-modules
-    # 1. Load local body into extractor
+    # 2. Load parameters directly into sub-modules
+    # Load local body (extractor) - personalized
     if local_body_state is not None:
         model.extractor.load_state_dict(local_body_state)
-    # 2. Load global head into classifier
+    # Load global head (classifier) - shared
     model.classifier.load_state_dict(global_head_state)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
+    # 3. Training Loop
     model.train()
     total_loss = 0.0
     num_batches = 0
@@ -60,9 +64,11 @@ def client_worker(params):
 
     avg_loss = total_loss / num_batches
 
-    # Extract body and head directly from sub-modules
+    # 4. Extract body and head directly from sub-modules
     # Move them to CPU
+    # Body is kept local
     new_body_state = {k: v.cpu() for k, v in model.extractor.state_dict().items()}
+    # Head is sent to server for aggregation
     new_head_state = {k: v.cpu() for k, v in model.classifier.state_dict().items()}
 
     return [avg_loss, new_body_state, new_head_state]

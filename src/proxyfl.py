@@ -35,6 +35,9 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
+    """
+    ProxyFL local training with mutual distillation between private local model and shared proxy model.
+    """
     (
         device,
         proxy_state,
@@ -48,11 +51,11 @@ def client_worker(params):
         mu,
     ) = params
 
-    # 1. Initialize Proxy Model (Shared)
+    # 1. Initialize Proxy Model (Shared/Public)
     proxy_model = get_model(model_name, dataset_name).to(device)
     proxy_model.load_state_dict(proxy_state)
 
-    # 2. Initialize Local Model (Private)
+    # 2. Initialize Local Model (Private/Personalized)
     local_model = get_model(model_name, dataset_name).to(device)
     local_model.load_state_dict(local_state)
 
@@ -78,15 +81,15 @@ def client_worker(params):
             out_p, _ = proxy_model(x)
             out_l, _ = local_model(x)
 
-            # Cross Entropy
+            # Cross Entropy Loss
             ce_p = ce_loss(out_p, y)
             ce_l = ce_loss(out_l, y)
 
-            # Mutual Distillation
-            # KL(Local || Proxy) -> Proxy learns from Local
+            # Mutual Distillation (KL Divergence)
+            # KL(Local || Proxy) -> Proxy learns from Local (to aggregate info)
             loss_kl_p = kl_loss(out_p, out_l.detach())
 
-            # KL(Proxy || Local) -> Local learns from Proxy
+            # KL(Proxy || Local) -> Local learns from Proxy (to gain global info)
             loss_kl_l = kl_loss(out_l, out_p.detach())
 
             loss_p = ce_p + mu * loss_kl_p

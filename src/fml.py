@@ -34,6 +34,9 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
+    """
+    FML (Federated Mutual Learning) local training.
+    """
     (
         device,
         global_state,
@@ -85,11 +88,11 @@ def client_worker(params):
             # KL(P || Q) -> P is target (detach), Q is input (log_softmax)
 
             # Loss for Global: CE + beta * KL(Local || Global)
-            # We want Global to resemble Local
+            # Global model learns from Local model
             loss_kl_g = kl_loss(out_g, out_l.detach())
 
             # Loss for Local: CE + alpha * KL(Global || Local)
-            # We want Local to resemble Global
+            # Local model learns from Global model
             loss_kl_l = kl_loss(out_l, out_g.detach())
 
             loss_g = ce_g + beta * loss_kl_g

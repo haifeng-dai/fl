@@ -111,6 +111,9 @@ class PLN(torch.nn.Module):
 
 
 def client_worker(params):
+    """
+    FedPLN local training with Prototype Learning Network.
+    """
     (
         device,
         model_state,
@@ -135,6 +138,7 @@ def client_worker(params):
         har,
     ) = params
 
+    # 1. Initialize Model and PLN
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
     pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
@@ -143,7 +147,7 @@ def client_worker(params):
     pln.load_state_dict(pln_state)
     all_classes = torch.arange(0, num_classes).to(device)
 
-    # Train Model
+    # 2. Phase 1: Train Model (Feature Extractor)
     avg_loss_m = 0.0
     model.train()
     pln.eval()
@@ -158,6 +162,7 @@ def client_worker(params):
             output, feature = model(x)
             loss_ce = ce_loss(output, y)
 
+            # Prototype Loss: Distance between features and PLN prototypes
             with torch.no_grad():
                 protos = pln(all_classes)
             dist = torch.cdist(feature, protos, p=2) ** 2
@@ -173,7 +178,7 @@ def client_worker(params):
 
     avg_loss_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
 
-    # Train PLN
+    # 3. Phase 2: Train PLN (Prototypes)
     avg_loss_p = 0.0
     model.eval()
     pln.train()
@@ -195,6 +200,8 @@ def client_worker(params):
 
             with torch.no_grad():
                 _, feature = model(x)
+
+            # Loss: Classification based on distance to prototypes
             dist = torch.cdist(feature, protos, p=2) ** 2
             loss = ce_loss(-torch.sqrt(dist), y)
 
@@ -330,7 +337,9 @@ class Server(BaseServer):
         self.acc_p.append(acc_p)
 
     def save(self):
-        file_name: str = f"{self.args.lambda_}_{self.args.epoch_pln}_{self.args.lr_pln}_{self.args.batch_size_pln}_{self.args.feature_dim}_{self.args.depth_pln}_{self.args.width_pln}_{self.args.mode}_{self.args.har}_{self.args.fixed_proto}_{self.args.init_emb}"
+        file_name: str = (
+            f"{self.args.lambda_}_{self.args.epoch_pln}_{self.args.lr_pln}_{self.args.batch_size_pln}_{self.args.feature_dim}_{self.args.depth_pln}_{self.args.width_pln}_{self.args.mode}_{self.args.har}_{self.args.fixed_proto}_{self.args.init_emb}"
+        )
         f = {
             "acc": self.acc,
             "acc_p": self.acc_p,

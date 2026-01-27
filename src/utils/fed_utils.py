@@ -5,7 +5,7 @@ import os
 import torch
 import torch.multiprocessing as mp
 
-from ..models import CNN, ResNet18
+from ..models import CNN, ResNet18, ResNet50, HARCNN, HARMLP
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model
 from .load_data import load_data
@@ -135,7 +135,13 @@ class BaseServer:
 def get_model(model_name, dataset):
     num_classes = 100 if dataset == "cifar100" else 10
     if model_name == "resnet18":
-        global_model = ResNet18(num_classes=num_classes)
+        global_model = ResNet18(num_classes=num_classes, dataset_name=dataset)
+    elif model_name == "resnet50":
+        global_model = ResNet50(num_classes=num_classes, dataset_name=dataset)
+    elif model_name == "harcnn":
+        global_model = HARCNN(in_channels=9, num_classes=6)
+    elif model_name == "harmlp":
+        global_model = HARMLP(input_dim=561, num_classes=6)
     elif model_name == "cnn":
         # 根据数据集选择输入通道数
         input_channels = 1 if dataset == "mnist" else 3

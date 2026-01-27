@@ -119,7 +119,10 @@ def reconstruct_param(compressed_param, device):
 
 
 def client_worker(params):
-    # 安全解包参数（避免变量名冲突）
+    """
+    FedKD local training with SVD-based communication compression and mutual knowledge distillation.
+    """
+    # Safe unpacking
     (
         device,
         model_name,
@@ -135,37 +138,38 @@ def client_worker(params):
         epochs,
         energy_threshold,
     ) = params
-    # print(f"Client on device {device} starting training.")
 
-    # 1. 初始化模型
+    # 1. Initialize Models
+    # Local personalized model
     model = get_model(model_name, dataset_name).to(device)
+    # Global proxy model (constructed from compressed SVD params)
     model_g = get_model(model_name, dataset_name).to(device)
 
     with torch.no_grad():
-        # A. 重构并加载全局代理模型参数
+        # A. Reconstruct and load global proxy parameters from SVD components
         global_state_dict = {}
         for name, param_data in compressed_params_g.items():
             global_state_dict[name] = reconstruct_param(param_data, device)
         model_g.load_state_dict(global_state_dict)
 
-        # B. 加载本地模型参数
+        # B. Load local model parameters
         if prev_local_state is not None:
             model.load_state_dict(prev_local_state)
         else:
-            # 第一轮：本地模型从全局参数起点开始
+            # First round: start from global state
             model.load_state_dict(global_state_dict)
 
-    # 2. 初始化特征对齐层（W_h）
+    # 2. Initialize Feature Alignment Layer (W_h)
     W_h = torch.nn.Linear(feature_dim, feature_dim, bias=False, device=device)
     if wh_state is not None:
         W_h.load_state_dict(wh_state)
 
-    # 3. 优化器
+    # 3. Optimizers
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     optimizer_g = torch.optim.SGD(model_g.parameters(), lr=lr_g)
     optimizer_W = torch.optim.SGD(W_h.parameters(), lr=lr)
 
-    # 4. 训练循环
+    # 4. Training Loop (Mutual Knowledge Distillation)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     model.train()
@@ -179,29 +183,30 @@ def client_worker(params):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
 
-            # 前向传播
+            # Forward pass
             output, rep = model(x)
             output_g, rep_g = model_g(x)
 
-            # 基础交叉熵损失
+            # Task Loss (Cross Entropy)
             loss_ce = ce_loss(output, y)
             loss_ce_g = ce_loss(output_g, y)
 
-            # 互学习知识蒸馏（KL 散度）
+            # Mutual Knowledge Distillation (KL Divergence)
             loss_kd = kl_loss(output, output_g.detach())
             loss_kd_g = kl_loss(output_g, output.detach())
 
-            # 特征对齐损失
+            # Feature Alignment Loss
             loss_h = mse_loss(rep, W_h(rep_g.detach()))
             loss_h_g = mse_loss(rep.detach(), W_h(rep_g))
 
-            # 归一化因子
+            # Normalization factor
             scale = loss_ce.item() + loss_ce_g.item() + 1e-8
 
+            # Total Losses
             loss = loss_ce + loss_kd / scale + loss_h / scale
             loss_g = loss_ce_g + loss_kd_g / scale + loss_h_g / scale
 
-            # 优化步骤
+            # Optimization Steps
             optimizer.zero_grad()
             optimizer_g.zero_grad()
             optimizer_W.zero_grad()
@@ -216,11 +221,13 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    # 5. 压缩全局代理模型用于上传
+    # 5. Compress updated global model using SVD for uplink transmission
     avg_loss = total_loss / num_batches
     compressed_params_g_new = {}
     for name, param in model_g.state_dict().items():
         compressed_params_g_new[name] = decompose_param(param, energy_threshold)
+
+    # Prepare return states
     local_state = {k: v.cpu() for k, v in model.state_dict().items()}
     wh_state = {k: v.cpu() for k, v in W_h.state_dict().items()}
 

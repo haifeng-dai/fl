@@ -8,6 +8,9 @@ from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
 
 
 def client_worker(params):
+    """
+    Standard FedAvg local training.
+    """
     (
         device,
         model_state,
@@ -19,20 +22,27 @@ def client_worker(params):
         epochs,
     ) = params
 
+    # 1. Initialize model and load global state
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
+
+    # 2. Setup optimizer and data loader
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(
         train_set,
         batch_size=batch_size,
         shuffle=True,
     )
+
+    # 3. Local training loop
     total_loss = 0.0
     num_batches = 0
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             logits, _ = model(x)
+
+            # Standard Cross Entropy Loss
             batch_loss = ce_loss(logits, y)
 
             optimizer.zero_grad()
@@ -44,6 +54,7 @@ def client_worker(params):
 
     avg_loss = total_loss / num_batches
 
+    # 4. Prepare return values (move to CPU)
     # Move state_dict to CPU to avoid CUDA IPC warnings
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     return [avg_loss, model_state]

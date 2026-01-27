@@ -14,6 +14,9 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
+    """
+    FedProx local training with proximal term.
+    """
     (
         device,
         model_state,
@@ -26,9 +29,11 @@ def client_worker(params):
         mu,
     ) = params
 
+    # 1. Initialize model
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
 
+    # 2. Store global parameters for proximal term calculation
     global_model_params = {k: v.to(device) for k, v in model_state.items()}
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
@@ -46,10 +51,10 @@ def client_worker(params):
             x, y = x.to(device), y.to(device)
             logits, _ = model(x)
 
-            # Calculate Cross Entropy Loss
+            # Standard Cross Entropy Loss
             loss = ce_loss(logits, y)
 
-            # Calculate Proximal Term
+            # FedProx Proximal Term: (mu/2) * ||w - w_t||^2
             prox_term = sum(
                 ((param - global_model_params[name]) ** 2).sum()
                 for name, param in model.named_parameters()

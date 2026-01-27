@@ -25,6 +25,9 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
+    """
+    FedProto local training with prototype regularization.
+    """
     (
         device,
         model_state,
@@ -38,6 +41,7 @@ def client_worker(params):
         mu,
     ) = params
 
+    # 1. Initialize Model
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
 
@@ -45,6 +49,7 @@ def client_worker(params):
     mse_loss = torch.nn.MSELoss()
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
+    # 2. Train Model
     total_loss = 0.0
     num_batches = 0
     for _ in range(epochs):
@@ -54,6 +59,7 @@ def client_worker(params):
             output, features = model(data)
             loss_ce = ce_loss(output, target)
 
+            # Prototype Loss: Regularize features towards global prototypes of the same class
             loss_proto = torch.tensor(0.0).to(device)
             if global_protos and len(global_protos) > 0:
                 classes_in_batch = torch.unique(target)
@@ -72,7 +78,7 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    # After training, calculate local prototypes
+    # 3. Calculate Local Prototypes (Average features per class)
     model.eval()
     local_protos = {}
     counts = {}

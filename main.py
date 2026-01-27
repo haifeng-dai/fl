@@ -29,6 +29,7 @@ def get_args():
             "fedsa",
             "fedlsa",
             "lgfedavg",
+            "fedrep",
         ],
     )
     parser.add_argument("--test", type=int, default=0, help="Test or train")
@@ -44,14 +45,14 @@ def get_args():
         type=str,
         default="mnist",
         help="Dataset name",
-        choices=["mnist", "cifar10", "cifar100"],
+        choices=["mnist", "cifar10", "cifar100", "har", "har_feat"],
     )
     data_group.add_argument(
         "--model",
         type=str,
         default="cnn",
         help="Model architecture",
-        choices=["cnn", "resnet18"],
+        choices=["cnn", "resnet18", "resnet50", "harcnn", "harmlp"],
     )
     data_group.add_argument(
         "--num_clients", type=int, default=10, help="Number of clients"

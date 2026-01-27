@@ -3,20 +3,20 @@
 # =============
 # Global Config
 # =============
-# fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg
-export ALGO="fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg"
+# fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg,fedrep
+export ALGO="fedavg,moon,fedpln,feddpl,fedproto,fedkd,fml,proxyfl,fedper,fedprox,fedsa,fedlsa,lgfedavg,fedrep"
 
 # =============
 # Data
 # =============
-export DATASETS="cifar100"
+export DATASETS="mnist,cifar10"
 export MODELS="cnn"
 export NUM_CLIENTS="10"
 
 # =============
 # Partition
 # =============
-export PARTITIONS="iid"
+export PARTITIONS="iid,dirichlet,pathological"
 export ALPHAS="0.1"
 export N_CLASSES="2"
 
@@ -25,23 +25,23 @@ export N_CLASSES="2"
 # =============
 export EPOCHS="10"
 export LRS="0.01"
-export ROUNDS="2"
+export ROUNDS="200"
 export BATCH_SIZES="64"
-export JOIN_RATIOS="0.2"
+export JOIN_RATIOS="1.0"
 
 # =============
 # Compute
 # =============
-export GPUS="0,1,2"
+export GPUS="0"
 export MP=1
-export MAX_WORKERS_PER_GPU=4
+export MAX_WORKERS_PER_GPU=10
 # sequential, stream, multi_stream
 export PARALLEL_MODES="multi_stream"
 
 # =============
 # Test
 # =============
-export TEST=1
+export TEST=0
 
 # =============
 # Algorithm Specific
@@ -107,6 +107,9 @@ export TAUS_MOON="0.5"
 # ProxyFL
 export MUS_PROXY="1.0"
 
+# FedRep
+export EPOCHS_HEAD_REP="5"
+
 # ==============================================================================
 # Execution
 # ==============================================================================
@@ -153,8 +156,11 @@ for ALG in ${ALGO//,/ }; do
         "lgfedavg")
             bash ./scripts/lgfedavg.sh
             ;;
+        "fedrep")
+            bash ./scripts/fedrep.sh
+            ;;
         *)
-            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl, fedper, fedprox, fedsa, fedlsa, lgfedavg"
+            echo "Unknown algorithm: $ALG. Supported: fedavg, moon, fedpln, feddpl, fedproto, fedkd, fml, proxyfl, fedper, fedprox, fedsa, fedlsa, lgfedavg, fedrep"
             exit 1
             ;;
     esac

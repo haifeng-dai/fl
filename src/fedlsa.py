@@ -73,6 +73,9 @@ def separation_loss(anchors, tau=0.1):
 
 
 def client_worker(params):
+    """
+    FedLSA local training with Location-aware Semantic Anchors (Compactness Loss).
+    """
     (
         device,
         model_state,
@@ -97,31 +100,31 @@ def client_worker(params):
     total_loss = 0.0
     num_batches = 0
 
-    # 确保锚点在正确的设备上并 detach（客户端训练时固定锚点）
+    # Ensure anchors are on the correct device and detached (fixed during client training)
     global_anchors = global_anchors.to(device).detach()
 
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             logits, features = model(x)
-            # L_CE: 交叉熵损失
+            # L_CE: Standard Cross Entropy Loss
             loss_ce = ce_loss(logits, y)
 
-            # L_COM: 使用带温度系数的 Softmax 的紧凑性损失 (公式 8)
-            # 1. 归一化特征和锚点
+            # L_COM: Compactness Loss using Softmax with Temperature
+            # 1. Normalize features and anchors
             features_norm = F.normalize(features, p=2, dim=1)
             anchors_norm = F.normalize(global_anchors, p=2, dim=1)
 
-            # 2. 计算余弦相似度矩阵 [Batch, NumClasses]
+            # 2. Compute Cosine Similarity Matrix [Batch, NumClasses]
             logits_com = torch.matmul(features_norm, anchors_norm.T)
 
-            # 3. 应用温度系数
+            # 3. Apply Temperature scaling
             logits_com = logits_com / tau
 
-            # 4. 计算相似度 Logits 的交叉熵损失
+            # 4. CE Loss on similarity logits (encourages feature to be close to its class anchor)
             loss_com = ce_loss(logits_com, y)
 
-            # 总损失: L_HC = L_CE + lambda * L_COM
+            # Total Loss: L_HC = L_CE + lambda * L_COM
             loss = loss_ce + lambda_com * loss_com
 
             optimizer.zero_grad()

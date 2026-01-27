@@ -28,6 +28,9 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def client_worker(params):
+    """
+    MOON local training with Model-Contrastive Loss.
+    """
     (
         device,
         global_state,
@@ -42,12 +45,15 @@ def client_worker(params):
         tau,
     ) = params
 
+    # 1. Initialize current local model with global state
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(global_state)
 
+    # 2. Initialize global model (frozen) for contrastive loss
     global_model = copy.deepcopy(model).to(device)
     global_model.eval()
 
+    # 3. Initialize previous local model (frozen) for contrastive loss
     prev_model = get_model(model_name, dataset_name).to(device)
     prev_model.load_state_dict(prev_state)
     prev_model.eval()
@@ -63,13 +69,17 @@ def client_worker(params):
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
 
+            # Forward pass: get output and representation (z)
             output, z = model(x)
             with torch.no_grad():
                 _, z_glob = global_model(x)
                 _, z_prev = prev_model(x)
 
+            # Standard Cross Entropy Loss
             loss_ce = ce_loss(output, y)
 
+            # MOON Contrastive Loss
+            # Similarity with global model (positive) and previous local model (negative)
             pos_sim = ce_moon(z, z_glob)
             neg_sim = ce_moon(z, z_prev)
             logits = torch.cat([pos_sim.reshape(-1, 1), neg_sim.reshape(-1, 1)], dim=1)
@@ -77,6 +87,7 @@ def client_worker(params):
             labels = torch.zeros(z.size(0)).to(device).long()
             loss_con = ce_loss(logits, labels)
 
+            # Total Loss
             loss = loss_ce + mu * loss_con
             loss.backward()
             optimizer.step()

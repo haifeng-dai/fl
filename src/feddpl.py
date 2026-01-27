@@ -132,6 +132,9 @@ class DCL(torch.nn.Module):
 
 
 def client_worker(params):
+    """
+    FedDPL local training with Dual Prototype Learning.
+    """
     (
         device,
         model_state,
@@ -156,6 +159,7 @@ def client_worker(params):
         har,
     ) = params
 
+    # 1. Initialize Model and PLN (Prototype Learning Network)
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
 
@@ -166,7 +170,7 @@ def client_worker(params):
 
     all_classes = torch.arange(0, num_classes).to(device)
 
-    # Train Model
+    # 2. Train Model (Feature Extractor)
     avg_loss_m = 0.0
     if mode in ["model", "normal", "all"]:
         model.train()
@@ -184,6 +188,7 @@ def client_worker(params):
                 output, feature = model(x)
                 loss_ce = ce_loss(output, y)
 
+                # PLN Loss: Encourage features to be close to their class prototypes
                 with torch.no_grad():
                     protos = pln(all_classes)
                 dist = torch.cdist(feature, protos, p=2) ** 2
@@ -199,7 +204,7 @@ def client_worker(params):
 
         avg_loss_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
 
-    # Train PLN
+    # 3. Train PLN (Prototypes)
     avg_loss_p = 0.0
     if mode in ["pln", "normal", "all"]:
         model.eval()
@@ -226,6 +231,8 @@ def client_worker(params):
 
                 with torch.no_grad():
                     _, feature = model(x)
+
+                # Update prototypes to be closer to features
                 dist = torch.cdist(feature, protos, p=2) ** 2
                 loss = ce_loss(-torch.sqrt(dist), y)
 
@@ -256,7 +263,7 @@ class Server(BaseServer):
             depth=args.depth_pln,
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
-        ).to(self.device)
+        )
 
         self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings)
         self.acc_p: list[float] = []
@@ -378,7 +385,9 @@ class Server(BaseServer):
         self.acc_p.append(sum(current_acc_p) / len(current_acc_p))
 
     def save(self):
-        file_name: str = f"{self.args.lambda_}_{self.args.epoch_pln}_{self.args.lr_pln}_{self.args.batch_size_pln}_{self.args.feature_dim}_{self.args.depth_pln}_{self.args.width_pln}_{self.args.mode}_{self.args.fixed_proto}_{self.args.init_emb}_{self.args.har}"
+        file_name: str = (
+            f"{self.args.lambda_}_{self.args.epoch_pln}_{self.args.lr_pln}_{self.args.batch_size_pln}_{self.args.feature_dim}_{self.args.depth_pln}_{self.args.width_pln}_{self.args.mode}_{self.args.fixed_proto}_{self.args.init_emb}_{self.args.har}"
+        )
         f = {
             "acc": {"model": self.acc, "prototype": self.acc_p},
             "loss": {"model": self.loss, "prototype": self.loss_p},

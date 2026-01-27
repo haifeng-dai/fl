@@ -24,8 +24,8 @@ def evaluate_model(model, test_set, device) -> float:
 def evaluate_prototype(model, prototypes, test_set, device) -> float:
     loader = torch.utils.data.DataLoader(test_set, batch_size=128, shuffle=False)
 
-    eval_model = copy.deepcopy(model)
-    eval_model.to(device)
+    eval_model = copy.deepcopy(model).to(device)
+    prototypes = prototypes.data.clone().to(device)
     eval_model.eval()
     correct = 0.0
     count = 0.0
