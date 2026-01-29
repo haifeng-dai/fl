@@ -4,8 +4,6 @@ import os
 import numpy as np
 import torch
 
-# --- 辅助方法 ---
-
 
 def split_indices_by_class(targets, test_ratio):
     """
@@ -137,9 +135,6 @@ def pathological_partition(
     )
 
 
-# --- 主要入口点 ---
-
-
 def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     raw_dir = "./datasets/raw"
     raw_path = os.path.join(raw_dir, f"{dataset_name}_raw.pt")
@@ -165,6 +160,7 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
 
     if os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients:
         print(f"-> {dataset_name} 的 {part_str} 分区已存在。跳过处理。")
+        return
 
     print(f"-> 正在划分数据 ({part_str})...")
     data = torch.load(raw_path, weights_only=False)
@@ -176,17 +172,6 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(
         Y.numpy(), test_ratio
     )
-
-    # 保存一个全局测试集供服务器使用 (包含所有类的测试部分)
-    base_dir = f"./datasets/{dataset_name}"
-    if not os.path.exists(os.path.join(base_dir, "test_data.pt")):
-        if not os.path.exists(base_dir):
-            os.makedirs(base_dir)
-        all_te_idx = np.concatenate(te_idx_by_cls)
-        torch.save(
-            {"x": X[all_te_idx], "y": Y[all_te_idx]},
-            os.path.join(base_dir, "test_data.pt"),
-        )
 
     # 2. 执行分区逻辑
     if partition_method == "iid":

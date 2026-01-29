@@ -97,6 +97,7 @@ def client_worker(params):
     FedTGP client worker with prototype-based training.
     """
     (
+        _,
         device,
         client_id,
         model_state,
@@ -185,14 +186,14 @@ def client_worker(params):
     # Return results (move to CPU)
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
 
-    return client_id, [avg_loss, model_state, local_protos_avg]
+    return [avg_loss, model_state, local_protos_avg]
 
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         # FedTGP is a personalized FL method
         super().__init__(True, args)
-        # Note: self.clients_state is already initialized in BaseServer
+        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
         # FedTGP specific parameters
         self.lamda = args.lamda
@@ -238,6 +239,7 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     i,
                     self.clients_state[i],
@@ -257,7 +259,6 @@ class Server(BaseServer):
             # Run parallel client training
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
@@ -265,23 +266,22 @@ class Server(BaseServer):
 
             # Process results
             total_loss = 0.0
+            selected_states = []
+            selected_protos = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                self.clients_state[i] = results[i][1]
+                selected_states.append(results[i][1])
+                selected_protos.append(results[i][2])
+            self.loss.append(total_loss / num_join_clients)
+
             uploaded_protos = []
-            uploaded_protos_per_client = []
-
-            for client_id, (loss, model_state, local_protos) in results:
-                total_loss += loss
-                self.clients_state[client_id] = model_state
-
-                # Collect prototypes
-                uploaded_protos_per_client.append(local_protos)
-                for label, proto in local_protos.items():
+            for p in selected_protos:
+                for label, proto in p.items():
                     uploaded_protos.append((proto.to(self.device), label))
 
-            avg_loss = total_loss / num_join_clients
-            self.loss.append(avg_loss)
-
             # Calculate class-wise minimum distance (gap)
-            self.calculate_gap(uploaded_protos_per_client)
+            self.calculate_gap(selected_protos)
 
             # Update TGP on server
             self.update_tgp(uploaded_protos)
@@ -290,7 +290,7 @@ class Server(BaseServer):
             self.evaluate_personalized()
 
             print(
-                f"Personalized Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}"
+                f"Personalized Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
@@ -318,7 +318,7 @@ class Server(BaseServer):
                 self.gap[i] = min_gap
 
         max_gap = torch.max(self.gap)
-        print(f"Class-wise minimum distance: {self.gap.cpu().numpy()}")
+        # print(f"Class-wise minimum distance: {self.gap.cpu().numpy()}")
         print(f"Min gap: {min_gap:.4f}, Max gap: {max_gap:.4f}")
 
     def update_tgp(self, uploaded_protos):
@@ -345,11 +345,7 @@ class Server(BaseServer):
                 proto_gen = self.tgp(list(range(self.num_class)))
 
                 # Calculate distances
-                features_square = torch.sum(torch.pow(proto_batch, 2), 1, keepdim=True)
-                centers_square = torch.sum(torch.pow(proto_gen, 2), 1, keepdim=True)
-                features_into_centers = torch.matmul(proto_batch, proto_gen.T)
-                dist = features_square - 2 * features_into_centers + centers_square.T
-                dist = torch.sqrt(dist + 1e-12)
+                dist = torch.cdist(proto_batch, proto_gen, p=2.0)
 
                 # Add margin for true class
                 one_hot = F.one_hot(labels_batch, self.num_class).to(self.device)
@@ -366,11 +362,11 @@ class Server(BaseServer):
                 epoch_loss += loss.item()
                 num_batches += 1
 
-            if epoch % max(1, self.server_epochs // 5) == 0:
-                avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
-                print(
-                    f"  TGP Epoch {epoch + 1}/{self.server_epochs}, Loss: {avg_epoch_loss:.4f}"
-                )
+            # if epoch % max(1, self.server_epochs // 5) == 0:
+            #     avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
+            #     print(
+            #         f"  TGP Epoch {epoch + 1}/{self.server_epochs}, Loss: {avg_epoch_loss:.4f}"
+            #     )
 
         # Generate global prototypes
         self.tgp.eval()
@@ -381,7 +377,7 @@ class Server(BaseServer):
                     torch.tensor(class_id, device=self.device)
                 ).detach()
 
-        print(f"Updated global prototypes for {len(self.global_protos)} classes")
+        # print(f"Updated global prototypes for {len(self.global_protos)} classes")
 
     def evaluate_personalized(self):
         """Evaluate personalized client models using global prototypes"""
@@ -399,7 +395,7 @@ class Server(BaseServer):
                 client_model.load_state_dict(self.clients_state[i])
                 client_model.eval()
 
-                test_loader = DataLoader(self.test_set[i], batch_size=64, shuffle=False)
+                test_loader = DataLoader(self.test_set[i], batch_size=64, shuffle=False)  # type: ignore
 
                 correct = 0
                 total = 0
@@ -433,7 +429,7 @@ class Server(BaseServer):
                 client_model.load_state_dict(self.clients_state[i])
 
                 acc = evaluate_model(client_model, self.test_set[i], self.device)
-                test_size = len(self.test_set[i])
+                test_size = len(self.test_set[i])  # type: ignore
 
                 total_correct += acc * test_size / 100
                 total_samples += test_size

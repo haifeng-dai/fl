@@ -1,7 +1,6 @@
 import argparse
 import copy
 import os
-
 import torch
 import torch.multiprocessing as mp
 
@@ -18,7 +17,7 @@ class BaseServer:
         self.rounds: int = args.rounds
         self.mp: bool = bool(self.args.mp)
 
-        self.num_clients = self.args.num_clients
+        self.num_clients: int = self.args.num_clients
         self.pfl = pfl
         self.acc: list[float] = []
         self.loss: list[float] = []
@@ -48,10 +47,6 @@ class BaseServer:
         self.save_name_pre = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}"
         self.file_name = ""
 
-        # Use pre-calculated counts for sample weights
-        self.clients_state = [
-            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
-        ]
         total_samples = sum(train_counts.values())
         self.weights = [
             train_counts[i] / total_samples for i in range(len(train_counts))

@@ -4,6 +4,7 @@ import os
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 from .utils import (
@@ -73,11 +74,32 @@ def separation_loss(anchors, tau=0.1):
     return torch.log(sum_exp + 1e-20).mean()
 
 
+class AnchorMapping(nn.Module):
+    """
+    Two-layer MLP mapping function Theta(.) to map random vectors R to anchors A.
+    """
+
+    def __init__(self, feature_dim, hidden_dim=None):
+        super().__init__()
+        if hidden_dim is None:
+            hidden_dim = feature_dim * 2
+
+        self.net = nn.Sequential(
+            nn.Linear(feature_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, feature_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
 def client_worker(params):
     """
     FedLSA local training with Location-aware Semantic Anchors (Compactness Loss).
     """
     (
+        _,
         device,
         model_state,
         global_anchors,
@@ -122,7 +144,7 @@ def client_worker(params):
             # 3. Apply Temperature scaling
             logits_com = logits_com / tau
 
-            # 4. CE Loss on similarity logits (encourages feature to be close to its class anchor)
+            # 4. CE Loss on similarity logits
             loss_com = ce_loss(logits_com, y)
 
             # Total Loss: L_HC = L_CE + lambda * L_COM
@@ -144,13 +166,19 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
 
-        self.anchors = torch.randn(self.num_class, self.model.feature_dim).to(
-            self.device
-        )
-        self.anchors = (
-            F.normalize(self.anchors, p=2, dim=1).detach().requires_grad_(True)
-        )
+        # 1. Initialize Random Vectors R (learnable)
+        # R has the same shape as Anchors: [C, d]
+        self.R = torch.randn(self.num_class, self.model.feature_dim, device=self.device)
+
+        # 2. Initialize Mapping Function Theta (MLP)
+        self.anchor_mapping = AnchorMapping(self.model.feature_dim).to(self.device)
+
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
+        self.labels = torch.arange(self.num_class, device=self.device)
+
+    def get_anchors(self):
+        """Generate anchors A = Theta(R)"""
+        return self.anchor_mapping(self.R)
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -169,11 +197,16 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
+            # Generate current anchors for distribution
+            # Note: We must detach here because clients don't update R or Theta
+            current_anchors = self.get_anchors().detach().cpu()
+
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.clients_state[i],
-                    self.anchors.detach().cpu(),
+                    current_anchors,
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
@@ -188,72 +221,75 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
-            losses = [res[0] for res in results]
-            new_client_states = [res[1] for res in results]
-
-            avg_loss = sum(losses) / len(losses)
-            self.loss.append(avg_loss)
-
-            # Update local states for selected clients
-            for i, state in enumerate(new_client_states):
-                client_idx = selected_clients[i]
-                self.clients_state[client_idx] = state
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
+            total_loss = 0.0
+            selected_states = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                self.clients_state[i] = results[i][1]
+                selected_states.append(results[i][1])
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
-            # 聚合得到初步的全局模型
-            self.model.load_state_dict(param_aggregate(new_client_states, norm_weights))
-
-            # 步骤 4: 服务器端优化
-            # 优化全局模型 (Theta) 和锚点 (R)
+            self.aggregate(selected_states, norm_weights)
             self.server_optimization()
-
             self.evaluate()
-            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+            print(
+                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def server_optimization(self):
         """
-        使用 L_LSA = L_ACE + alpha * L_SEP 优化全局模型和锚点
+        Optimize Latent Vectors R and Anchor Mapping Function Theta using
+        L_LSA = L_ACE + alpha * L_SEP
+
+        NOTE: Global model Phi_glo is FROZEN during this phase and only used for evaluation.
         """
-        self.model.train()
+        self.model.eval()  # Set model to eval mode (frozen)
         self.model.to(self.device)
+        self.anchor_mapping.train()
 
-        # 确保锚点计算梯度
-        if not self.anchors.requires_grad:
-            self.anchors.requires_grad_(True)
+        # Joint optimizer for R and Theta
+        # We DO NOT include self.model.parameters() here
+        if not self.R.requires_grad:
+            self.R.requires_grad_(True)
 
-        # 联合优化器：优化模型参数和锚点
         optimizer = torch.optim.SGD(
-            list(self.model.parameters()) + [self.anchors], lr=self.args.server_lr
+            [self.R] + list(self.anchor_mapping.parameters()),
+            lr=self.args.server_lr,
         )
+
+        # Temporarily disable gradients for model parameters to ensure they are not updated
+        # and to save memory/computation
+        for param in self.model.parameters():
+            param.requires_grad = False
 
         print(f"-> Server Optimization for {self.args.server_epochs} epochs...")
 
         for e in range(self.args.server_epochs):
-            anchors_norm = F.normalize(self.anchors, p=2, dim=1)
-            # 分类器输出 Logits
+            # 1. Generate Anchors A = Theta(R)
+            anchors = self.get_anchors()
+
+            # Normalize anchors for losses
+            anchors_norm = F.normalize(anchors, p=2, dim=1)
+
+            # 2. Compute L_ACE (Adaptive Class Energy Loss)
+            # Use frozen global classifier to classify anchors
             logits = self.model.classifier(anchors_norm)
+            loss_ace = ce_loss(logits, self.labels)
 
-            # 锚点的标签就是 0, 1, ..., C-1
-            labels = torch.arange(self.num_class, device=self.device)
+            # 3. Compute L_SEP (Separation Loss)
+            loss_sep = separation_loss(anchors, tau=self.args.tau)
 
-            # 1. L_ACE: 锚点分类误差
-            loss_ace = ce_loss(logits, labels)
-
-            # 2. L_SEP: 分离损失
-            loss_sep = separation_loss(self.anchors, tau=self.args.tau)
-
-            # 总的服务器端损失
+            # Total Server Loss
             loss_lsa = loss_ace + self.args.alpha_sep * loss_sep
 
             optimizer.zero_grad()
@@ -265,16 +301,19 @@ class Server(BaseServer):
                     f"   Epoch {e + 1}: L_ACE={loss_ace.item():.4f}, L_SEP={loss_sep.item():.4f}"
                 )
 
-        # 优化结束后 detach，防止计算图无限增长
-        self.anchors = self.anchors.detach()
+        # Re-enable gradients for model parameters (for aggregation/client updates if needed)
+        for param in self.model.parameters():
+            param.requires_grad = True
 
     def save(self):
         f = {
             "acc": self.acc,
             "loss": self.loss,
             "state_dict": {
-                "anchors": self.anchors.data,
-                "clients": self.model.state_dict(),
+                "R": self.R.cpu(),
+                "anchor_mapping": self.anchor_mapping.state_dict(),
+                "model": self.model.state_dict(),
+                "clients": self.clients_state,
             },
         }
         super().deal_save(f)

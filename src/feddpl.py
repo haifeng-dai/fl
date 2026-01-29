@@ -137,6 +137,7 @@ def client_worker(params):
     FedDPL local training with Dual Prototype Learning.
     """
     (
+        _,
         device,
         model_state,
         pln_state,
@@ -265,6 +266,9 @@ class Server(BaseServer):
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
         )
+        self.clients_state = {
+            i: self.model.state_dict() for i in range(self.num_clients)
+        }
 
         self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings)
         self.acc_p: list[float] = []
@@ -296,6 +300,7 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.clients_state[i],
                     self.pln.state_dict(),
@@ -323,7 +328,6 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
@@ -332,22 +336,16 @@ class Server(BaseServer):
             # Calculate average losses using incremental summation
             total_loss_model = 0.0
             total_loss_pln = 0.0
-            for res in results:
-                total_loss_model += res[0]
-                total_loss_pln += res[1]
+            plns_states = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss_model += results[i][0]
+                total_loss_pln += results[i][1]
+                self.clients_state[i] = results[i][2]
+                plns_states.append(results[i][3])
+                current_weights.append(self.weights[i])
             self.loss.append(total_loss_model / num_join_clients)
             self.loss_p.append(total_loss_pln / num_join_clients)
-
-            clients_model_states = [res[2] for res in results]
-            plns_states = [res[3] for res in results]
-
-            # Update local models
-            for i, state in enumerate(clients_model_states):
-                client_idx = selected_clients[i]
-                self.clients_state[client_idx] = {k: v.cpu() for k, v in state.items()}
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 

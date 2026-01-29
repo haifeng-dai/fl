@@ -38,6 +38,7 @@ def client_worker(params):
     FML (Federated Mutual Learning) local training.
     """
     (
+        _,
         device,
         global_state,
         local_state,
@@ -118,7 +119,7 @@ def client_worker(params):
     # Return: client_id, [avg_loss, new_global_state, new_local_state]
     global_state = {k: v.cpu() for k, v in global_model.state_dict().items()}
     local_state = {k: v.cpu() for k, v in local_model.state_dict().items()}
-    return [avg_loss_l, avg_loss_g, global_state, local_state]
+    return [avg_loss_l, avg_loss_g, local_state, global_state]
 
 
 class Server(BaseServer):
@@ -146,6 +147,7 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.model.state_dict(),
                     self.client_states[i],
@@ -163,46 +165,32 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
-            # results: [avg_loss_l, avg_loss_g, global_state, local_state]
-
             total_loss = 0.0
             total_loss_g = 0.0
-            global_states_to_agg = []
-
-            for i, res in enumerate(results):
-                loss_l = res[0]
-                loss_g = res[1]
-                new_g_state = res[2]
-                new_l_state = res[3]
-
-                total_loss += loss_l
-                total_loss_g += loss_g
-                global_states_to_agg.append(new_g_state)
-
-                # Update stored local state (move to CPU)
-                client_idx = selected_clients[i]
-                self.client_states[client_idx] = {
-                    k: v.cpu() for k, v in new_l_state.items()
-                }
+            selected_states = []
+            selected_states_g = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                total_loss_g += results[i][1]
+                selected_states.append(results[i][2])
+                self.client_states[i] = results[i][2]
+                selected_states_g.append(results[i][3])
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
 
             self.loss.append(total_loss / num_join_clients)
             self.loss_g.append(total_loss_g / num_join_clients)
 
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
-            sum_weights = sum(current_weights)
-            norm_weights = [w / sum_weights for w in current_weights]
-
             # Aggregate Global Models
-            self.model.load_state_dict(
-                param_aggregate(global_states_to_agg, norm_weights)
-            )
+            self.model.load_state_dict(param_aggregate(selected_states_g, norm_weights))
 
             self.evaluate()
             print(

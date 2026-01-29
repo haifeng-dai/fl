@@ -74,6 +74,7 @@ def client_worker(params):
     FedSA local training with Semantic Anchors and multiple regularizations.
     """
     (
+        _,
         device,
         model_state,
         local_anchors,
@@ -177,7 +178,9 @@ class Server(BaseServer):
 
         # 全局语义锚点 (Prototypes)
         self.anchors = torch.zeros(self.num_class, self.model.feature_dim)
-        self.clients_anchors = [self.anchors.clone() for _ in range(self.num_clients)]
+        self.clients_anchors = [
+            self.anchors.data.clone() for _ in range(self.num_clients)
+        ]
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
     def fit(self):
@@ -197,6 +200,7 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.clients_state[i],
                     self.clients_anchors[i],
@@ -217,48 +221,44 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
-            losses = [res[0] for res in results]
-            new_client_states = [res[1] for res in results]
-            client_anchors_dicts = [res[2] for res in results]
-
-            avg_loss = sum(losses) / len(losses)
-            self.loss.append(avg_loss)
-
-            # Update local states for selected clients
-            for i, state in enumerate(new_client_states):
-                client_idx = selected_clients[i]
-                self.clients_state[client_idx] = state
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
+            total_loss = 0.0
+            selected_states = []
+            current_weights = []
+            local_anchors = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                self.clients_state[i] = results[i][1]
+                selected_states.append(results[i][1])
+                current_weights.append(self.weights[i])
+                local_anchors.append(results[i][2])
+            self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
-            # 1. 聚合全局模型 (只聚合参与的客户端)
-            # 注意: self.clients_state 中包含了所有客户端的状态，但我们只想聚合本轮更新过的
-            # 或者，我们可以只聚合本轮选中的客户端的更新
-            self.model.load_state_dict(param_aggregate(new_client_states, norm_weights))
+            # 1. 聚合全局模型
+            self.model.load_state_dict(param_aggregate(selected_states, norm_weights))
 
             # 2. 更新全局语义锚点
-            self.update_global_anchors(client_anchors_dicts)
+            self.update_global_anchors(local_anchors)
 
             # 3. 更新 Server 端保存的 Client Anchors
-            for i, anchors_dict in enumerate(client_anchors_dicts):
+            # for i in selected_clients:
+            #     self.clients_anchors[i] = local_anchors[i].data.clone()
+            for i, anchors_dict in enumerate(local_anchors):
                 client_idx = selected_clients[i]
                 for label, anchor in anchors_dict.items():
                     # Update local copy on server device
-                    self.clients_anchors[client_idx][label] = anchor.to(
-                        self.anchors.device
-                    )
+                    self.clients_anchors[client_idx][label] = anchor.data.clone()
 
             self.evaluate()
-            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+            print(
+                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def update_global_anchors(self, client_anchors_list):

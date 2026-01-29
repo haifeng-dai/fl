@@ -20,6 +20,7 @@ def client_worker(params):
     LG-FedAvg local training.
     """
     (
+        _,
         device,
         local_body_state,
         global_head_state,
@@ -77,22 +78,11 @@ def client_worker(params):
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
-        assert isinstance(self.model.extractor, torch.nn.Sequential) and isinstance(
-            self.model.classifier, torch.nn.Linear
-        )
-
-        initial_body = {
-            k: v.cpu() for k, v in self.model.extractor.state_dict().items()
-        }
-
-        self.client_body_states = [
-            copy.deepcopy(initial_body) for _ in range(self.num_clients)
+        self.clients_state = [
+            self.model.extractor.state_dict() for _ in range(self.num_clients)
         ]
 
     def fit(self):
-        assert isinstance(self.model.extractor, torch.nn.Sequential) and isinstance(
-            self.model.classifier, torch.nn.Linear
-        )
         num_join_clients = int(self.num_clients * self.args.join_ratio)
         num_join_clients = max(1, num_join_clients)
 
@@ -107,8 +97,9 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
-                    self.client_body_states[i],
+                    self.clients_state[i],
                     self.model.classifier.state_dict(),
                     self.train_sets[i],
                     self.args.model,
@@ -122,39 +113,27 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
             total_loss = 0.0
-            new_heads = []
-
-            for i, res in enumerate(results):
-                loss = res[0]
-                new_body = res[1]
-                new_head = res[2]
-
-                total_loss += loss
-
-                # Update Local Body for selected clients
-                client_idx = selected_clients[i]
-                self.client_body_states[client_idx] = new_body
-
-                # Collect Global Head updates
-                new_heads.append(new_head)
-
-            avg_loss = total_loss / num_join_clients
-            self.loss.append(avg_loss)
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
+            selected_states = []
+            selected_states_head = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                selected_states.append(results[i][1])
+                self.clients_state[i] = results[i][1]
+                selected_states_head.append(results[i][2])
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
             # Aggregate Head Only
-            aggregated_head = param_aggregate(new_heads, norm_weights)
+            aggregated_head = param_aggregate(selected_states_head, norm_weights)
             # Load aggregated head directly into classifier
             self.model.classifier.load_state_dict(aggregated_head)
 
@@ -162,7 +141,7 @@ class Server(BaseServer):
             self.evaluate()
             print(
                 f"Global Accuracy (Avg Personal): {self.acc[-1]:.2f}%",
-                f"Avg Loss: {avg_loss:.4f}",
+                f"Avg Loss: {self.loss[-1]:.4f}",
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
@@ -178,7 +157,7 @@ class Server(BaseServer):
 
         for i in range(self.num_clients):
             # Load local body and global head into self.model for evaluation
-            self.model.extractor.load_state_dict(self.client_body_states[i])
+            self.model.extractor.load_state_dict(self.clients_state[i])
             self.model.classifier.load_state_dict(global_head)
 
             acc = evaluate_model(self.model, self.test_set[i], self.device)
@@ -190,7 +169,7 @@ class Server(BaseServer):
         client_states = []
         global_head = self.model.classifier.state_dict()
         for i in range(self.num_clients):
-            full_state = copy.deepcopy(self.client_body_states[i])
+            full_state = copy.deepcopy(self.clients_state[i])
             full_state.update(global_head)
             client_states.append(full_state)
 

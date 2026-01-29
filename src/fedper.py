@@ -21,6 +21,7 @@ def client_worker(params):
     FedPer local training.
     """
     (
+        _,
         device,
         global_body_state,
         local_head_state,
@@ -78,12 +79,8 @@ def client_worker(params):
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
-        initial_head = {
-            k: v.cpu() for k, v in self.model.classifier.state_dict().items()
-        }
-
         self.client_head_states = [
-            copy.deepcopy(initial_head) for _ in range(self.num_clients)
+            self.model.classifier.state_dict() for _ in range(self.num_clients)
         ]
 
     def fit(self):
@@ -101,6 +98,7 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.model.extractor.state_dict(),
                     self.client_head_states[i],
@@ -116,37 +114,27 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
             total_loss = 0.0
-            new_bodies = []
-
-            for i, res in enumerate(results):
-                loss = res[0]
-                new_body = res[1]
-                new_head = res[2]
-
-                total_loss += loss
-                new_bodies.append(new_body)
-
-                # Update local head state for the selected client
-                client_idx = selected_clients[i]
-                self.client_head_states[client_idx] = new_head
-
-            avg_loss = total_loss / num_join_clients
-            self.loss.append(avg_loss)
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
+            new_body = []
+            new_head = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                new_body.append(results[i][1])
+                new_head.append(results[i][2])
+                self.client_head_states[i] = results[i][2]
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
             # Aggregate Body Only
-            aggregated_body = param_aggregate(new_bodies, norm_weights)
+            aggregated_body = param_aggregate(new_body, norm_weights)
             # Load aggregated body directly into extractor
             self.model.extractor.load_state_dict(aggregated_body)
 
@@ -154,14 +142,11 @@ class Server(BaseServer):
             self.evaluate()
             print(
                 f"Global Accuracy (Avg Personal): {self.acc[-1]:.2f}%",
-                f"Avg Loss: {avg_loss:.4f}",
+                f"Avg Loss: {self.loss[-1]:.4f}",
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def evaluate(self):
-        assert isinstance(self.model.extractor, torch.nn.Sequential) and isinstance(
-            self.model.classifier, torch.nn.Linear
-        )
         accs = []
         # Get current global body
         global_body = {k: v.cpu() for k, v in self.model.extractor.state_dict().items()}

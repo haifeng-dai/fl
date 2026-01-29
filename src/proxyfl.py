@@ -39,6 +39,7 @@ def client_worker(params):
     ProxyFL local training with mutual distillation between private local model and shared proxy model.
     """
     (
+        _,
         device,
         proxy_state,
         local_state,
@@ -122,12 +123,10 @@ class Server(BaseServer):
         super().__init__(True, args)
 
         # Initialize local models for each client (Private)
-        self.client_states = [
-            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
-        ]
+        self.client_states = [self.model.state_dict() for _ in range(self.num_clients)]
         # Initialize proxy models for each client (Public/Shared)
-        self.proxy_model_states = [
-            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
+        self.client_states_p = [
+            self.model.state_dict() for _ in range(self.num_clients)
         ]
 
         self.loss_p = []
@@ -171,12 +170,13 @@ class Server(BaseServer):
 
                 # Perform local aggregation
                 # Note: We access self.proxy_model_states which contains the latest available states (possibly from previous rounds for non-active clients)
-                neighbor_states = [self.proxy_model_states[j] for j in neighbor_indices]
+                neighbor_states = [self.client_states_p[j] for j in neighbor_indices]
                 aggregated_proxy_state = param_aggregate(
                     neighbor_states, neighbor_weights
                 )
 
                 return [
+                    i,
                     self.client_gpu[i],
                     aggregated_proxy_state,
                     self.client_states[i],
@@ -194,35 +194,26 @@ class Server(BaseServer):
             # 2. Parallel Client Training
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
             # 3. Update states and calculate average losses
+            total_loss = 0.0
             total_loss_p = 0.0
-            total_loss_l = 0.0
-
-            for i, res in enumerate(results):
-                loss_p = res[0]
-                loss_l = res[1]
-                new_proxy_state = res[2]
-                new_local_state = res[3]
-
-                total_loss_p += loss_p
-                total_loss_l += loss_l
-
-                # Update stored states (move to CPU to save GPU memory)
-                client_idx = selected_clients[i]
-                self.proxy_model_states[client_idx] = {
-                    k: v.cpu() for k, v in new_proxy_state.items()
-                }
-                self.client_states[client_idx] = {
-                    k: v.cpu() for k, v in new_local_state.items()
-                }
-
-            self.loss.append(total_loss_l / num_join_clients)
+            selected_states = []
+            selected_states_p = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                total_loss_p += results[i][1]
+                selected_states.append(results[i][2])
+                self.client_states[i] = results[i][2]
+                selected_states_p.append(results[i][3])
+                self.client_states_p[i] = results[i][3]
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
             self.loss_p.append(total_loss_p / num_join_clients)
 
             # 4. Evaluation (using local personalized models)

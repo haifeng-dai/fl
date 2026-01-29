@@ -3,10 +3,24 @@ import datetime
 import importlib
 import time
 import sys
+import random
 
+import numpy as np
 import torch
 
 from src import prepare_data
+
+
+def set_seed(seed):
+    """设置所有随机种子以确保实验可重复性"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # 确保 CUDA 的确定性行为
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def get_args():
@@ -108,6 +122,9 @@ def get_args():
         choices=["sequential", "stream", "multi_stream"],
         help="Parallel mode for stream training: sequential, stream (1 per GPU), multi_stream (N per GPU)",
     )
+    train_group.add_argument(
+        "--seed", type=int, default=42, help="Random seed for reproducibility"
+    )
 
     # Algorithm Specific Args
     try:
@@ -124,6 +141,7 @@ def get_args():
 
 def main():
     args, algo_module = get_args()
+    set_seed(args.seed)
     server = algo_module.Server(args=args)
     prepare_data(
         dataset_name=args.dataset,

@@ -51,6 +51,7 @@ def client_worker(params):
         2: new_head_state (dict) - Updated head parameters (on CPU)
     """
     (
+        _,
         device,
         global_body_state,
         local_head_state,
@@ -67,11 +68,8 @@ def client_worker(params):
     model = get_model(model_name, dataset_name).to(device)
 
     # 2. Load Parameters
-    # Load shared body
-    model.load_state_dict(global_body_state, strict=False)
-    # Load personalized head (if available)
-    if local_head_state is not None:
-        model.classifier.load_state_dict(local_head_state)
+    model.extractor.load_state_dict(global_body_state)
+    model.classifier.load_state_dict(local_head_state)
 
     # 3. Define Optimizer
     # Note: FedRep uses different optimization phases
@@ -129,9 +127,7 @@ def client_worker(params):
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
     # 4. Prepare Return Values (Move to CPU to save GPU memory)
-    # We only need to return the body for aggregation
     body_state = {k: v.cpu() for k, v in model.extractor.state_dict().items()}
-    # We return the head to save it in the server's state for next round
     head_state = {k: v.cpu() for k, v in model.classifier.state_dict().items()}
 
     return [avg_loss, body_state, head_state]
@@ -139,21 +135,11 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        # Initialize BaseServer
-        # Note: We pass personalized_flag=True because FedRep is a personalized method
-        # (It maintains local heads)
         super().__init__(True, args)
 
-        # Initialize client-specific heads
-        # self.client_heads will store the state_dict of the classifier head for each client
-        self.client_heads = [None] * self.num_clients
-
-        # Initialize heads for all clients (optional, can be done lazily)
-        # But doing it here ensures consistent initialization if needed
-        dummy_model = get_model(args.model, args.dataset)
-        initial_head_state = dummy_model.classifier.state_dict()
-        for i in range(self.num_clients):
-            self.client_heads[i] = copy.deepcopy(initial_head_state)
+        self.clients_state = [
+            self.model.classifier.state_dict() for _ in range(self.num_clients)
+        ]
 
     def fit(self):
         # Calculate number of clients to participate in each round
@@ -164,40 +150,32 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- FedRep Round {r + 1}/{self.rounds} ---")
 
-            # Select clients
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
             )
             print(f"Selected clients: {selected_clients}")
-
-            # Prepare global body state (shared)
-            # We extract only the extractor (body) part of the global model
             global_body_state = self.model.extractor.state_dict()
-            # Ensure it's on CPU for pickling/transmission
-            global_body_state = {k: v.cpu() for k, v in global_body_state.items()}
 
-            # Prepare parameters for each client
-            p = []
-            for i in selected_clients:
-                p.append(
-                    [
-                        self.client_gpu[i],  # device
-                        global_body_state,  # shared body
-                        self.client_heads[i],  # local head
-                        self.train_sets[i],  # dataset
-                        self.args.model,
-                        self.args.dataset,
-                        self.args.lr,
-                        self.args.batch_size,
-                        self.args.epochs,  # epochs for body (global arg)
-                        self.args.epochs_head,  # epochs for head (FedRep arg)
-                    ]
-                )
+            p = [
+                [
+                    i,
+                    self.client_gpu[i],
+                    global_body_state,
+                    self.clients_state[i],
+                    self.train_sets[i],
+                    self.args.model,
+                    self.args.dataset,
+                    self.args.lr,
+                    self.args.batch_size,
+                    self.args.epochs,
+                    self.args.epochs_head,
+                ]
+                for i in selected_clients
+            ]
 
             # Run parallel training
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
@@ -205,30 +183,19 @@ class Server(BaseServer):
 
             # Process results
             total_loss = 0.0
-            new_body_states = []
-
-            for i, res in enumerate(results):
-                loss, body_state, head_state = res
-                total_loss += loss
-
-                client_idx = selected_clients[i]
-
-                # Update local head state (persist on server)
-                self.client_heads[client_idx] = head_state
-
-                # Collect body state for aggregation
-                new_body_states.append(body_state)
-
+            selected_states = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                selected_states.append(results[i][1])
+                self.clients_state[i] = results[i][2]
+                current_weights.append(self.weights[i])
             self.loss.append(total_loss / num_join_clients)
-
-            # Aggregate Body (Representation)
-            # Calculate weights based on dataset size
-            current_weights = [self.weights[i] for i in selected_clients]
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
             # Aggregate and update global model's body
-            aggregated_body = param_aggregate(new_body_states, weights=norm_weights)
+            aggregated_body = param_aggregate(selected_states, weights=norm_weights)
             self.model.extractor.load_state_dict(aggregated_body)
 
             # Evaluation
@@ -249,8 +216,8 @@ class Server(BaseServer):
             self.model.extractor.load_state_dict(self.model.extractor.state_dict())
 
             # 2. Load Local Head
-            if self.client_heads[i] is not None:
-                self.model.classifier.load_state_dict(self.client_heads[i])
+            if self.clients_state[i] is not None:
+                self.model.classifier.load_state_dict(self.clients_state[i])
 
             # 3. Evaluate
             acc = evaluate_model(self.model, self.test_set[i], device=self.device)
@@ -264,7 +231,7 @@ class Server(BaseServer):
             "loss": self.loss,
             "state_dict": {
                 "global_body": self.model.extractor.state_dict(),
-                "client_heads": self.client_heads,
+                "client_heads": self.clients_state,
             },
         }
         super().deal_save(f)

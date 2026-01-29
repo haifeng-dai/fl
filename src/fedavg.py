@@ -13,6 +13,7 @@ def client_worker(params):
     Standard FedAvg local training.
     """
     (
+        _,
         device,
         model_state,
         train_set,
@@ -77,6 +78,7 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.model.state_dict(),
                     self.train_sets[i],
@@ -91,30 +93,29 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
-            # Calculate average loss using incremental summation
+            # Process results
+            # Calculate total loss, get states and weights of selected clients
             total_loss = 0.0
-            for i in range(num_join_clients):
+            selected_states = []
+            current_weights = []
+            for i in selected_clients:
                 total_loss += results[i][0]
-            avg_loss = total_loss / num_join_clients
-            self.loss.append(avg_loss)
-
-            self.clients_state = [results[i][1] for i in range(num_join_clients)]
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
+                selected_states.append(results[i][1])
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
-            # Normalize weights to sum to 1
             norm_weights = [w / sum_weights for w in current_weights]
 
-            self.aggregate(self.clients_state, weights=norm_weights)
+            self.aggregate(selected_states, weights=norm_weights)
             self.evaluate()
-            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+            print(
+                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):

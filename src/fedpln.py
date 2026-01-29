@@ -115,6 +115,7 @@ def client_worker(params):
     FedPLN local training with Prototype Learning Network.
     """
     (
+        _,
         device,
         model_state,
         pln_state,
@@ -263,6 +264,7 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.model.state_dict(),
                     self.pln.state_dict(),
@@ -290,7 +292,6 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
@@ -299,28 +300,27 @@ class Server(BaseServer):
             # Calculate average losses using incremental summation
             total_loss_model = 0.0
             total_loss_pln = 0.0
-            for res in results:
-                total_loss_model += res[0]
-                total_loss_pln += res[1]
+            selected_states = []
+            selected_plns = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss_model += results[i][0]
+                total_loss_pln += results[i][1]
+                selected_states.append(results[i][2])
+                selected_plns.append(results[i][3])
+                current_weights.append(self.weights[i])
             self.loss.append(total_loss_model / num_join_clients)
             self.loss_p.append(total_loss_pln / num_join_clients)
-
-            # Update global model and PLN
-            clients_params = [res[2] for res in results]
-            plns_params = [res[3] for res in results]
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
-            self.aggregate(clients_params, plns_params, weights=norm_weights)
+            self.aggregate(selected_states, selected_plns, weights=norm_weights)
             self.evaluate()
 
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def aggregate(self, clients_params=None, plns_params=None, weights=None):
+    def aggregate(self, clients_params, plns_params, weights):
         # Handle optional arguments or direct passing
         if clients_params:
             self.model.load_state_dict(param_aggregate(clients_params, weights))

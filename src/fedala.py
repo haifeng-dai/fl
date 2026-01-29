@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
+from .utils import BaseServer, ce_loss, get_model, run_parallel_clients, evaluate_model
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -154,9 +154,8 @@ class ALA:
             param_t.data = param + (param_g - param) * weight
 
         # Weight learning loop
+        loss_t = []
         losses = []
-        cnt = 0
-
         while True:
             for x, y in rand_loader:
                 x, y = x.to(self.device), y.to(self.device)
@@ -165,8 +164,8 @@ class ALA:
                 # Forward pass
                 output, _ = model_t(x)
 
-                loss_value = ce_loss(output, y)
-                loss_value.backward()
+                loss = ce_loss(output, y)
+                loss.backward()
 
                 # Update weights based on gradients
                 for param_t, param, param_g, weight in zip(
@@ -182,8 +181,8 @@ class ALA:
                 ):
                     param_t.data = param + (param_g - param) * weight
 
-            losses.append(loss_value.item())
-            cnt += 1
+                loss_t.append(loss.item())
+            losses.append(np.mean(loss_t))
 
             # Only train one epoch in subsequent iterations
             if not self.start_phase:
@@ -208,8 +207,8 @@ def client_worker(params):
     FedALA client worker with adaptive local aggregation.
     """
     (
-        device,
         client_id,
+        device,
         global_model_state,
         local_model_state,
         train_set,
@@ -256,7 +255,6 @@ def client_worker(params):
 
     total_loss = 0.0
     num_batches = 0
-
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
@@ -264,26 +262,29 @@ def client_worker(params):
             # Forward pass
             output, _ = local_model(x)
 
-            batch_loss = ce_loss(output, y)
+            loss = ce_loss(output, y)
 
             optimizer.zero_grad()
-            batch_loss.backward()
+            loss.backward()
             optimizer.step()
 
-            total_loss += batch_loss.item()
+            total_loss += loss.item()
             num_batches += 1
 
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
     # Return results (move to CPU)
     model_state = {k: v.cpu() for k, v in local_model.state_dict().items()}
-    return client_id, [avg_loss, model_state]
+    return [avg_loss, model_state]
 
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         # FedALA is a personalized FL method
         super().__init__(True, args)
+        self.clients_state = {
+            i: self.model.state_dict() for i in range(self.num_clients)
+        }
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -306,8 +307,8 @@ class Server(BaseServer):
 
             p = [
                 [
-                    self.client_gpu[i],
                     i,
+                    self.client_gpu[i],
                     global_model_state_cpu,
                     self.clients_state[i],
                     self.train_sets[i],
@@ -328,40 +329,35 @@ class Server(BaseServer):
             # Run parallel client training
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
             # Process results
+            # Calculate total loss, get states and weights of selected clients
             total_loss = 0.0
-            for client_id, (loss, model_state) in results:
-                total_loss += loss
-                self.clients_state[client_id] = model_state
-
-            avg_loss = total_loss / num_join_clients
-            self.loss.append(avg_loss)
-
-            # Aggregate selected client models
-            selected_states = [self.clients_state[i] for i in selected_clients]
-            selected_weights = [self.weights[i] for i in selected_clients]
-            sum_weights = sum(selected_weights)
-            norm_weights = [w / sum_weights for w in selected_weights]
+            selected_states = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                self.clients_state[i] = results[i][1]
+                selected_states.append(results[i][1])
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
 
             self.aggregate(selected_states, weights=norm_weights)
-
-            # Evaluate personalized models
             self.evaluate_personalized()
 
             print(
-                f"Personalized Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}"
+                f"Personalized Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def evaluate_personalized(self):
         """Evaluate personalized client models"""
-        from .utils.evaluate import evaluate_model
 
         total_correct = 0
         total_samples = 0
@@ -373,7 +369,7 @@ class Server(BaseServer):
 
             # Evaluate on client's test set
             acc = evaluate_model(client_model, self.test_set[i], self.device)
-            test_size = len(self.test_set[i])
+            test_size = len(self.test_set[i])  # type: ignore
 
             total_correct += acc * test_size / 100
             total_samples += test_size

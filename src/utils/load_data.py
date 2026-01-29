@@ -1,6 +1,6 @@
 import torch
 import os
-from torch.utils.data import TensorDataset
+from torch.utils.data import TensorDataset, ConcatDataset
 
 
 def get_partition_path(dataset_name, partition, num_clients, alpha=0.5, n_classes=2):
@@ -13,15 +13,6 @@ def get_partition_path(dataset_name, partition, num_clients, alpha=0.5, n_classe
     else:
         raise ValueError(f"Unknown partition method: {partition}")
     return os.path.join("./datasets", dataset_name, part_str)
-
-
-def load_test_data(dataset_name):
-    test_path = os.path.join("./datasets", dataset_name, "test_data.pt")
-    if not os.path.exists(test_path):
-        raise FileNotFoundError(f"Global test data not found at {test_path}.")
-    data = torch.load(test_path, weights_only=False)
-    dataset = TensorDataset(data["x"], data["y"])
-    return dataset
 
 
 def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=False):
@@ -48,16 +39,12 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
         train_datasets[i] = TensorDataset(data["train"]["x"], data["train"]["y"])
         train_counts[i] = len(data["train"]["x"])
 
-        # 如果是 pFL，加载每个客户端的本地测试集
-        if pfl:
-            test_datasets[i] = TensorDataset(data["test"]["x"], data["test"]["y"])
+        test_datasets[i] = TensorDataset(data["test"]["x"], data["test"]["y"])
 
     num_class = data["num_classes"]  # type: ignore
 
     if not pfl:
-        # 非 pFL 模式，加载全局测试集
-        test_dataset = load_test_data(dataset_name)
-    else:
-        test_dataset = test_datasets
+        # 非 pFL 模式，聚合所有客户端的测试集作为全局测试集
+        test_datasets = ConcatDataset(list(test_datasets.values()))
 
-    return train_datasets, test_dataset, train_counts, num_class
+    return train_datasets, test_datasets, train_counts, num_class

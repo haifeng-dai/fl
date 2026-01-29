@@ -29,6 +29,7 @@ def client_worker(params):
     FedProto local training with prototype regularization.
     """
     (
+        _,
         device,
         model_state,
         global_protos,
@@ -39,11 +40,17 @@ def client_worker(params):
         batch_size,
         epochs,
         mu,
+        num_classes,
     ) = params
 
     # 1. Initialize Model
     model = get_model(model_name, dataset_name).to(device)
     model.load_state_dict(model_state)
+
+    # Pre-move global prototypes to GPU to avoid frequent data transfer
+    # global_protos is now a Tensor [C, D] or None
+    if global_protos is not None:
+        global_protos = global_protos.to(device)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     mse_loss = torch.nn.MSELoss()
@@ -61,16 +68,14 @@ def client_worker(params):
 
             # Prototype Loss: Regularize features towards global prototypes of the same class
             loss_proto = torch.tensor(0.0).to(device)
-            if global_protos and len(global_protos) > 0:
-                classes_in_batch = torch.unique(target)
-                for c in classes_in_batch:
-                    if c.item() in global_protos:
-                        c_features = features[target == c]
-                        c_global_proto = global_protos[c.item()].to(device)
-                        loss_proto += mse_loss(
-                            c_features,
-                            c_global_proto.expand(c_features.shape[0], -1),
-                        )
+            if global_protos is not None:
+                # Vectorized operation: Select prototypes for all samples in batch
+                batch_global_protos = global_protos[target]
+                # Filter out samples whose class prototype is zero (not yet discovered)
+                proto_norms = torch.norm(batch_global_protos, dim=1)
+                mask = proto_norms > 1e-6
+                if mask.any():
+                    loss_proto = mse_loss(features[mask], batch_global_protos[mask])
 
             loss = loss_ce + mu * loss_proto
             loss.backward()
@@ -81,25 +86,30 @@ def client_worker(params):
     # 3. Calculate Local Prototypes (Average features per class)
     model.eval()
     local_protos = {}
-    counts = {}
+
+    # Initialize tensors on GPU for accumulation to avoid Python loops
+    feature_dim = features.shape[1]
+    sum_protos = torch.zeros((num_classes, feature_dim), device=device)
+    sum_counts = torch.zeros(num_classes, device=device)
+
     with torch.no_grad():
         for data, target in loader:
             data, target = data.to(device), target.to(device)
             _, features = model(data)
-            for i in range(len(target)):
-                label = target[i].item()
-                if label not in local_protos:
-                    local_protos[label] = features[i].cpu().clone()
-                    counts[label] = 1
-                else:
-                    local_protos[label] += features[i].cpu()
-                    counts[label] += 1
 
-    # Average features for each class
-    for label in local_protos:
-        local_protos[label] /= counts[label]
+            # Use index_add_ for fast vectorized summation
+            sum_protos.index_add_(0, target, features)
+            sum_counts.index_add_(
+                0, target, torch.ones_like(target, dtype=torch.float32, device=device)
+            )
 
-    # Return client_id, avg_loss, new_model_state, local_protos
+    # Average and convert to CPU dictionary
+    active_classes = torch.where(sum_counts > 0)[0]
+    for c in active_classes:
+        c_item = c.item()
+        local_protos[c_item] = (sum_protos[c_item] / sum_counts[c_item]).cpu()
+
+    # Return avg_loss, new_model_state, local_protos
     avg_loss = total_loss / num_batches
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     return [avg_loss, model_state, local_protos]
@@ -109,9 +119,7 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
         # Initialize personalized models for each client
-        self.client_states = [
-            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
-        ]
+        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
         self.global_protos: dict[int, torch.Tensor] = {}
         self.acc_p: list[float] = []
 
@@ -130,8 +138,9 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
-                    self.client_states[i],
+                    self.clients_state[i],
                     self.global_protos,
                     self.train_sets[i],
                     self.args.model,
@@ -140,57 +149,77 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.args.mu,
+                    self.num_class,
                 ]
                 for i in selected_clients
             ]
 
+            t_train_start = time.time()
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
+            print(f"  [Time] Parallel Training: {time.time() - t_train_start:.2f}s")
 
-            # results: [avg_loss, model_state, local_protos]
-            new_model_states = [res[1] for res in results]
-            all_local_protos = [res[2] for res in results]
-
-            # Calculate average loss using incremental summation
             total_loss = 0.0
-            for res in results:
-                total_loss += res[0]
-            avg_loss = total_loss / num_join_clients
-            self.loss.append(avg_loss)
+            all_local_protos = []
+            for idx, client_id in enumerate(selected_clients):
+                client_loss, client_state, client_protos = results[idx]
+                total_loss += client_loss
+                self.clients_state[client_id] = client_state
+                all_local_protos.append(client_protos)
+            self.loss.append(total_loss / num_join_clients)
 
-            # Update client models
-            for i, state in enumerate(new_model_states):
-                client_idx = selected_clients[i]
-                self.client_states[client_idx] = {k: v.cpu() for k, v in state.items()}
-
+            t_agg_start = time.time()
             self.global_protos = self.aggregate_protos(all_local_protos)
+            print(f"  [Time] Prototype Aggregation: {time.time() - t_agg_start:.2f}s")
+
+            t_eval_start = time.time()
             self.evaluate()
+            print(f"  [Time] Evaluation: {time.time() - t_eval_start:.2f}s")
+
             print(
                 f"Global Accuracy: {self.acc[-1]:.2f}%, "
                 f"Proto Accuracy: {self.acc_p[-1]:.2f}%, "
-                f"Avg Loss: {avg_loss:.4f}"
+                f"Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def aggregate_protos(self, all_local_protos):
-        global_protos = {}
-        counts = {}
+        """
+        Aggregate local prototypes (dicts) into a single global prototype Tensor.
+        Returns: torch.Tensor [num_classes, feature_dim] (CPU)
+        """
+        if not all_local_protos:
+            return self.global_protos
+
+        # Infer feature dimension from the first non-empty local prototype
+        feature_dim = 0
+        for protos in all_local_protos:
+            if protos:
+                feature_dim = next(iter(protos.values())).shape[0]
+                break
+
+        if feature_dim == 0:
+            return self.global_protos
+
+        # Initialize global prototypes tensor on CPU
+        # self.num_class comes from BaseServer initialization
+        num_classes = self.num_class
+        global_protos = torch.zeros((num_classes, feature_dim), dtype=torch.float32)
+        counts = torch.zeros(num_classes, dtype=torch.float32)
+
         for local_protos in all_local_protos:
             for label, proto in local_protos.items():
-                if label not in global_protos:
-                    global_protos[label] = proto.clone()
-                    counts[label] = 1
-                else:
-                    global_protos[label] += proto
-                    counts[label] += 1
+                # proto is typically CPU tensor from client_worker
+                global_protos[label] += proto
+                counts[label] += 1
 
-        for label in global_protos:
-            global_protos[label] /= counts[label]
+        # Average
+        mask = counts > 0
+        global_protos[mask] /= counts[mask].unsqueeze(1)
 
         return global_protos
 
@@ -199,37 +228,38 @@ class Server(BaseServer):
         accs = []
         acc_ps = []
 
-        # Prepare prototype tensor from dict for evaluation
+        # Prepare prototype tensor for evaluation
+        # self.global_protos is already a Tensor [C, D] (CPU) or None
         proto_tensor = None
-        if self.global_protos:
-            max_label = max(self.global_protos.keys())
-            dim = next(iter(self.global_protos.values())).shape[0]
-            proto_tensor = torch.zeros(max_label + 1, dim).to(self.device)
-            for label, proto in self.global_protos.items():
-                proto_tensor[label] = proto.to(self.device)
+        if self.global_protos is not None:
+            proto_tensor = self.global_protos.to(self.device)
 
         for i in range(self.num_clients):
             # Load client i's model state into self.model for evaluation
-            self.model.load_state_dict(self.client_states[i])
+            self.model.load_state_dict(self.clients_state[i])
 
             acc = evaluate_model(self.model, self.test_set[i], self.device)
             accs.append(acc)
 
-            acc_p = evaluate_prototype(
-                self.model, proto_tensor, self.test_set[i], self.device
-            )
+            # evaluate_prototype handles None proto_tensor gracefully?
+            # Usually we only call it if proto_tensor is valid.
+            acc_p = 0.0
+            if proto_tensor is not None:
+                acc_p = evaluate_prototype(
+                    self.model, proto_tensor, self.test_set[i], self.device
+                )
             acc_ps.append(acc_p)
 
-        self.acc.append(sum(accs) / (len(accs) if accs else 1))
-        self.acc_p.append(sum(acc_ps) / (len(acc_ps) if acc_ps else 1))
+        self.acc.append(np.mean(accs) if accs else 0.0)
+        self.acc_p.append(np.mean(acc_ps) if acc_ps else 0.0)
 
     def save(self):
         f = {
             "acc": {"model": self.acc, "proto": self.acc_p},
             "loss": self.loss,
             "state_dict": {
-                "model": self.client_states,
-                "proto": self.global_protos,
+                "model": self.clients_state,
+                "proto": self.global_protos,  # Tensor
             },
         }
         self.deal_save(f)

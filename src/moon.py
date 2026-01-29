@@ -32,6 +32,7 @@ def client_worker(params):
     MOON local training with Model-Contrastive Loss.
     """
     (
+        _,
         device,
         global_state,
         prev_state,
@@ -103,9 +104,7 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
         # Initialize previous model states for all clients with the initial global model
-        self.client_prev_states = [
-            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
-        ]
+        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -122,9 +121,10 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.model.state_dict(),
-                    self.client_prev_states[i],
+                    self.clients_state[i],
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
@@ -139,7 +139,6 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
@@ -147,27 +146,22 @@ class Server(BaseServer):
 
             # Calculate average loss using incremental summation
             total_loss = 0.0
-            for res in results:
-                total_loss += res[0]
-            avg_loss = total_loss / num_join_clients
-            self.loss.append(avg_loss)
-
-            clients_params = [res[1] for res in results]
-
-            # Update previous states with the newly trained models (only for selected clients)
-            for idx, client_idx in enumerate(selected_clients):
-                self.client_prev_states[client_idx] = {
-                    k: v.cpu() for k, v in clients_params[idx].items()
-                }
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
+            selected_states = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                selected_states.append(results[i][1])
+                self.clients_state[i] = results[i][1]
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
-            self.aggregate(clients_params, weights=norm_weights)
+            self.aggregate(selected_states, weights=norm_weights)
             self.evaluate()
-            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+            print(
+                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):

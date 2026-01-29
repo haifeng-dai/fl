@@ -32,64 +32,59 @@ def add_args(parser: argparse.ArgumentParser):
 
 def decompose_param(param, energy_threshold):
     """
-    使用基于能量阈值的 SVD 分解单个参数张量
+    Decompose a single parameter tensor using SVD based on energy threshold.
 
     Args:
-        param: 参数张量
-        energy_threshold: 能量阈值 (0-1)
+        param: Parameter tensor
+        energy_threshold: Energy threshold (0-1)
 
     Returns:
-        compressed_param: 压缩后的参数（字典或张量）
+        compressed_param: Compressed parameter (dict or tensor)
     """
-    # 保持在原设备，不强制移到 CPU
+    # Keep on original device, do not force move to CPU
     param_shape = param.shape
 
-    # 检查是否可以进行分解（2D 或 4D 张量）
-    # 同时通常跳过 embedding 层
+    # Check if decomposition is possible (2D or 4D tensor)
+    # Also usually skip embedding layers
     if len(param_shape) not in [2, 4] or "embedding" in str(param.dtype):
         return param.detach().cpu()
 
-    # 重塑为 2D 矩阵
+    # Reshape to 2D matrix
     if len(param_shape) == 4:
-        # 卷积层: (out, in, h, w) -> (out, in*h*w)
+        # Conv layer: (out, in, h, w) -> (out, in*h*w)
         mat = param.view(param_shape[0], -1)
     else:
         mat = param
 
-    # 执行 SVD 分解
+    # Perform SVD decomposition
     try:
-        # 优先在原设备（如 GPU）上执行
+        # Prefer execution on original device (e.g., GPU)
         u, s, vh = torch.linalg.svd(mat, full_matrices=False)
     except RuntimeError:
-        # SVD 失败时的回退方案（如显存不足），回退到 CPU
+        # Fallback for SVD failure (e.g., OOM), fallback to CPU
         mat = mat.cpu()
         try:
             u, s, vh = torch.linalg.svd(mat, full_matrices=False)
         except RuntimeError:
             return param.detach().cpu()
 
-    # 基于能量阈值确定秩
+    # Determine rank based on energy threshold
     total_energy = torch.sum(s**2)
     if total_energy == 0:
         return param.detach().cpu()
 
     cumulative_energy = torch.cumsum(s**2, dim=0)
-    # 找到累积能量超过 threshold * total 的第一个索引
+    # Find the first index where cumulative energy exceeds threshold * total
     mask = cumulative_energy > (energy_threshold * total_energy)
     if not mask.any():
         rank = len(s)
     else:
         rank = torch.searchsorted(mask.int(), 1).item() + 1
 
-    # 压缩并立即移至 CPU 以节省显存和兼容通信
-    u_k = u[:, :rank].detach().cpu()
-    s_k = s[:rank].detach().cpu()
-    vh_k = vh[:rank, :].detach().cpu()
-
     return {
-        "u": u_k,
-        "s": s_k,
-        "vh": vh_k,
+        "u": u[:, :rank].detach().cpu(),
+        "s": s[:rank].detach().cpu(),
+        "vh": vh[:rank, :].detach().cpu(),
         "original_shape": param_shape,
         "is_compressed": True,
     }
@@ -97,30 +92,30 @@ def decompose_param(param, energy_threshold):
 
 def reconstruct_param(compressed_param, device):
     """
-    从压缩表示重构参数
+    Reconstruct parameter from compressed representation.
 
     Args:
-        compressed_param: 压缩后的参数（来自 decompose_param）
-        device: 目标设备
+        compressed_param: Compressed parameter (from decompose_param)
+        device: Target device
 
     Returns:
-        重构后的参数张量
+        Reconstructed parameter tensor
     """
     if isinstance(compressed_param, dict) and compressed_param.get("is_compressed"):
         u = compressed_param["u"].to(device)
         s = compressed_param["s"].to(device)
         vh = compressed_param["vh"].to(device)
 
-        # 重构: U * diag(S) * Vh
+        # Reconstruct: U * diag(S) * Vh
         mat = u @ (torch.diag(s) @ vh)
 
-        # 重塑回原始形状
+        # Reshape back to original shape
         return mat.view(compressed_param["original_shape"])
     elif isinstance(compressed_param, torch.Tensor):
         return compressed_param.to(device)
     else:
-        # 数据干净时不应该发生
-        raise ValueError(f"未知参数类型: {type(compressed_param)}")
+        # Should not happen if data is clean
+        raise ValueError(f"Unknown parameter type: {type(compressed_param)}")
 
 
 def client_worker(params):
@@ -129,6 +124,7 @@ def client_worker(params):
     """
     # Safe unpacking
     (
+        _,
         device,
         model_name,
         dataset_name,
@@ -243,16 +239,16 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
 
-        # 初始分解
+        # Initial decomposition
         self.compressed_params = {}
         for name, param in self.model.state_dict().items():
             self.compressed_params[name] = decompose_param(param, args.energy)
 
-        # 存储每个客户端的私有本地模型状态（用于模拟本地持久化）
         self.client_wh_states = [None for _ in range(self.num_clients)]
-
-        # 预先计算特征维度，避免客户端重复计算
         self.feature_dim = self._get_feature_dim(args.dataset)
+        self.clients_state = {
+            i: self.model.state_dict() for i in range(self.num_clients)
+        }
 
     def _get_feature_dim(self, dataset_name):
         """Helper to get feature dimension of the model"""
@@ -278,9 +274,10 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # 向客户端发送压缩后的全局参数
+            # Send compressed global params to clients
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.args.model,
                     self.args.dataset,
@@ -300,34 +297,31 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
-            total_loss = sum(res[0] for res in results)
-            avg_loss = total_loss / num_join_clients
-            self.loss.append(avg_loss)
-
-            # 更新服务器端存储的客户端本地状态
-            for i, res in enumerate(results):
-                client_idx = selected_clients[i]
-                self.clients_state[client_idx] = res[2]
-                self.client_wh_states[client_idx] = res[3]
-
-            # 聚合 SVD 参数 (仅聚合 model_g)
-            client_compressed_params_list = [res[1] for res in results]
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
+            # Update server-side stored client local states
+            total_loss = 0.0
+            client_compressed_params_list = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                client_compressed_params_list.append(results[i][1])
+                self.clients_state[i] = results[i][2]
+                self.client_wh_states[i] = results[i][3]
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
             self.aggregate_svd(client_compressed_params_list, weights=norm_weights)
 
             self.evaluate()
-            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+            print(
+                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def evaluate(self):
@@ -341,27 +335,27 @@ class Server(BaseServer):
         self.acc.append(acc / self.num_clients)
 
     def aggregate_svd(self, client_params_list, weights):
-        """聚合 SVD 压缩的参数"""
-        # 1. 将所有参数重构到 CPU
+        """Aggregate SVD compressed parameters"""
+        # 1. Reconstruct all params to CPU
         aggregated_state_dict = {}
         ref_params = client_params_list[0]
 
-        # 用第一个客户端初始化
+        # Initialize with first client
         for name in ref_params.keys():
             param_0 = reconstruct_param(ref_params[name], torch.device("cpu"))
             aggregated_state_dict[name] = param_0 * weights[0]
 
-        # 累积其余客户端
+        # Accumulate remaining clients
         for i in range(1, len(client_params_list)):
             client_params = client_params_list[i]
             for name in client_params.keys():
                 param = reconstruct_param(client_params[name], torch.device("cpu"))
                 aggregated_state_dict[name] += param * weights[i]
 
-        # 2. 更新服务器模型
+        # 2. Update server model
         self.model.load_state_dict(aggregated_state_dict)
 
-        # 3. 为下一轮分发重新压缩
+        # 3. Re-compress for next round distribution
         self.compressed_params = {}
         for name, param in self.model.state_dict().items():
             self.compressed_params[name] = decompose_param(param, self.args.energy)

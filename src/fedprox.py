@@ -18,6 +18,7 @@ def client_worker(params):
     FedProx local training with proximal term.
     """
     (
+        _,
         device,
         model_state,
         train_set,
@@ -92,6 +93,7 @@ class Server(BaseServer):
 
             p = [
                 [
+                    i,
                     self.client_gpu[i],
                     self.model.state_dict(),
                     self.train_sets[i],
@@ -107,26 +109,28 @@ class Server(BaseServer):
 
             results = run_parallel_clients(
                 client_worker=client_worker,
-                num_clients=num_join_clients,
                 parameters=p,
                 gpu_pools=self.gpu_pools,
                 mp=self.mp,
             )
 
             # Process results
-            avg_loss = sum(res[0] for res in results) / num_join_clients
-            self.loss.append(avg_loss)
-
-            clients_params = [res[1] for res in results]
-
-            # Calculate weights for selected clients
-            current_weights = [self.weights[i] for i in selected_clients]
+            total_loss = 0.0
+            selected_states = []
+            current_weights = []
+            for i in selected_clients:
+                total_loss += results[i][0]
+                selected_states.append(results[i][1])
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
-            self.aggregate(clients_params, weights=norm_weights)
+            self.aggregate(selected_states, weights=norm_weights)
             self.evaluate()
-            print(f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {avg_loss:.4f}")
+            print(
+                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
