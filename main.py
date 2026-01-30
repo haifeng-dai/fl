@@ -8,7 +8,7 @@ import random
 import numpy as np
 import torch
 
-from src import prepare_data
+from src import prepare_data, get_pre_name
 
 
 def set_seed(seed):
@@ -50,6 +50,12 @@ def get_args():
         ],
     )
     parser.add_argument("--test", type=int, default=0, help="Test or train")
+    parser.add_argument(
+        "--feature_dim",
+        type=int,
+        default=512,
+        help="Feature dimension for prototypes (default: 512)",
+    )
     args, _ = parser.parse_known_args()
 
     # 2. Build Full Parser
@@ -116,13 +122,6 @@ def get_args():
         help="Maximum number of parallel workers per GPU to avoid OOM",
     )
     train_group.add_argument(
-        "--parallel_mode",
-        type=str,
-        default="stream",
-        choices=["sequential", "stream", "multi_stream"],
-        help="Parallel mode for stream training: sequential, stream (1 per GPU), multi_stream (N per GPU)",
-    )
-    train_group.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
 
@@ -136,11 +135,20 @@ def get_args():
         algo_module.add_args(full_parser)
 
     args = full_parser.parse_args()
+    get_pre_name(args)
+
     return args, algo_module
 
 
 def main():
     args, algo_module = get_args()
+
+    # 仅输出到文件
+    log_path = algo_module.get_path(args)
+    log_f = open(log_path, "w", encoding="utf-8", buffering=1)
+    sys.stdout = log_f
+    sys.stderr = log_f
+
     set_seed(args.seed)
     server = algo_module.Server(args=args)
     prepare_data(
@@ -151,12 +159,6 @@ def main():
         n_classes=args.n_class,
         test_ratio=args.test_ratio,
     )
-
-    # 仅输出到文件
-    log_path = server.get_log_path()
-    log_f = open(log_path, "w", encoding="utf-8", buffering=1)
-    sys.stdout = log_f
-    sys.stderr = log_f
 
     server.fit()
     server.save()

@@ -24,6 +24,11 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.mu}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def client_worker(params):
     """
     FedProto local training with prototype regularization.
@@ -41,10 +46,11 @@ def client_worker(params):
         epochs,
         mu,
         num_classes,
+        feature_dim,
     ) = params
 
     # 1. Initialize Model
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     # Pre-move global prototypes to GPU to avoid frequent data transfer
@@ -85,10 +91,9 @@ def client_worker(params):
 
     # 3. Calculate Local Prototypes (Average features per class)
     model.eval()
-    local_protos = {}
+    local_protos: dict[int, torch.Tensor] = {}
 
     # Initialize tensors on GPU for accumulation to avoid Python loops
-    feature_dim = features.shape[1]
     sum_protos = torch.zeros((num_classes, feature_dim), device=device)
     sum_counts = torch.zeros(num_classes, device=device)
 
@@ -104,9 +109,9 @@ def client_worker(params):
             )
 
     # Average and convert to CPU dictionary
-    active_classes = torch.where(sum_counts > 0)[0]
+    active_classes: torch.Tensor = torch.where(sum_counts > 0)[0]
     for c in active_classes:
-        c_item = c.item()
+        c_item = int(c.item())
         local_protos[c_item] = (sum_protos[c_item] / sum_counts[c_item]).cpu()
 
     # Return avg_loss, new_model_state, local_protos
@@ -120,7 +125,8 @@ class Server(BaseServer):
         super().__init__(True, args)
         # Initialize personalized models for each client
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
-        self.global_protos: dict[int, torch.Tensor] = {}
+        # Global prototypes stored as a Tensor [num_classes, feature_dim] on CPU, or None if not available
+        self.global_protos: torch.Tensor | None = None
         self.acc_p: list[float] = []
 
     def fit(self):
@@ -150,6 +156,7 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.mu,
                     self.num_class,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -250,8 +257,8 @@ class Server(BaseServer):
                 )
             acc_ps.append(acc_p)
 
-        self.acc.append(np.mean(accs) if accs else 0.0)
-        self.acc_p.append(np.mean(acc_ps) if acc_ps else 0.0)
+        self.acc.append(sum(accs) / self.num_clients)
+        self.acc_p.append(sum(acc_ps) / self.num_clients)
 
     def save(self):
         f = {
@@ -263,7 +270,3 @@ class Server(BaseServer):
             },
         }
         self.deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.mu}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

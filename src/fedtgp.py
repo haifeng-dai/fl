@@ -15,7 +15,7 @@ def add_args(parser: argparse.ArgumentParser):
     """Add FedTGP specific arguments"""
     group = parser.add_argument_group("FedTGP Specific Arguments")
     group.add_argument(
-        "--lamda",
+        "--lamda_",
         type=float,
         default=10.0,
         help="Weight for prototype matching loss (default: 10.0)",
@@ -38,13 +38,12 @@ def add_args(parser: argparse.ArgumentParser):
         default=1.0,
         help="Margin threshold for TGP training (default: 1.0)",
     )
-    group.add_argument(
-        "--feature_dim",
-        type=int,
-        default=512,
-        help="Feature dimension for prototypes (default: 512)",
-    )
     return parser
+
+
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.lamda_}_{args.server_epochs}_{args.server_lr}_{args.margin_threshold}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
 
 
 class TGP(nn.Module):
@@ -99,7 +98,6 @@ def client_worker(params):
     (
         _,
         device,
-        client_id,
         model_state,
         train_set,
         model_name,
@@ -107,13 +105,14 @@ def client_worker(params):
         lr,
         batch_size,
         epochs,
-        lamda,
+        lamda_,
         global_protos,
         num_classes,
+        feature_dim,
     ) = params
 
     # Initialize model
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     # Setup
@@ -154,7 +153,7 @@ def client_worker(params):
                 target_protos = global_protos_tensor[y]
 
                 # MSE loss between features and corresponding prototypes
-                loss += mse_loss(features, target_protos) * lamda
+                loss += mse_loss(features, target_protos) * lamda_
 
             optimizer.zero_grad()
             loss.backward()
@@ -194,12 +193,6 @@ class Server(BaseServer):
         # FedTGP is a personalized FL method
         super().__init__(True, args)
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
-
-        # FedTGP specific parameters
-        self.lamda = args.lamda
-        self.server_epochs = args.server_epochs
-        self.server_lr = args.server_lr
-        self.margin_threshold = args.margin_threshold
 
         # Use model's actual feature dimension if available, otherwise use args
         if hasattr(self.model, "feature_dim"):
@@ -241,7 +234,6 @@ class Server(BaseServer):
                 [
                     i,
                     self.client_gpu[i],
-                    i,
                     self.clients_state[i],
                     self.train_sets[i],
                     self.args.model,
@@ -249,9 +241,10 @@ class Server(BaseServer):
                     self.args.lr,
                     self.args.batch_size,
                     self.args.epochs,
-                    self.lamda,
+                    self.args.lamda_,
                     global_protos_cpu,
                     self.num_class,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -324,9 +317,9 @@ class Server(BaseServer):
     def update_tgp(self, uploaded_protos):
         """Update Trainable Global Prototypes"""
         self.tgp.train()
-        optimizer = torch.optim.SGD(self.tgp.parameters(), lr=self.server_lr)
+        optimizer = torch.optim.SGD(self.tgp.parameters(), lr=self.args.server_lr)
 
-        for epoch in range(self.server_epochs):
+        for epoch in range(self.args.server_epochs):
             proto_loader = DataLoader(
                 uploaded_protos,
                 batch_size=self.args.batch_size,
@@ -349,7 +342,7 @@ class Server(BaseServer):
 
                 # Add margin for true class
                 one_hot = F.one_hot(labels_batch, self.num_class).to(self.device)
-                margin = min(torch.max(self.gap).item(), self.margin_threshold)
+                margin = min(torch.max(self.gap).item(), self.args.margin_threshold)
                 dist = dist + one_hot * margin
 
                 # Loss: use negative distance as logits
@@ -362,12 +355,6 @@ class Server(BaseServer):
                 epoch_loss += loss.item()
                 num_batches += 1
 
-            # if epoch % max(1, self.server_epochs // 5) == 0:
-            #     avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
-            #     print(
-            #         f"  TGP Epoch {epoch + 1}/{self.server_epochs}, Loss: {avg_epoch_loss:.4f}"
-            #     )
-
         # Generate global prototypes
         self.tgp.eval()
         self.global_protos = {}
@@ -376,8 +363,6 @@ class Server(BaseServer):
                 self.global_protos[class_id] = self.tgp(
                     torch.tensor(class_id, device=self.device)
                 ).detach()
-
-        # print(f"Updated global prototypes for {len(self.global_protos)} classes")
 
     def evaluate_personalized(self):
         """Evaluate personalized client models using global prototypes"""
@@ -389,9 +374,7 @@ class Server(BaseServer):
         # Use global prototypes for evaluation if available
         if self.global_protos is not None:
             for i in range(self.num_clients):
-                client_model = get_model(self.args.model, self.args.dataset).to(
-                    self.device
-                )
+                client_model = get_model(self.args.model, self.args.dataset, self.args.feature_dim).to(self.device)
                 client_model.load_state_dict(self.clients_state[i])
                 client_model.eval()
 
@@ -423,9 +406,7 @@ class Server(BaseServer):
         else:
             # Fallback to standard evaluation
             for i in range(self.num_clients):
-                client_model = get_model(self.args.model, self.args.dataset).to(
-                    self.device
-                )
+                client_model = get_model(self.args.model, self.args.dataset, self.args.feature_dim).to(self.device)
                 client_model.load_state_dict(self.clients_state[i])
 
                 acc = evaluate_model(client_model, self.test_set[i], self.device)
@@ -449,7 +430,3 @@ class Server(BaseServer):
             },
         }
         super().deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.lamda}_{self.args.server_epochs}_{self.args.server_lr}_{self.args.margin_threshold}_{self.args.feature_dim}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

@@ -3,18 +3,19 @@ import torch.nn as nn
 
 
 class HARMLP(nn.Module):
-    def __init__(self, input_dim=561, num_classes=6, hidden_dim=64):
+    def __init__(self, input_dim=561, num_classes=6, feature_dim=512):
         super(HARMLP, self).__init__()
-
-        self.feature_dim = hidden_dim
 
         # Feature extractor (Body)
         self.extractor = nn.Sequential(
-            nn.Linear(input_dim, 256), nn.ReLU(), nn.Linear(256, hidden_dim), nn.ReLU()
+            nn.Linear(input_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, feature_dim),
+            nn.ReLU(inplace=True),
         )
 
         # Classifier head
-        self.classifier = nn.Linear(hidden_dim, num_classes)
+        self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, x):
         # Input shape: (Batch, 561)

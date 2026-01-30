@@ -16,6 +16,11 @@ from .utils import (
 )
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def client_worker(params):
     """
     FedPer local training.
@@ -31,10 +36,11 @@ def client_worker(params):
         lr,
         batch_size,
         epochs,
+        feature_dim,
     ) = params
 
     # 1. Initialize model
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
 
     # 2. Load parameters directly into sub-modules
     # Load global body (extractor) - shared
@@ -108,6 +114,7 @@ class Server(BaseServer):
                     self.args.lr,
                     self.args.batch_size,
                     self.args.epochs,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -171,7 +178,3 @@ class Server(BaseServer):
 
         f = {"acc": self.acc, "loss": self.loss, "client_states": client_states}
         self.deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

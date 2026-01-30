@@ -33,6 +33,11 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.alpha_fml}_{args.beta_fml}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def client_worker(params):
     """
     FML (Federated Mutual Learning) local training.
@@ -48,16 +53,17 @@ def client_worker(params):
         lr,
         batch_size,
         epochs,
-        alpha,
-        beta,
+        alpha_fml,
+        beta_fml,
+        feature_dim,
     ) = params
 
     # 1. Initialize Global Model (MEME)
-    global_model = get_model(model_name, dataset_name).to(device)
+    global_model = get_model(model_name, dataset_name, feature_dim).to(device)
     global_model.load_state_dict(global_state)
 
     # 2. Initialize Local Model (Personalized)
-    local_model = get_model(model_name, dataset_name).to(device)
+    local_model = get_model(model_name, dataset_name, feature_dim).to(device)
     local_model.load_state_dict(local_state)
 
     # Optimizers
@@ -96,8 +102,8 @@ def client_worker(params):
             # Local model learns from Global model
             loss_kl_l = kl_loss(out_l, out_g.detach())
 
-            loss_g = ce_g + beta * loss_kl_g
-            loss_l = ce_l + alpha * loss_kl_l
+            loss_g = ce_g + beta_fml * loss_kl_g
+            loss_l = ce_l + alpha_fml * loss_kl_l
 
             # Update Global
             opt_g.zero_grad()
@@ -159,6 +165,7 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.alpha_fml,
                     self.args.beta_fml,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -218,9 +225,3 @@ class Server(BaseServer):
             },
         }
         super().deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = (
-            f"{self.save_name_pre}_{self.args.alpha_fml}_{self.args.beta_fml}"
-        )
-        return os.path.join(self.log_path, f"{self.file_name}.log")

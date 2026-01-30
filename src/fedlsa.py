@@ -51,6 +51,11 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.lambda_com}_{args.alpha_sep}_{args.server_epochs}_{args.server_lr}_{args.tau}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def separation_loss(anchors, tau=0.1):
     """
     计算分离损失 (L_SEP)，公式如下：
@@ -79,15 +84,12 @@ class AnchorMapping(nn.Module):
     Two-layer MLP mapping function Theta(.) to map random vectors R to anchors A.
     """
 
-    def __init__(self, feature_dim, hidden_dim=None):
+    def __init__(self, feature_dim):
         super().__init__()
-        if hidden_dim is None:
-            hidden_dim = feature_dim * 2
-
         self.net = nn.Sequential(
-            nn.Linear(feature_dim, hidden_dim),
+            nn.Linear(feature_dim, feature_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, feature_dim),
+            nn.Linear(feature_dim, feature_dim),
         )
 
     def forward(self, x):
@@ -111,9 +113,10 @@ def client_worker(params):
         epochs,
         lambda_com,
         tau,
+        feature_dim,
     ) = params
 
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
@@ -168,10 +171,10 @@ class Server(BaseServer):
 
         # 1. Initialize Random Vectors R (learnable)
         # R has the same shape as Anchors: [C, d]
-        self.R = torch.randn(self.num_class, self.model.feature_dim, device=self.device)
+        self.R = torch.randn(self.num_class, self.args.feature_dim, device=self.device)
 
         # 2. Initialize Mapping Function Theta (MLP)
-        self.anchor_mapping = AnchorMapping(self.model.feature_dim).to(self.device)
+        self.anchor_mapping = AnchorMapping(self.args.feature_dim).to(self.device)
 
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
         self.labels = torch.arange(self.num_class, device=self.device)
@@ -215,6 +218,7 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.lambda_com,
                     self.args.tau,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -317,7 +321,3 @@ class Server(BaseServer):
             },
         }
         super().deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.lambda_com}_{self.args.alpha_sep}_{self.args.server_epochs}_{self.args.server_lr}_{self.args.tau}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

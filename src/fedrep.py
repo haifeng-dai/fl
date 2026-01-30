@@ -27,6 +27,11 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.name_pre}_{args.epochs_head}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def client_worker(params):
     """
     Worker function for FedRep client training.
@@ -62,10 +67,11 @@ def client_worker(params):
         batch_size,
         epochs_body,
         epochs_head,
+        feature_dim,
     ) = params
 
     # 1. Instantiate Model
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
 
     # 2. Load Parameters
     model.extractor.load_state_dict(global_body_state)
@@ -169,6 +175,7 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.args.epochs_head,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -235,7 +242,3 @@ class Server(BaseServer):
             },
         }
         super().deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.dataset}_{self.args.model}_{self.args.epochs}_{self.args.epochs_head}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

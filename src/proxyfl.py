@@ -34,6 +34,11 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.mu}_{args.adj_type}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def client_worker(params):
     """
     ProxyFL local training with mutual distillation between private local model and shared proxy model.
@@ -50,14 +55,15 @@ def client_worker(params):
         batch_size,
         epochs,
         mu,
+        feature_dim,
     ) = params
 
     # 1. Initialize Proxy Model (Shared/Public)
-    proxy_model = get_model(model_name, dataset_name).to(device)
+    proxy_model = get_model(model_name, dataset_name, feature_dim).to(device)
     proxy_model.load_state_dict(proxy_state)
 
     # 2. Initialize Local Model (Private/Personalized)
-    local_model = get_model(model_name, dataset_name).to(device)
+    local_model = get_model(model_name, dataset_name, feature_dim).to(device)
     local_model.load_state_dict(local_state)
 
     # Optimizers
@@ -187,6 +193,7 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.args.mu,
+                    self.args.feature_dim,
                 ]
 
             p = [get_client_param(i) for i in selected_clients]
@@ -241,7 +248,3 @@ class Server(BaseServer):
             "state_dict": self.client_states,
         }
         super().deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.mu}_{self.args.adj_type}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

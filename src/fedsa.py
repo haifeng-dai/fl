@@ -44,6 +44,11 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.alpha_sa}_{args.lambda_r}_{args.lambda_mcl}_{args.lambda_cc}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def mcl_loss(
     feature: torch.Tensor,
     protos: torch.Tensor,
@@ -89,10 +94,11 @@ def client_worker(params):
         lambda_mcl,
         lambda_cc,
         num_classes,
+        feature_dim,
     ) = params
 
     # 1. Initialize Model
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
@@ -177,7 +183,7 @@ class Server(BaseServer):
         super().__init__(False, args)
 
         # 全局语义锚点 (Prototypes)
-        self.anchors = torch.zeros(self.num_class, self.model.feature_dim)
+        self.anchors = torch.zeros(self.num_class, self.args.feature_dim)
         self.clients_anchors = [
             self.anchors.data.clone() for _ in range(self.num_clients)
         ]
@@ -215,6 +221,7 @@ class Server(BaseServer):
                     self.args.lambda_mcl,
                     self.args.lambda_cc,
                     self.num_class,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -294,7 +301,3 @@ class Server(BaseServer):
             },
         }
         super().deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.alpha_sa}_{self.args.lambda_r}_{self.args.lambda_mcl}_{self.args.lambda_cc}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

@@ -29,7 +29,6 @@ def add_args(parser: argparse.ArgumentParser):
     group.add_argument(
         "--batch_size_pln", type=int, default=32, help="Batch size for PLN learning"
     )
-    group.add_argument("--feature_dim", type=int, default=128, help="Feature dimension")
     group.add_argument("--depth_pln", type=int, default=2, help="Depth of PLN network")
     group.add_argument(
         "--width_pln", type=int, default=128, help="Width of PLN network"
@@ -41,7 +40,6 @@ def add_args(parser: argparse.ArgumentParser):
         choices=["normal", "pln", "model", "all"],
         help="Task mode",
     )
-    group.add_argument("--har", type=int, default=0, help="Whether to use HAR dataset")
     group.add_argument(
         "--fixed_proto",
         type=int,
@@ -54,7 +52,13 @@ def add_args(parser: argparse.ArgumentParser):
         default=0,
         help="Initialization strategy for PLN embeddings",
     )
+    group.add_argument("--har", type=int, default=0, help="Whether to use HAR dataset")
     return parser
+
+
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.lambda_}_{args.epoch_pln}_{args.lr_pln}_{args.batch_size_pln}_{args.depth_pln}_{args.width_pln}_{args.mode}_{args.fixed_proto}_{args.init_emb}_{args.har}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
 
 
 class PLN(torch.nn.Module):
@@ -137,10 +141,11 @@ def client_worker(params):
         fixed_proto,
         init_emb,
         har,
+        feature_dim,
     ) = params
 
     # 1. Initialize Model and PLN
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
     pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
         device
@@ -223,9 +228,6 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
 
-        # Update feature_dim based on model output
-        self.args.feature_dim = self._get_feature_dim(args.dataset)
-
         self.pln = PLN(
             num_classes=self.num_class,
             width=args.width_pln,
@@ -237,17 +239,6 @@ class Server(BaseServer):
         self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings)
         self.acc_p: list[float] = []
         self.loss_p: list[float] = []
-
-    def _get_feature_dim(self, dataset_name):
-        if dataset_name == "mnist":
-            dummy_input = torch.randn(1, 1, 28, 28)
-        else:
-            dummy_input = torch.randn(1, 3, 32, 32)
-
-        self.model.eval()
-        with torch.no_grad():
-            _, feat = self.model(dummy_input)
-        return feat.shape[1]
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -286,6 +277,7 @@ class Server(BaseServer):
                     self.args.fixed_proto,
                     self.args.init_emb,
                     self.args.har,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -346,7 +338,3 @@ class Server(BaseServer):
             },
         }
         self.deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.lambda_}_{self.args.epoch_pln}_{self.args.lr_pln}_{self.args.batch_size_pln}_{self.args.feature_dim}_{self.args.depth_pln}_{self.args.width_pln}_{self.args.mode}_{self.args.har}_{self.args.fixed_proto}_{self.args.init_emb}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

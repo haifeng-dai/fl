@@ -4,7 +4,8 @@
 # Global Config
 # =============
 # fedala,fedavg,feddpl,fedkd,fedlsa,fedper,fedpln,fedproto,fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl
-export ALGOS="proxyfl"
+# export ALGOS="fedala,fedavg,feddpl,fedkd,fedlsa,fedper,fedpln,fedproto"
+export ALGOS="fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl"
 
 # =============
 # Data
@@ -13,6 +14,7 @@ export ALGOS="proxyfl"
 export DATASETS="mnist"
 # cnn,resnet18,resnet50,harcnn,harmlp
 export MODELS="cnn"
+export FEATURE_DIMS="512"
 export NUM_CLIENTS="10"
 
 # =============
@@ -28,7 +30,7 @@ export N_CLASSES="2"
 # =============
 export EPOCHS="10"
 export LRS="0.01"
-export ROUNDS="2"
+export ROUNDS="1000"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
 
@@ -36,11 +38,10 @@ export JOIN_RATIOS="1.0"
 # Compute
 # =============
 # 3,2,1,0  0,1,2,3
-export GPUS="0"
+# export GPUS="0,1,2,3"
+export GPUS="3,2,1,0"
 export MP=1
 export MAX_WORKERS_PER_GPU=10
-# sequential, stream, multi_stream
-export PARALLEL_MODES="multi_stream"
 
 # =============
 # Test
@@ -63,7 +64,6 @@ export LAMBDAS_DPL="10.0"
 export EPOCH_PLNS_DPL="10"
 export LRS_DPL="0.01"
 export BATCH_SIZE_PLNS_DPL="64"
-export FEATURE_DIMS_DPL="512"
 export DEPTH_PLNS_DPL="1"
 export WIDTH_PLNS_DPL="512"
 export MODES_DPL="normal"
@@ -87,7 +87,6 @@ export LAMBDAS_PLN="10.0"
 export EPOCH_PLNS_PLN="10"
 export LR_PLNS_PLN="0.01"
 export BATCH_SIZE_PLNS_PLN="64"
-export FEATURE_DIMS_PLN="512"
 export DEPTH_PLNS_PLN="1"
 export WIDTH_PLNS_PLN="512"
 export MODES_PLN="normal"
@@ -115,7 +114,6 @@ export LAMDAS_TGP="10.0"
 export SERVER_EPOCHS_TGP="10"
 export SERVER_LRS_TGP="0.01"
 export MARGIN_THRESHOLDS_TGP="1.0"
-export FEATURE_DIMS_TGP="512"
 
 # FML
 export ALPHAS_FML="1.0"

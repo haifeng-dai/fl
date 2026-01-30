@@ -27,6 +27,11 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.mu}_{args.tau}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def client_worker(params):
     """
     MOON local training with Model-Contrastive Loss.
@@ -44,10 +49,11 @@ def client_worker(params):
         epochs,
         mu,
         tau,
+        feature_dim,
     ) = params
 
     # 1. Initialize current local model with global state
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(global_state)
 
     # 2. Initialize global model (frozen) for contrastive loss
@@ -55,7 +61,7 @@ def client_worker(params):
     global_model.eval()
 
     # 3. Initialize previous local model (frozen) for contrastive loss
-    prev_model = get_model(model_name, dataset_name).to(device)
+    prev_model = get_model(model_name, dataset_name, feature_dim).to(device)
     prev_model.load_state_dict(prev_state)
     prev_model.eval()
 
@@ -133,6 +139,7 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.mu,
                     self.args.tau,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -167,7 +174,3 @@ class Server(BaseServer):
     def save(self):
         f = {"acc": self.acc, "loss": self.loss, "state_dict": self.model.state_dict()}
         super().deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.mu}_{self.args.tau}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

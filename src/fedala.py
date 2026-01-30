@@ -8,7 +8,13 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .utils import BaseServer, ce_loss, get_model, run_parallel_clients, evaluate_model
+from .utils import (
+    BaseServer,
+    ce_loss,
+    get_model,
+    run_parallel_clients,
+    evaluate_model,
+)
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -47,6 +53,11 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.eta}_{args.rand_percent}_{args.layer_idx}_{args.ala_threshold}_{args.num_pre_loss}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 class ALA:
     """Adaptive Local Aggregation module for FedALA"""
 
@@ -63,6 +74,7 @@ class ALA:
         device: str = "cpu",
         threshold: float = 0.1,
         num_pre_loss: int = 10,
+        feature_dim: int = 512,
     ):
         self.client_id = client_id
         self.train_data = train_data
@@ -74,6 +86,7 @@ class ALA:
         self.eta = eta
         self.threshold = threshold
         self.num_pre_loss = num_pre_loss
+        self.feature_dim = feature_dim
         self.device = device
 
         self.weights = None  # Learnable local aggregation weights
@@ -118,7 +131,7 @@ class ALA:
                 param.data = param_g.data.clone()
 
         # Temp local model only for weight learning
-        model_t = get_model(self.model_name, self.dataset_name).to(self.device)
+        model_t = get_model(self.model_name, self.dataset_name, self.feature_dim).to(self.device)
         model_t.load_state_dict(local_model.state_dict())
         params_t = list(model_t.parameters())
 
@@ -171,6 +184,7 @@ class ALA:
                 for param_t, param, param_g, weight in zip(
                     params_tp, params_p, params_gp, self.weights
                 ):
+                    assert param_t.grad is not None
                     weight.data = torch.clamp(
                         weight - self.eta * (param_t.grad * (param_g - param)), 0, 1
                     )
@@ -222,13 +236,14 @@ def client_worker(params):
         layer_idx,
         ala_threshold,
         num_pre_loss,
+        feature_dim,
     ) = params
 
     # Initialize models
-    global_model = get_model(model_name, dataset_name).to(device)
+    global_model = get_model(model_name, dataset_name, feature_dim).to(device)
     global_model.load_state_dict(global_model_state)
 
-    local_model = get_model(model_name, dataset_name).to(device)
+    local_model = get_model(model_name, dataset_name, feature_dim).to(device)
     local_model.load_state_dict(local_model_state)
 
     # Initialize ALA module
@@ -244,6 +259,7 @@ def client_worker(params):
         device=device,
         threshold=ala_threshold,
         num_pre_loss=num_pre_loss,
+        feature_dim=feature_dim,
     )
 
     # Apply adaptive local aggregation
@@ -322,6 +338,7 @@ class Server(BaseServer):
                     self.args.layer_idx,
                     self.args.ala_threshold,
                     self.args.num_pre_loss,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -364,7 +381,7 @@ class Server(BaseServer):
 
         for i in range(self.num_clients):
             # Load client model
-            client_model = get_model(self.args.model, self.args.dataset).to(self.device)
+            client_model = get_model(self.args.model, self.args.dataset, self.args.feature_dim).to(self.device)
             client_model.load_state_dict(self.clients_state[i])
 
             # Evaluate on client's test set
@@ -384,7 +401,3 @@ class Server(BaseServer):
             "state_dict": self.clients_state,
         }
         self.deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.eta}_{self.args.rand_percent}_{self.args.layer_idx}_{self.args.ala_threshold}_{self.args.num_pre_loss}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

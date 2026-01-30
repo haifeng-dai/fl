@@ -1,5 +1,4 @@
 import argparse
-import copy
 import os
 import torch
 import torch.multiprocessing as mp
@@ -12,7 +11,7 @@ from .load_data import load_data
 
 class BaseServer:
     def __init__(self, pfl: bool, args: argparse.Namespace):
-        self.model = get_model(args.model, args.dataset).cpu()
+        self.model = get_model(args.model, args.dataset, args.feature_dim).cpu()
         self.args = args
         self.rounds: int = args.rounds
         self.mp: bool = bool(self.args.mp)
@@ -30,22 +29,6 @@ class BaseServer:
             n_classes=args.n_class,
             pfl=self.pfl,
         )
-        fold_path = os.path.join(
-            f"{args.algo}",
-            f"{args.dataset}_{args.partition}_{args.num_clients}",
-        )
-        if args.partition == "dirichlet":
-            fold_path += f"_{args.alpha}"
-        elif args.partition == "pathological":
-            fold_path += f"_{args.n_class}"
-        self.save_path = os.path.join("results", fold_path)
-        self.log_path = os.path.join("logs", fold_path)
-
-        os.makedirs(self.save_path, exist_ok=True)
-        os.makedirs(self.log_path, exist_ok=True)
-
-        self.save_name_pre = f"{self.args.epochs}_{self.args.batch_size}_{self.args.lr}"
-        self.file_name = ""
 
         total_samples = sum(train_counts.values())
         self.weights = [
@@ -58,6 +41,7 @@ class BaseServer:
         gpu_ids = [int(i) for i in gpus.split(",")]
 
         # 根据是否启用并行模式来分配GPU
+        self.gpu_pools = {}
         if self.mp:
             # 并行模式：将客户端循环分配到多个GPU
             self.client_gpu = {
@@ -68,15 +52,6 @@ class BaseServer:
                 )
                 for i in range(self.num_clients)
             }
-        else:
-            # 非并行模式：所有客户端都使用第一个GPU
-            first_gpu = torch.device(
-                f"cuda:{gpu_ids[0]}" if torch.cuda.is_available() else "cpu"
-            )
-            self.client_gpu = {i: first_gpu for i in range(self.num_clients)}
-
-        self.gpu_pools = {}
-        if self.mp:
             device_counts = dict.fromkeys(set(self.client_gpu.values()), 0)
             for device in self.client_gpu.values():
                 device_counts[device] += 1
@@ -89,8 +64,14 @@ class BaseServer:
                 actual_workers = min(count, max_workers) if max_workers else count
                 self.gpu_pools[device] = mp.Pool(processes=actual_workers)
         else:
+            # 非并行模式：所有客户端都使用第一个GPU
+            first_gpu = torch.device(
+                f"cuda:{gpu_ids[0]}" if torch.cuda.is_available() else "cpu"
+            )
+            self.client_gpu = {i: first_gpu for i in range(self.num_clients)}
             print(f"-> 未启用多进程训练，将使用顺序训练 (设备: {self.client_gpu[0]})")
-        self.device = self.client_gpu[0]
+
+        self.device = gpu_ids[-1]
 
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
@@ -118,7 +99,7 @@ class BaseServer:
             self.gpu_pools = {}
 
     def deal_save(self, params):
-        path = os.path.join(self.save_path, f"{self.file_name}.pt")
+        path = os.path.join(self.args.save_path, f"{self.args.file_name}.pt")
         if self.args.test:
             print(f"\nnot save to {path}\n")
         else:
@@ -127,20 +108,20 @@ class BaseServer:
         self.close()
 
 
-def get_model(model_name, dataset):
+def get_model(model_name, dataset, feature_dim):
     num_classes = 100 if dataset == "cifar100" else 10
     if model_name == "resnet18":
-        global_model = ResNet18(num_classes=num_classes, dataset_name=dataset)
+        global_model = ResNet18(num_classes=num_classes, dataset_name=dataset, feature_dim=feature_dim)
     elif model_name == "resnet50":
-        global_model = ResNet50(num_classes=num_classes, dataset_name=dataset)
+        global_model = ResNet50(num_classes=num_classes, dataset_name=dataset, feature_dim=feature_dim)
     elif model_name == "harcnn":
-        global_model = HARCNN(in_channels=9, num_classes=6)
+        global_model = HARCNN(in_channels=9, num_classes=6, feature_dim=feature_dim)
     elif model_name == "harmlp":
-        global_model = HARMLP(input_dim=561, num_classes=6)
+        global_model = HARMLP(input_dim=561, num_classes=6, feature_dim=feature_dim)
     elif model_name == "cnn":
         # 根据数据集选择输入通道数
         input_channels = 1 if dataset == "mnist" else 3
-        global_model = CNN(num_classes=num_classes, input_channels=input_channels)
+        global_model = CNN(input_channels=input_channels, num_classes=num_classes, feature_dim=feature_dim)
     else:
         raise ValueError(f"Unsupported model name: {model_name}")
 

@@ -8,6 +8,11 @@ import torch
 from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def client_worker(params):
     """
     Standard FedAvg local training.
@@ -22,10 +27,11 @@ def client_worker(params):
         lr,
         batch_size,
         epochs,
+        feature_dim,
     ) = params
 
     # 1. Initialize model and load global state
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     # 2. Setup optimizer and data loader
@@ -87,6 +93,7 @@ class Server(BaseServer):
                     self.args.lr,
                     self.args.batch_size,
                     self.args.epochs,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -125,7 +132,3 @@ class Server(BaseServer):
             "state_dict": self.model.state_dict(),
         }
         self.deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = self.save_name_pre
-        return os.path.join(self.log_path, f"{self.file_name}.log")

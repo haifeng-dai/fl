@@ -13,6 +13,11 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.mu}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def client_worker(params):
     """
     FedProx local training with proximal term.
@@ -28,10 +33,11 @@ def client_worker(params):
         batch_size,
         epochs,
         mu,
+        feature_dim,
     ) = params
 
     # 1. Initialize model
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     # 2. Store global parameters for proximal term calculation
@@ -103,6 +109,7 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.args.mu,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -140,7 +147,3 @@ class Server(BaseServer):
             "state_dict": self.model.state_dict(),
         }
         super().deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.mu}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

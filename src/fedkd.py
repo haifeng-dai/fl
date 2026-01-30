@@ -30,6 +30,11 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
+def get_path(args):
+    args.file_name = f"{args.name_pre}_{args.lr_g}_{args.energy}"
+    return os.path.join(args.log_path, f"{args.file_name}.log")
+
+
 def decompose_param(param, energy_threshold):
     """
     Decompose a single parameter tensor using SVD based on energy threshold.
@@ -138,13 +143,14 @@ def client_worker(params):
         batch_size,
         epochs,
         energy_threshold,
+        feature_dim,
     ) = params
 
     # 1. Initialize Models
     # Local personalized model
-    model = get_model(model_name, dataset_name).to(device)
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
     # Global proxy model (constructed from compressed SVD params)
-    model_g = get_model(model_name, dataset_name).to(device)
+    model_g = get_model(model_name, dataset_name, feature_dim).to(device)
 
     with torch.no_grad():
         # A. Reconstruct and load global proxy parameters from SVD components
@@ -291,6 +297,7 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.args.energy,
+                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -327,7 +334,7 @@ class Server(BaseServer):
     def evaluate(self):
         acc = 0.0
         for i in range(self.num_clients):
-            model = get_model(self.args.model, self.args.dataset).to(self.device)
+            model = get_model(self.args.model, self.args.dataset, self.args.feature_dim).to(self.device)
             with torch.no_grad():
                 model.load_state_dict(self.clients_state[i])
             acc_i = evaluate_model(model, self.test_set[i], self.device)
@@ -371,7 +378,3 @@ class Server(BaseServer):
             },
         }
         self.deal_save(f)
-
-    def get_log_path(self):
-        self.file_name = f"{self.save_name_pre}_{self.args.lr_g}_{self.args.energy}"
-        return os.path.join(self.log_path, f"{self.file_name}.log")

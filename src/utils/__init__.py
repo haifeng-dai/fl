@@ -2,7 +2,7 @@ from .fed_utils import BaseServer, get_model
 from .parallel import run_parallel_clients
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
-import torch
+import torch, os
 
 
 def compare_model_parameters(params1: dict, params2: dict) -> bool:
@@ -90,3 +90,19 @@ def kl_loss(student_logits, teacher_logits, temperature=1.0):
     ) * (temperature**2)
 
     return loss
+
+
+def get_pre_name(args):
+    fold_path = os.path.join(
+        f"{args.algo}",
+        f"{args.dataset}_{args.partition}_{args.num_clients}",
+    )
+    if args.partition == "dirichlet":
+        fold_path += f"_{args.alpha}"
+    elif args.partition == "pathological":
+        fold_path += f"_{args.n_class}"
+    args.save_path = os.path.join("results", fold_path)
+    args.log_path = os.path.join("logs", fold_path)
+    os.makedirs(args.save_path, exist_ok=True)
+    os.makedirs(args.log_path, exist_ok=True)
+    args.name_pre = f"{args.epochs}_{args.batch_size}_{args.lr}"

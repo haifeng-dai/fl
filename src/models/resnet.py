@@ -4,7 +4,7 @@ import torchvision.models as models
 
 
 class ResNet18(nn.Module):
-    def __init__(self, num_classes=10, feature_dim=None, dataset_name="cifar10"):
+    def __init__(self, num_classes=10, feature_dim=512, dataset_name="cifar10"):
         super(ResNet18, self).__init__()
         # 使用预训练的ResNet18作为基础
         self.resnet = models.resnet18(weights=None)
@@ -33,9 +33,9 @@ class ResNet18(nn.Module):
         # 移除自适应平均池化和全连接层
         self.resnet.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        # 特征提取器
-        # 我们按照 ResNet 的标准顺序重新组织 layer
-        self.extractor = nn.Sequential(
+        # 获取特征维度
+        # 根据数据集创建对应的 dummy input
+        extractor = nn.Sequential(
             self.resnet.conv1,
             self.resnet.bn1,
             self.resnet.relu,
@@ -47,25 +47,25 @@ class ResNet18(nn.Module):
             self.resnet.avgpool,
             nn.Flatten(),
         )
+        if dataset_name in ["mnist", "fashionmnist", "femnist"]:
+            dummy_input = torch.randn(1, 1, 28, 28)
+        elif dataset_name in ["cifar10", "cifar100", "svhn"]:
+            dummy_input = torch.randn(1, 3, 32, 32)
+        else:
+            # Default large image
+            dummy_input = torch.randn(1, 3, 224, 224)
 
-        # 获取特征维度
-        with torch.no_grad():
-            if feature_dim is not None:
-                self.feature_dim = feature_dim
-            else:
-                # 根据数据集创建对应的 dummy input
-                if dataset_name in ["mnist", "fashionmnist", "femnist"]:
-                    dummy_input = torch.randn(1, 1, 28, 28)
-                elif dataset_name in ["cifar10", "cifar100", "svhn"]:
-                    dummy_input = torch.randn(1, 3, 32, 32)
-                else:
-                    # Default large image
-                    dummy_input = torch.randn(1, 3, 224, 224)
+        dim = extractor(dummy_input).shape[1]
 
-                self.feature_dim = self.extractor(dummy_input).shape[1]
+        # 特征提取器
+        # 我们按照 ResNet 的标准顺序重新组织 layer
+        self.extractor = nn.Sequential(
+            extractor,
+            nn.Linear(dim, feature_dim),
+        )
 
         # 分类头
-        self.classifier = nn.Linear(self.feature_dim, num_classes)
+        self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, x):
         feature = self.extractor(x)
@@ -74,7 +74,7 @@ class ResNet18(nn.Module):
 
 
 class ResNet50(nn.Module):
-    def __init__(self, num_classes=10, feature_dim=None, dataset_name="cifar10"):
+    def __init__(self, num_classes=10, feature_dim=512, dataset_name="cifar10"):
         super(ResNet50, self).__init__()
         # 使用预训练的ResNet50作为基础
         self.resnet = models.resnet50(weights=None)
@@ -102,9 +102,8 @@ class ResNet50(nn.Module):
         # 移除自适应平均池化和全连接层
         self.resnet.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        # 特征提取器
-        # ResNet50 的层命名与 ResNet18 相同 (layer1...layer4)
-        self.extractor = nn.Sequential(
+        # 获取特征维度
+        extractor = nn.Sequential(
             self.resnet.conv1,
             self.resnet.bn1,
             self.resnet.relu,
@@ -116,25 +115,26 @@ class ResNet50(nn.Module):
             self.resnet.avgpool,
             nn.Flatten(),
         )
+        # 根据数据集创建对应的 dummy input
+        if dataset_name in ["mnist", "fashionmnist", "femnist"]:
+            dummy_input = torch.randn(1, 1, 28, 28)
+        elif dataset_name in ["cifar10", "cifar100", "svhn"]:
+            dummy_input = torch.randn(1, 3, 32, 32)
+        else:
+            # Default large image
+            dummy_input = torch.randn(1, 3, 224, 224)
 
-        # 获取特征维度
-        with torch.no_grad():
-            if feature_dim is not None:
-                self.feature_dim = feature_dim
-            else:
-                # 根据数据集创建对应的 dummy input
-                if dataset_name in ["mnist", "fashionmnist", "femnist"]:
-                    dummy_input = torch.randn(1, 1, 28, 28)
-                elif dataset_name in ["cifar10", "cifar100", "svhn"]:
-                    dummy_input = torch.randn(1, 3, 32, 32)
-                else:
-                    # Default large image
-                    dummy_input = torch.randn(1, 3, 224, 224)
+        dim = extractor(dummy_input).shape[1]
 
-                self.feature_dim = self.extractor(dummy_input).shape[1]
+        # 特征提取器
+        # ResNet50 的层命名与 ResNet18 相同 (layer1...layer4)
+        self.extractor = nn.Sequential(
+            extractor,
+            nn.Linear(dim, feature_dim),
+        )
 
         # 分类头
-        self.classifier = nn.Linear(self.feature_dim, num_classes)
+        self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, x):
         feature = self.extractor(x)

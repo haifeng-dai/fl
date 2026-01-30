@@ -6,16 +6,14 @@ class HARCNN(nn.Module):
     def __init__(self, in_channels=9, num_classes=6, feature_dim=512):
         super(HARCNN, self).__init__()
 
-        self.feature_dim = feature_dim
-
         # Feature extractor
         self.extractor = nn.Sequential(
             nn.Conv1d(in_channels, 32, kernel_size=5, padding=2),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool1d(1),
             nn.Flatten(),
             nn.Linear(32, feature_dim),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
         # Classifier head
