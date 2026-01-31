@@ -1,22 +1,25 @@
-from typing import Optional
 import torch
 
 
 def param_aggregate(
     state_dicts: list[dict[str, torch.Tensor]],
-    weights: Optional[list[float]],
+    weights: list[float],
 ):
-    if weights is None:
-        weights = [1.0 / len(state_dicts)] * len(state_dicts)
+    # Initialize aggregated_state with zeros based on the structure of the first client
+    # Use CPU to save GPU memory for training
+    aggregated_state = {
+        k: torch.zeros_like(v, device="cpu", dtype=torch.float32)
+        for k, v in state_dicts[0].items()
+    }
 
-    weight_tensor = torch.tensor(weights, dtype=torch.float32)
+    # Accumulate parameters in-place: agg += weight * param
+    # This avoids creating a large stack of all client parameters (O(N) memory -> O(1) memory)
     with torch.no_grad():
-        aggregated_state: dict[str, torch.Tensor] = {}
-        for key in state_dicts[0].keys():
-            stacked = torch.stack(
-                [state_dict[key].cpu() for state_dict in state_dicts], dim=0
-            )
-            expanded_weights = weight_tensor.view(-1, *([1] * (stacked.ndim - 1)))
-            aggregated_state[key] = (stacked * expanded_weights).sum(dim=0)
+        for i, state_dict in enumerate(state_dicts):
+            w = weights[i]
+            for key, param in state_dict.items():
+                # Use add_ with alpha for efficient BLAS AXPY operation
+                if key in aggregated_state:
+                    aggregated_state[key].add_(param.cpu(), alpha=w)
 
-        return aggregated_state
+    return aggregated_state

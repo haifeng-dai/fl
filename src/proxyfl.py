@@ -121,7 +121,7 @@ def client_worker(params):
 
     proxy_state = {k: v.cpu() for k, v in proxy_model.state_dict().items()}
     local_state = {k: v.cpu() for k, v in local_model.state_dict().items()}
-    return [avg_loss_p, avg_loss_l, proxy_state, local_state]
+    return [avg_loss_l, avg_loss_p, local_state, proxy_state]
 
 
 class Server(BaseServer):

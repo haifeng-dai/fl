@@ -75,8 +75,8 @@ def client_worker(params):
     global_model.train()
     local_model.train()
 
-    total_loss_g = 0.0
-    total_loss_l = 0.0
+    total_loss_g = torch.tensor(0.0, device=device)
+    total_loss_l = torch.tensor(0.0, device=device)
     num_batches = 0
 
     for _ in range(epochs):
@@ -115,12 +115,12 @@ def client_worker(params):
             loss_l.backward()
             opt_l.step()
 
-            total_loss_g += loss_g.item()
-            total_loss_l += loss_l.item()
+            total_loss_g += loss_g.detach()
+            total_loss_l += loss_l.detach()
             num_batches += 1
 
-    avg_loss_g = total_loss_g / num_batches
-    avg_loss_l = total_loss_l / num_batches
+    avg_loss_g = total_loss_g.item() / num_batches
+    avg_loss_l = total_loss_l.item() / num_batches
 
     # Return: client_id, [avg_loss, new_global_state, new_local_state]
     global_state = {k: v.cpu() for k, v in global_model.state_dict().items()}
@@ -134,7 +134,7 @@ class Server(BaseServer):
 
         # Initialize local models for each client
         self.client_states = [
-            copy.deepcopy(self.model.state_dict()) for _ in range(self.num_clients)
+            self.model.state_dict() for _ in range(self.num_clients)
         ]
         self.loss_g = []
 
@@ -214,6 +214,7 @@ class Server(BaseServer):
 
         avg_acc = sum(accs) / len(accs)
         self.acc.append(avg_acc)
+        self.model.cpu()
 
     def save(self):
         f = {

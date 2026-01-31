@@ -162,15 +162,15 @@ def client_worker(params):
     num_batches_m = 0
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
+    # Prototype Loss: Distance between features and PLN prototypes
+    with torch.no_grad():
+        protos = pln(all_classes)
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             output, feature = model(x)
             loss_ce = ce_loss(output, y)
 
-            # Prototype Loss: Distance between features and PLN prototypes
-            with torch.no_grad():
-                protos = pln(all_classes)
             dist = torch.cdist(feature, protos, p=2) ** 2
             loss_proto = ce_loss(-torch.sqrt(dist), y)
 
@@ -327,6 +327,7 @@ class Server(BaseServer):
         prototype = self.pln(self.all_classes)
         acc_p = evaluate_prototype(self.model, prototype, self.test_set, self.device)
         self.acc_p.append(acc_p)
+        self.model.cpu()
 
     def save(self):
         f = {

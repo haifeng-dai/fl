@@ -62,11 +62,10 @@ def mcl_loss(
 
 
 def margin(anchor: torch.Tensor) -> float:
-    d = torch.tensor(0.0, device=anchor.device, dtype=anchor.dtype)
     # anchor shape: [num_classes, feature_dim]
-    for anchor_i in anchor:
-        for anchor_j in anchor:
-            d += torch.norm(anchor_i - anchor_j, p=2)
+    # Use cdist for vectorized calculation of pairwise distances
+    dists = torch.cdist(anchor, anchor, p=2)
+    d = dists.sum()
 
     denom = (anchor.shape[0] - 1) ** 2
     if denom > 0:

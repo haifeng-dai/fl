@@ -128,6 +128,7 @@ def client_worker(params):
 
     # Ensure anchors are on the correct device and detached (fixed during client training)
     global_anchors = global_anchors.to(device).detach()
+    anchors_norm = F.normalize(global_anchors, p=2, dim=1)
 
     for _ in range(epochs):
         for x, y in loader:
@@ -137,17 +138,13 @@ def client_worker(params):
             loss_ce = ce_loss(logits, y)
 
             # L_COM: Compactness Loss using Softmax with Temperature
-            # 1. Normalize features and anchors
             features_norm = F.normalize(features, p=2, dim=1)
-            anchors_norm = F.normalize(global_anchors, p=2, dim=1)
-
-            # 2. Compute Cosine Similarity Matrix [Batch, NumClasses]
             logits_com = torch.matmul(features_norm, anchors_norm.T)
 
-            # 3. Apply Temperature scaling
+            # 2. Apply Temperature scaling
             logits_com = logits_com / tau
 
-            # 4. CE Loss on similarity logits
+            # 3. CE Loss on similarity logits
             loss_com = ce_loss(logits_com, y)
 
             # Total Loss: L_HC = L_CE + lambda * L_COM

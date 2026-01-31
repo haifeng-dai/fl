@@ -22,16 +22,21 @@ def compare_model_parameters(params1: dict, params2: dict) -> bool:
 
     # 逐个对比每个参数张量
     for key in params1.keys():
-        tensor1 = params1[key].cpu()
-        tensor2 = params2[key].cpu()
+        tensor1 = params1[key]
+        tensor2 = params2[key]
 
         # 检查形状是否相同
         if tensor1.shape != tensor2.shape:
             return False
 
         # 检查数值是否完全相同
-        if not torch.equal(tensor1, tensor2):
-            return False
+        # 如果设备不同，移到 CPU 比较；如果相同，直接在原设备比较（更快）
+        if tensor1.device != tensor2.device:
+            if not torch.equal(tensor1.cpu(), tensor2.cpu()):
+                return False
+        else:
+            if not torch.equal(tensor1, tensor2):
+                return False
 
     return True
 
@@ -47,8 +52,7 @@ def ce_loss(predictions, targets):
     Returns:
         float: 交叉熵损失值
     """
-    loss_fn = torch.nn.CrossEntropyLoss()
-    return loss_fn(predictions, targets)
+    return torch.nn.functional.cross_entropy(predictions, targets)
 
 
 def mse_loss(predictions, targets):
@@ -62,8 +66,7 @@ def mse_loss(predictions, targets):
     Returns:
         float: 均方误差损失值
     """
-    loss_fn = torch.nn.MSELoss()
-    return loss_fn(predictions, targets)
+    return torch.nn.functional.mse_loss(predictions, targets)
 
 
 def kl_loss(student_logits, teacher_logits, temperature=1.0):

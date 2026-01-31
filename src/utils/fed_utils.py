@@ -84,6 +84,7 @@ class BaseServer:
     def evaluate(self, *args, **kwargs):
         acc = evaluate_model(self.model, self.test_set, self.device)
         self.acc.append(acc)
+        self.model.cpu()
 
     def fit(self, *args, **kwargs):
         raise NotImplementedError

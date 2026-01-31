@@ -4,8 +4,10 @@
 # Global Config
 # =============
 # fedala,fedavg,feddpl,fedkd,fedlsa,fedper,fedpln,fedproto,fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl
+# export ALGOS="fedala,fedavg,feddpl,fedkd,fedlsa,fedper,fedpln,fedproto,fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl"
 # export ALGOS="fedala,fedavg,feddpl,fedkd,fedlsa,fedper,fedpln,fedproto"
-export ALGOS="fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl"
+# export ALGOS="fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl"
+export ALGOS="fedkd"
 
 # =============
 # Data
@@ -30,10 +32,10 @@ export N_CLASSES="2"
 # =============
 export EPOCHS="10"
 export LRS="0.01"
-export ROUNDS="1000"
+export ROUNDS="3"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
-export TIMES=5
+export TIMES=1
 
 # =============
 # Compute

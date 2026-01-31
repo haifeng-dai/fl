@@ -57,20 +57,24 @@ def client_worker(params):
             # Standard Cross Entropy Loss
             loss = ce_loss(logits, y)
 
-            # FedProx Proximal Term: (mu/2) * ||w - w_t||^2
-            prox_term = sum(
-                ((param - global_model_params[name]) ** 2).sum()
-                for name, param in model.named_parameters()
-                if name in global_model_params
-            )
-
-            # Total Loss
-            loss += (mu / 2) * prox_term
-
             optimizer.zero_grad()
             loss.backward()
+
+            # FedProx Proximal Term Optimization:
+            # Instead of adding (mu/2)*||w-w_t||^2 to loss and backpropagating,
+            # we directly add the gradient of the proximal term: mu*(w-w_t) to param.grad.
+            # This avoids constructing a large computation graph for the regularization term.
+            if mu > 0:
+                with torch.no_grad():
+                    for name, param in model.named_parameters():
+                        assert param.grad is not None
+                        if name in global_model_params and param.requires_grad:
+                            # grad += mu * (param - global_param)
+                            param.grad.add_(param - global_model_params[name], alpha=mu)
+
             optimizer.step()
 
+            # For logging, we only track the task loss to avoid confusion
             total_loss += loss.item()
             num_batches += 1
 

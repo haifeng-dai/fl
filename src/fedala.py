@@ -393,6 +393,7 @@ class Server(BaseServer):
 
         avg_acc = (total_correct / total_samples) * 100
         self.acc.append(avg_acc)
+        self.model.cpu()
 
     def save(self):
         f = {

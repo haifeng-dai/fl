@@ -139,20 +139,12 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-
-            # Forward pass (get features from base, logits from head)
             output, features = model(x)
-
-            # Classification loss
             loss = ce_loss(output, y)
 
             # Prototype matching loss
             if global_protos_tensor is not None:
-                # Efficiently gather prototypes using vectorization
-                # global_protos_tensor[y] shape: [batch_size, feature_dim]
                 target_protos = global_protos_tensor[y]
-
-                # MSE loss between features and corresponding prototypes
                 loss += mse_loss(features, target_protos) * lamda_
 
             optimizer.zero_grad()
@@ -166,21 +158,29 @@ def client_worker(params):
 
     # Collect local prototypes
     model.eval()
-    local_protos = defaultdict(list)
+
+    # Initialize accumulators on device for vectorized operation
+    proto_sum = torch.zeros(num_classes, feature_dim, device=device)
+    proto_count = torch.zeros(num_classes, device=device)
 
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             _, features = model(x)
 
-            for i, label in enumerate(y):
-                label_item = label.item()
-                local_protos[label_item].append(features[i].cpu())
+            proto_sum.index_add_(0, y, features)
+            ones = torch.ones_like(y, dtype=torch.float)
+            proto_count.index_add_(0, y, ones)
 
-    # Average prototypes per class
+    # Calculate average prototypes
     local_protos_avg = {}
-    for label, proto_list in local_protos.items():
-        local_protos_avg[label] = torch.stack(proto_list).mean(dim=0)
+    # Only process classes that appeared in the local dataset
+    present_classes = torch.nonzero(proto_count).squeeze(1)
+
+    for cls_idx in present_classes:
+        # Calculate mean: sum / count
+        avg = proto_sum[cls_idx] / proto_count[cls_idx]
+        local_protos_avg[cls_idx.item()] = avg.cpu()
 
     # Return results (move to CPU)
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
@@ -362,7 +362,7 @@ class Server(BaseServer):
             for class_id in range(self.num_class):
                 self.global_protos[class_id] = self.tgp(
                     torch.tensor(class_id, device=self.device)
-                ).detach()
+                ).data.clone()
 
     def evaluate_personalized(self):
         """Evaluate personalized client models using global prototypes"""
@@ -373,6 +373,15 @@ class Server(BaseServer):
 
         # Use global prototypes for evaluation if available
         if self.global_protos is not None:
+            # Pre-process global prototypes into a tensor for vectorized calculation
+            # Use 'inf' to handle missing classes so they are never selected
+            global_protos_tensor = torch.zeros(self.num_class, self.args.feature_dim, device=self.device)
+            global_protos_tensor.fill_(float('inf'))
+
+            for k, v in self.global_protos.items():
+                if k < self.num_class:
+                    global_protos_tensor[k] = v.to(self.device)
+
             for i in range(self.num_clients):
                 client_model = get_model(self.args.model, self.args.dataset, self.args.feature_dim).to(self.device)
                 client_model.load_state_dict(self.clients_state[i])
@@ -388,16 +397,11 @@ class Server(BaseServer):
                         x, y = x.to(self.device), y.to(self.device)
                         _, features = client_model(x)
 
-                        # Calculate distances to all prototypes
-                        output = torch.ones(y.shape[0], self.num_class).to(
-                            self.device
-                        ) * float("inf")
-                        for j, proto in self.global_protos.items():
-                            for k in range(features.shape[0]):
-                                output[k, j] = mse_loss(features[k], proto)
+                        # Minimizing L2 distance is equivalent to minimizing MSE
+                        dists = torch.cdist(features, global_protos_tensor, p=2.0)
 
                         # Predict class with minimum distance
-                        pred = torch.argmin(output, dim=1)
+                        pred = torch.argmin(dists, dim=1)
                         correct += (pred == y).sum().item()
                         total += y.shape[0]
 
@@ -417,6 +421,7 @@ class Server(BaseServer):
 
         avg_acc = (total_correct / total_samples) * 100 if total_samples > 0 else 0.0
         self.acc.append(avg_acc)
+        self.model.cpu()
 
     def save(self):
         f = {

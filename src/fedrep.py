@@ -217,20 +217,17 @@ class Server(BaseServer):
         current_acc = []
 
         # For evaluation, we need to combine the global body with each client's local head
-
         for i in range(self.num_clients):
-            # 1. Load Global Body
-            self.model.extractor.load_state_dict(self.model.extractor.state_dict())
-
-            # 2. Load Local Head
+            # 1. Load Local Head
             if self.clients_state[i] is not None:
                 self.model.classifier.load_state_dict(self.clients_state[i])
 
-            # 3. Evaluate
+            # 2. Evaluate
             acc = evaluate_model(self.model, self.test_set[i], device=self.device)
             current_acc.append(acc)
 
         self.acc.append(sum(current_acc) / len(current_acc))
+        self.model.cpu()
 
     def save(self):
         f = {

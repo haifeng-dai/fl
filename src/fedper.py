@@ -158,15 +158,18 @@ class Server(BaseServer):
         # Get current global body
         global_body = {k: v.cpu() for k, v in self.model.extractor.state_dict().items()}
 
+        # Load global body ONCE before the loop
+        self.model.extractor.load_state_dict(global_body)
+
         for i in range(self.num_clients):
-            # Load global body and local head into self.model for evaluation
-            self.model.extractor.load_state_dict(global_body)
+            # Only load local head inside the loop
             self.model.classifier.load_state_dict(self.client_head_states[i])
 
             acc = evaluate_model(self.model, self.test_set[i], self.device)
             accs.append(acc)
 
         self.acc.append(sum(accs) / len(accs))
+        self.model.cpu()
 
     def save(self):
         client_states = []

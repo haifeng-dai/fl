@@ -1,19 +1,17 @@
-import copy
 import torch
 
 
 def evaluate_model(model, test_set, device) -> float:
     loader = torch.utils.data.DataLoader(test_set, batch_size=128, shuffle=False)
 
-    eval_model = copy.deepcopy(model)
-    eval_model.to(device)
-    eval_model.eval()
+    model.to(device)
+    model.eval()
     correct = 0.0
     count = 0.0
     with torch.no_grad():
         for data, target in loader:
             data, target = data.to(device), target.to(device)
-            output, _ = eval_model(data)
+            output, _ = model(data)
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
             count += target.size(0)
@@ -24,15 +22,16 @@ def evaluate_model(model, test_set, device) -> float:
 def evaluate_prototype(model, prototypes, test_set, device) -> float:
     loader = torch.utils.data.DataLoader(test_set, batch_size=128, shuffle=False)
 
-    eval_model = copy.deepcopy(model).to(device)
-    prototypes = prototypes.data.clone().to(device)
-    eval_model.eval()
+    model.to(device)
+    model.eval()
+    prototypes = prototypes.to(device)
+
     correct = 0.0
     count = 0.0
     with torch.no_grad():
         for data, target in loader:
             data, target = data.to(device), target.to(device)
-            _, features = eval_model(data)
+            _, features = model(data)
 
             dist = torch.cdist(features, prototypes, p=2)
             pred = dist.argmin(dim=1, keepdim=True)

@@ -55,8 +55,13 @@ def client_worker(params):
 
     # Pre-move global prototypes to GPU to avoid frequent data transfer
     # global_protos is now a Tensor [C, D] or None
+    valid_proto_mask = None
     if global_protos is not None:
         global_protos = global_protos.to(device)
+        # Pre-compute valid mask [C] to avoid O(BxD) norm calc in loop
+        # Check which classes have non-zero prototypes
+        proto_sums = torch.sum(torch.abs(global_protos), dim=1)
+        valid_proto_mask = proto_sums > 1e-6
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     mse_loss = torch.nn.MSELoss()
@@ -73,15 +78,19 @@ def client_worker(params):
             loss_ce = ce_loss(output, target)
 
             # Prototype Loss: Regularize features towards global prototypes of the same class
-            loss_proto = torch.tensor(0.0).to(device)
-            if global_protos is not None:
+            loss_proto = 0.0
+            if global_protos is not None and valid_proto_mask is not None:
                 # Vectorized operation: Select prototypes for all samples in batch
-                batch_global_protos = global_protos[target]
-                # Filter out samples whose class prototype is zero (not yet discovered)
-                proto_norms = torch.norm(batch_global_protos, dim=1)
-                mask = proto_norms > 1e-6
+                # Use pre-computed mask for validity check
+                mask = valid_proto_mask[target]
+
                 if mask.any():
-                    loss_proto = mse_loss(features[mask], batch_global_protos[mask])
+                    # Filter input features and target prototypes
+                    features_filtered = features[mask]
+                    target_filtered = target[mask]
+                    protos_filtered = global_protos[target_filtered]
+
+                    loss_proto = mse_loss(features_filtered, protos_filtered)
 
             loss = loss_ce + mu * loss_proto
             loss.backward()
@@ -259,6 +268,7 @@ class Server(BaseServer):
 
         self.acc.append(sum(accs) / self.num_clients)
         self.acc_p.append(sum(acc_ps) / self.num_clients)
+        self.model.cpu()
 
     def save(self):
         f = {

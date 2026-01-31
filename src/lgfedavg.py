@@ -157,15 +157,8 @@ class Server(BaseServer):
             self.model.classifier, torch.nn.Linear
         )
         accs = []
-        # Get current global head
-        global_head = {
-            k: v.cpu() for k, v in self.model.classifier.state_dict().items()
-        }
-
         for i in range(self.num_clients):
-            # Load local body and global head into self.model for evaluation
             self.model.extractor.load_state_dict(self.clients_state[i])
-            self.model.classifier.load_state_dict(global_head)
 
             acc = evaluate_model(self.model, self.test_set[i], self.device)
             accs.append(acc)

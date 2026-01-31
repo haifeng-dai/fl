@@ -340,6 +340,7 @@ class Server(BaseServer):
             acc_i = evaluate_model(model, self.test_set[i], self.device)
             acc += acc_i
         self.acc.append(acc / self.num_clients)
+        self.model.cpu()
 
     def aggregate_svd(self, client_params_list, weights):
         """Aggregate SVD compressed parameters"""

@@ -45,6 +45,16 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
 
     if not pfl:
         # 非 pFL 模式，聚合所有客户端的测试集作为全局测试集
-        test_datasets = ConcatDataset(list(test_datasets.values()))
+        all_test_x = []
+        all_test_y = []
+        for ds in test_datasets.values():
+            # TensorDataset.tensors 返回 (x, y) 元组
+            all_test_x.append(ds.tensors[0])
+            all_test_y.append(ds.tensors[1])
+
+        merged_x = torch.cat(all_test_x, dim=0)
+        merged_y = torch.cat(all_test_y, dim=0)
+
+        test_datasets = TensorDataset(merged_x, merged_y)
 
     return train_datasets, test_datasets, train_counts, num_class
