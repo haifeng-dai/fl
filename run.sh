@@ -33,6 +33,7 @@ export LRS="0.01"
 export ROUNDS="1000"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
+export TIMES=5
 
 # =============
 # Compute

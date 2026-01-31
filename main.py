@@ -124,6 +124,9 @@ def get_args():
     train_group.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
+    train_group.add_argument(
+        "--times", type=int, default=1, help="Number of times to run the experiment"
+    )
 
     # Algorithm Specific Args
     try:
@@ -142,6 +145,7 @@ def get_args():
 
 def main():
     args, algo_module = get_args()
+    set_seed(args.seed)
 
     # 仅输出到文件
     log_path = algo_module.get_path(args)
@@ -149,8 +153,6 @@ def main():
     sys.stdout = log_f
     sys.stderr = log_f
 
-    set_seed(args.seed)
-    server = algo_module.Server(args=args)
     prepare_data(
         dataset_name=args.dataset,
         partition_method=args.partition,
@@ -160,6 +162,7 @@ def main():
         test_ratio=args.test_ratio,
     )
 
+    server = algo_module.Server(args=args)
     server.fit()
     server.save()
 

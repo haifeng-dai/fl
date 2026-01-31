@@ -30,6 +30,7 @@ for DATASET in ${DATASETS//,/ }; do
                                                         --gpus $GPUS \
                                                         --mp $MP \
                                                         --max_workers_per_gpu $MAX_WORKERS_PER_GPU \
+                                                        --times $TIMES \
                                                         --test $TEST \
                                                         --lr_g $LR_G \
                                                         --energy $ENERGY

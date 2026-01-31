@@ -99,7 +99,7 @@ class BaseServer:
             self.gpu_pools = {}
 
     def deal_save(self, params):
-        path = os.path.join(self.args.save_path, f"{self.args.file_name}.pt")
+        path = os.path.join(self.args.save_path, f"{self.args.file_name}_{self.args.times}.pt")
         if self.args.test:
             print(f"\nnot save to {path}\n")
         else:
@@ -111,9 +111,13 @@ class BaseServer:
 def get_model(model_name, dataset, feature_dim):
     num_classes = 100 if dataset == "cifar100" else 10
     if model_name == "resnet18":
-        global_model = ResNet18(num_classes=num_classes, dataset_name=dataset, feature_dim=feature_dim)
+        global_model = ResNet18(
+            num_classes=num_classes, dataset_name=dataset, feature_dim=feature_dim
+        )
     elif model_name == "resnet50":
-        global_model = ResNet50(num_classes=num_classes, dataset_name=dataset, feature_dim=feature_dim)
+        global_model = ResNet50(
+            num_classes=num_classes, dataset_name=dataset, feature_dim=feature_dim
+        )
     elif model_name == "harcnn":
         global_model = HARCNN(in_channels=9, num_classes=6, feature_dim=feature_dim)
     elif model_name == "harmlp":
@@ -121,7 +125,11 @@ def get_model(model_name, dataset, feature_dim):
     elif model_name == "cnn":
         # 根据数据集选择输入通道数
         input_channels = 1 if dataset == "mnist" else 3
-        global_model = CNN(input_channels=input_channels, num_classes=num_classes, feature_dim=feature_dim)
+        global_model = CNN(
+            input_channels=input_channels,
+            num_classes=num_classes,
+            feature_dim=feature_dim,
+        )
     else:
         raise ValueError(f"Unsupported model name: {model_name}")
 

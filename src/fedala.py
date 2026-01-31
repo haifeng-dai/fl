@@ -55,7 +55,7 @@ def add_args(parser: argparse.ArgumentParser):
 
 def get_path(args):
     args.file_name = f"{args.name_pre}_{args.eta}_{args.rand_percent}_{args.layer_idx}_{args.ala_threshold}_{args.num_pre_loss}"
-    return os.path.join(args.log_path, f"{args.file_name}.log")
+    return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
 
 
 class ALA:

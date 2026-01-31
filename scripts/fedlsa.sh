@@ -33,6 +33,7 @@ for DATASET in ${DATASETS//,/ }; do
                                                                     --gpus $GPUS \
                                                                     --mp $MP \
                                                                     --max_workers_per_gpu $MAX_WORKERS_PER_GPU \
+                                                                    --times $TIMES \
                                                                     --test $TEST \
                                                                     --lambda_com $LAMBDA_COM \
                                                                     --alpha_sep $ALPHA_SEP \

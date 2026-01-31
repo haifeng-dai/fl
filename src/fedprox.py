@@ -15,7 +15,7 @@ def add_args(parser: argparse.ArgumentParser):
 
 def get_path(args):
     args.file_name = f"{args.name_pre}_{args.mu}"
-    return os.path.join(args.log_path, f"{args.file_name}.log")
+    return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
 
 
 def client_worker(params):
