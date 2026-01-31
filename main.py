@@ -145,34 +145,55 @@ def get_args():
 
 def main():
     args, algo_module = get_args()
-    set_seed(args.seed)
 
-    # 仅输出到文件
-    log_path = algo_module.get_path(args)
-    log_f = open(log_path, "w", encoding="utf-8", buffering=1)
-    sys.stdout = log_f
-    sys.stderr = log_f
+    # 保存配置的实验总次数和初始随机种子
+    total_times = args.times
+    base_seed = args.seed
 
-    prepare_data(
-        dataset_name=args.dataset,
-        partition_method=args.partition,
-        num_clients=args.num_clients,
-        alpha=args.alpha,
-        n_classes=args.n_class,
-        test_ratio=args.test_ratio,
-    )
+    for t in range(total_times):
+        # 更新当前运行的索引和随机种子
+        args.times = t
+        args.seed = base_seed + t
+        a = time.time()
 
-    server = algo_module.Server(args=args)
-    server.fit()
-    server.save()
+        set_seed(args.seed)
+
+        # 获取日志路径 (文件名包含 args.times)
+        log_path = algo_module.get_path(args)
+
+        # 打开日志文件并将 stdout/stderr 重定向
+        log_f = open(log_path, "w", encoding="utf-8", buffering=1)
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        sys.stdout = log_f
+        sys.stderr = log_f
+
+        try:
+            print(f"=== Experiment {t+1}/{total_times} (Seed: {args.seed}) ===")
+
+            prepare_data(
+                dataset_name=args.dataset,
+                partition_method=args.partition,
+                num_clients=args.num_clients,
+                alpha=args.alpha,
+                n_classes=args.n_class,
+                test_ratio=args.test_ratio,
+            )
+
+            server = algo_module.Server(args=args)
+            server.fit()
+            server.save()
+
+            b = time.time()
+            delta = datetime.timedelta(seconds=int(b - a))
+            print(f"\nTotal time: {delta}")
+        finally:
+            # 恢复 stdout/stderr 并关闭日志文件
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            log_f.close()
 
 
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn", force=True)
-    a = time.time()
-
     main()
-
-    b = time.time()
-    delta = datetime.timedelta(seconds=int(b - a))
-    print(f"\nTotal time: {delta}\n")
