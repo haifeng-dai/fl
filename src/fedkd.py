@@ -143,7 +143,6 @@ def client_worker(params):
         batch_size,
         epochs,
         energy_threshold,
-        feature_dim,
     ) = params
 
     # 1. Initialize Models
@@ -251,21 +250,7 @@ class Server(BaseServer):
             self.compressed_params[name] = decompose_param(param, args.energy)
 
         self.client_wh_states = [None for _ in range(self.num_clients)]
-        self.feature_dim = self._get_feature_dim(args.dataset)
-        self.clients_state = {
-            i: self.model.state_dict() for i in range(self.num_clients)
-        }
-
-    def _get_feature_dim(self, dataset_name):
-        """Helper to get feature dimension of the model"""
-        if dataset_name == "mnist":
-            dummy_input = torch.randn(1, 1, 28, 28)
-        else:
-            dummy_input = torch.randn(1, 3, 32, 32)
-
-        with torch.no_grad():
-            _, feat = self.model(dummy_input)
-        return feat.shape[1]
+        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -287,7 +272,7 @@ class Server(BaseServer):
                     self.client_gpu[i],
                     self.args.model,
                     self.args.dataset,
-                    self.feature_dim,
+                    self.args.feature_dim,
                     self.train_sets[i],
                     self.compressed_params,
                     self.clients_state[i],
@@ -297,7 +282,6 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.args.energy,
-                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]

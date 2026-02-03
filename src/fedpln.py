@@ -236,7 +236,7 @@ class Server(BaseServer):
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
         )
-        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings)
+        self.all_classes = torch.arange(0, self.num_class)
         self.acc_p: list[float] = []
         self.loss_p: list[float] = []
 

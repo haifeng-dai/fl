@@ -173,5 +173,5 @@ class Server(BaseServer):
             full_state.update(global_head)
             client_states.append(full_state)
 
-        f = {"acc": self.acc, "loss": self.loss, "state_dict": client_states}
+        f = {"acc": self.acc, "loss": self.loss, "state_dict": {"extractor": client_states, "classifier": global_head}}
         super().deal_save(f)

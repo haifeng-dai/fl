@@ -267,11 +267,9 @@ class Server(BaseServer):
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
         )
-        self.clients_state = {
-            i: self.model.state_dict() for i in range(self.num_clients)
-        }
+        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
-        self.all_classes = torch.arange(0, self.pln.embedings.num_embeddings)
+        self.all_classes = torch.arange(0, self.num_class)
         self.acc_p: list[float] = []
         self.loss_p: list[float] = []
 
@@ -346,7 +344,7 @@ class Server(BaseServer):
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def aggregate(self, pln_params, weights=None):
+    def aggregate(self, pln_params, weights):
         self.pln.load_state_dict(param_aggregate(pln_params, weights))
 
     def evaluate(self):

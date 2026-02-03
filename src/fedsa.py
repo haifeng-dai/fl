@@ -148,30 +148,26 @@ def client_worker(params):
 
     # 3. Calculate new local anchors (average features per class)
     with torch.no_grad():
-        anchor_sums = {}
-        anchor_counts = {}
+        anchor_sums = torch.zeros((num_classes, feature_dim), device=device)
+        anchor_counts = torch.zeros(num_classes, device=device)
 
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             _, features = model(x)
 
-            unique_labels = torch.unique(y)
-            for label in unique_labels:
-                label_item = label.item()
-                mask = y == label
-                feat_sum = features[mask].sum(dim=0)
-                count = mask.sum().item()
+            anchor_sums.index_add_(0, y, features)
+            anchor_counts.index_add_(
+                0, y, torch.ones_like(y, dtype=torch.float32, device=device)
+            )
 
-                if label_item not in anchor_sums:
-                    anchor_sums[label_item] = feat_sum
-                    anchor_counts[label_item] = count
-                else:
-                    anchor_sums[label_item] += feat_sum
-                    anchor_counts[label_item] += count
-
+        # Compute average only for classes that appeared
+        active_classes = torch.where(anchor_counts > 0)[0]
         local_anchors_dict = {}
-        for label, total in anchor_sums.items():
-            local_anchors_dict[label] = total.cpu() / anchor_counts[label]
+        for c in active_classes:
+            c_item = int(c.item())
+            local_anchors_dict[c_item] = (
+                anchor_sums[c_item] / anchor_counts[c_item]
+            ).cpu()
 
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     return [avg_loss, model_state, local_anchors_dict]
@@ -268,27 +264,37 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def update_global_anchors(self, client_anchors_list):
-        new_anchors = {}
-        counts = {}
+        # Vectorized anchor aggregation using tensor operations
+        # Infer feature dimension from the first available anchor
+        feature_dim = 0
+        for client_anchors in client_anchors_list:
+            if client_anchors:
+                feature_dim = next(iter(client_anchors.values())).shape[0]
+                break
+
+        if feature_dim == 0:
+            return
+
+        # Initialize tensors for accumulation
+        new_anchors = torch.zeros((self.num_class, feature_dim), device=self.device)
+        counts = torch.zeros(self.num_class, device=self.device)
 
         for client_anchors in client_anchors_list:
             for label, anchor in client_anchors.items():
-                anchor = anchor.to(self.device)
-                if label not in new_anchors:
-                    new_anchors[label] = anchor
-                    counts[label] = 1
-                else:
-                    new_anchors[label] += anchor
-                    counts[label] += 1
+                new_anchors[label] += anchor.to(self.device)
+                counts[label] += 1
 
-        for label in new_anchors:
-            new_anchors[label] /= counts[label]
+        # Average aggregation
+        mask = counts > 0
+        new_anchors[mask] /= counts[mask].unsqueeze(1)
 
+        # Exponential moving average update
         alpha = self.args.alpha_sa
-        for label, new_anchor in new_anchors.items():
-            self.anchors[label] = (1 - alpha) * self.anchors[
-                label
-            ] + alpha * new_anchor.cpu()
+        for label in range(self.num_class):
+            if counts[label] > 0:
+                self.anchors[label] = (1 - alpha) * self.anchors[
+                    label
+                ] + alpha * new_anchors[label].cpu()
 
     def save(self):
         f = {

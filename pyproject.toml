@@ -5,15 +5,20 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-  "black>=25.12.0",
-  "ipykernel>=7.1.0",
-  "matplotlib>=3.10.8",
   "numpy",
   "pandas>=3.0.0",
   "requests>=2.32.5",
   "scikit-learn>=1.8.0",
   "torch",
   "torchvision",
+]
+
+[project.optional-dependencies]
+dev = [
+  "basedpyright>=1.37.3",
+  "black>=25.12.0",
+  "ipykernel>=7.1.0",
+  "matplotlib>=3.10.8",
 ]
 
 [tool.basedpyright]

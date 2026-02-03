@@ -376,7 +376,7 @@ class Server(BaseServer):
             # Pre-process global prototypes into a tensor for vectorized calculation
             # Use 'inf' to handle missing classes so they are never selected
             global_protos_tensor = torch.zeros(self.num_class, self.args.feature_dim, device=self.device)
-            global_protos_tensor.fill_(float('inf'))
+            global_protos_tensor.fill_(1e9)
 
             for k, v in self.global_protos.items():
                 if k < self.num_class:

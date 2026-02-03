@@ -170,6 +170,7 @@ def main():
 
         try:
             print(f"=== Experiment {t+1}/{total_times} (Seed: {args.seed}) ===")
+            print(f"Start time: {datetime.datetime.fromtimestamp(a).strftime('%Y-%m-%d %H:%M:%S')}\n")
 
             prepare_data(
                 dataset_name=args.dataset,
@@ -185,6 +186,7 @@ def main():
             server.save()
 
             b = time.time()
+            print(f"End time: {datetime.datetime.fromtimestamp(b).strftime('%Y-%m-%d %H:%M:%S')}")
             delta = datetime.timedelta(seconds=int(b - a))
             print(f"\nTotal time: {delta}")
         finally:
