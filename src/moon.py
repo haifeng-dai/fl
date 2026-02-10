@@ -57,7 +57,8 @@ def client_worker(params):
     model.load_state_dict(global_state)
 
     # 2. Initialize global model (frozen) for contrastive loss
-    global_model = copy.deepcopy(model).to(device)
+    global_model = get_model(model_name, dataset_name, feature_dim).to(device)
+    global_model.load_state_dict(global_state)
     global_model.eval()
 
     # 3. Initialize previous local model (frozen) for contrastive loss

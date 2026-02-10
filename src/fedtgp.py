@@ -387,7 +387,7 @@ class Server(BaseServer):
                 client_model.load_state_dict(self.clients_state[i])
                 client_model.eval()
 
-                test_loader = DataLoader(self.test_set[i], batch_size=64, shuffle=False)  # type: ignore
+                test_loader = DataLoader(self.test_set[i], batch_size=64, shuffle=False)
 
                 correct = 0
                 total = 0
@@ -414,7 +414,7 @@ class Server(BaseServer):
                 client_model.load_state_dict(self.clients_state[i])
 
                 acc = evaluate_model(client_model, self.test_set[i], self.device)
-                test_size = len(self.test_set[i])  # type: ignore
+                test_size = len(self.test_set[i])
 
                 total_correct += acc * test_size / 100
                 total_samples += test_size

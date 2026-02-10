@@ -110,7 +110,12 @@ class BaseServer:
 
 
 def get_model(model_name, dataset, feature_dim):
-    num_classes = 100 if dataset == "cifar100" else 10
+    if dataset == "cifar100":
+        num_classes = 100
+    elif dataset == "flowers102":
+        num_classes = 102
+    else:
+        num_classes = 10
     if model_name == "resnet18":
         global_model = ResNet18(
             num_classes=num_classes, dataset_name=dataset, feature_dim=feature_dim

@@ -1,12 +1,14 @@
 __pycache__/
-datasets/
-test/
-results/
-logs/
 .venv/
 .vscode/
 .zed/
 .ruff_cache/
 .claude/
+datasets/
+test/
+results/
+logs/
+figures/
 
 uv.lock
+*test*

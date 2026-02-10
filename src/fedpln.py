@@ -141,7 +141,6 @@ def client_worker(params):
         fixed_proto,
         init_emb,
         har,
-        feature_dim,
     ) = params
 
     # 1. Initialize Model and PLN
@@ -277,7 +276,6 @@ class Server(BaseServer):
                     self.args.fixed_proto,
                     self.args.init_emb,
                     self.args.har,
-                    self.args.feature_dim,
                 ]
                 for i in selected_clients
             ]
@@ -313,11 +311,8 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def aggregate(self, clients_params, plns_params, weights):
-        # Handle optional arguments or direct passing
-        if clients_params:
-            self.model.load_state_dict(param_aggregate(clients_params, weights))
-        if plns_params:
-            self.pln.load_state_dict(param_aggregate(plns_params, weights))
+        super().aggregate(clients_params, weights)
+        self.pln.load_state_dict(param_aggregate(plns_params, weights))
 
     def evaluate(self):
         # Evaluate global model

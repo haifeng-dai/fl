@@ -15,6 +15,7 @@ def evaluate_model(model, test_set, device) -> float:
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
             count += target.size(0)
+    model.cpu()
 
     return 100.0 * correct / count
 
@@ -37,5 +38,7 @@ def evaluate_prototype(model, prototypes, test_set, device) -> float:
             pred = dist.argmin(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
             count += target.size(0)
+    model.cpu()
+    prototypes.cpu()
 
     return 100.0 * correct / count

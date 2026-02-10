@@ -386,7 +386,7 @@ class Server(BaseServer):
 
             # Evaluate on client's test set
             acc = evaluate_model(client_model, self.test_set[i], self.device)
-            test_size = len(self.test_set[i])  # type: ignore
+            test_size = len(self.test_set[i])
 
             total_correct += acc * test_size / 100
             total_samples += test_size

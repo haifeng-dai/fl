@@ -190,11 +190,9 @@ class Server(BaseServer):
                 selected_states_g.append(results[i][3])
                 current_weights.append(self.weights[i])
             self.loss.append(total_loss / num_join_clients)
+            self.loss_g.append(total_loss_g / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
-
-            self.loss.append(total_loss / num_join_clients)
-            self.loss_g.append(total_loss_g / num_join_clients)
 
             # Aggregate Global Models
             self.model.load_state_dict(param_aggregate(selected_states_g, norm_weights))

@@ -47,6 +47,11 @@ def get_args():
             "fedrep",
             "fedala",
             "fedtgp",
+            "fedtest",
+            "feddyn",
+            "scaffold",
+            "fedfm",
+            "fedproc",
         ],
     )
     parser.add_argument("--test", type=int, default=0, help="Test or train")
@@ -68,7 +73,7 @@ def get_args():
         type=str,
         default="mnist",
         help="Dataset name",
-        choices=["mnist", "cifar10", "cifar100", "har", "har_feat"],
+        choices=["mnist", "cifar10", "cifar100", "flowers102", "har", "har_feat"],
     )
     data_group.add_argument(
         "--model",
