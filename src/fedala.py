@@ -131,7 +131,9 @@ class ALA:
                 param.data = param_g.data.clone()
 
         # Temp local model only for weight learning
-        model_t = get_model(self.model_name, self.dataset_name, self.feature_dim).to(self.device)
+        model_t = get_model(self.model_name, self.dataset_name, self.feature_dim).to(
+            self.device
+        )
         model_t.load_state_dict(local_model.state_dict())
         params_t = list(model_t.parameters())
 
@@ -209,8 +211,6 @@ class ALA:
             ):
                 break
 
-        self.start_phase = False
-
         # Apply learned aggregation to local model
         for param, param_t in zip(params_p, params_tp):
             param.data = param_t.data.clone()
@@ -225,6 +225,8 @@ def client_worker(params):
         device,
         global_model_state,
         local_model_state,
+        saved_weights,
+        r,
         train_set,
         model_name,
         dataset_name,
@@ -262,8 +264,22 @@ def client_worker(params):
         feature_dim=feature_dim,
     )
 
-    # Apply adaptive local aggregation
-    ala.adaptive_local_aggregation(global_model, local_model)
+    # Round 1 (r=0): skip ALA, use w=1 (initial value)
+    # Round 2 (r=1): ALA train to convergence (start_phase=True)
+    # Round 3+ (r>=2): ALA train once (start_phase=False)
+    if r == 0:
+        # Skip ALA in first round, weights remain None (will be initialized to ones in return)
+        pass
+    else:
+        # Set saved weights if available (r>=1), move to correct device
+        if saved_weights is not None:
+            ala.weights = [w.to(device) for w in saved_weights]
+        # r=1: start_phase remains True (train to convergence)
+        # r>=2: set start_phase to False (train once)
+        if r >= 2:
+            ala.start_phase = False
+        # Apply adaptive local aggregation
+        ala.adaptive_local_aggregation(global_model, local_model)
 
     # Standard local training
     optimizer = torch.optim.SGD(local_model.parameters(), lr=lr)
@@ -291,16 +307,18 @@ def client_worker(params):
 
     # Return results (move to CPU)
     model_state = {k: v.cpu() for k, v in local_model.state_dict().items()}
-    return [avg_loss, model_state]
+    weights_cpu = None
+    if ala.weights is not None:
+        weights_cpu = [w.cpu() for w in ala.weights]
+    return [avg_loss, model_state, weights_cpu]
 
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         # FedALA is a personalized FL method
         super().__init__(True, args)
-        self.clients_state = {
-            i: self.model.state_dict() for i in range(self.num_clients)
-        }
+        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
+        self.clients_weights = [None] * self.num_clients
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -327,6 +345,8 @@ class Server(BaseServer):
                     self.client_gpu[i],
                     global_model_state_cpu,
                     self.clients_state[i],
+                    self.clients_weights[i],
+                    r,
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
@@ -357,9 +377,11 @@ class Server(BaseServer):
             selected_states = []
             current_weights = []
             for i in selected_clients:
-                total_loss += results[i][0]
-                self.clients_state[i] = results[i][1]
-                selected_states.append(results[i][1])
+                client_loss, client_state, client_weights = results[i]
+                total_loss += client_loss
+                self.clients_state[i] = client_state
+                self.clients_weights[i] = client_weights
+                selected_states.append(client_state)
                 current_weights.append(self.weights[i])
             self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
@@ -381,7 +403,9 @@ class Server(BaseServer):
 
         for i in range(self.num_clients):
             # Load client model
-            client_model = get_model(self.args.model, self.args.dataset, self.args.feature_dim).to(self.device)
+            client_model = get_model(
+                self.args.model, self.args.dataset, self.args.feature_dim
+            ).to(self.device)
             client_model.load_state_dict(self.clients_state[i])
 
             # Evaluate on client's test set
@@ -400,5 +424,6 @@ class Server(BaseServer):
             "acc": self.acc,
             "loss": self.loss,
             "state_dict": self.clients_state,
+            "clients_weights": self.clients_weights,
         }
         self.deal_save(f)

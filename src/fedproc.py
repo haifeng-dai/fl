@@ -1,5 +1,4 @@
 import argparse
-import copy
 import time
 import os
 import torch
@@ -9,19 +8,8 @@ import numpy as np
 from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
 
 
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedProc Specific Arguments")
-    group.add_argument(
-        "--mu", type=float, default=1.0, help="Weight for prototypical contrastive loss"
-    )
-    group.add_argument(
-        "--temperature", type=float, default=0.5, help="Temperature for contrastive loss"
-    )
-    return parser
-
-
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.mu}_{args.temperature}"
+    args.file_name = f"{args.name_pre}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
 
 
@@ -31,14 +19,13 @@ def client_worker(params):
         device,
         model_state,
         global_protos,
+        alpha,
         train_set,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
-        mu,
-        temperature,
         num_classes,
         feature_dim,
     ) = params
@@ -70,14 +57,11 @@ def client_worker(params):
             features_norm = F.normalize(features, dim=1)
             protos_norm = F.normalize(global_protos, dim=1)
 
-            # InfoNCE-like loss
-            # Similarity [Batch, NumClasses]
-            logits_con = torch.matmul(features_norm, protos_norm.T) / temperature
+            # Compute similarity and cross-entropy loss (without temperature)
+            logits_con = torch.matmul(features_norm, protos_norm.T)
+            loss_con = ce_loss(logits_con, target)
 
-            # Target is the class index
-            loss_con = F.cross_entropy(logits_con, target)
-
-            loss = loss_ce + mu * loss_con
+            loss = (1 - alpha) * loss_ce + alpha * loss_con
             loss.backward()
             optimizer.step()
 
@@ -96,7 +80,9 @@ def client_worker(params):
             _, features = model(data)
 
             sum_features.index_add_(0, target, features)
-            sum_counts.index_add_(0, target, torch.ones_like(target, dtype=torch.float32))
+            sum_counts.index_add_(
+                0, target, torch.ones_like(target, dtype=torch.float32)
+            )
 
     active_classes = torch.where(sum_counts > 0)[0]
     for c in active_classes:
@@ -128,25 +114,8 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.global_protos,
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.mu,
-                    self.args.temperature,
-                    self.num_class,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            # Compute dynamic weight alpha = 1 - r/rounds
+            alpha = 1.0 - (r / self.rounds)
 
             p = [
                 [
@@ -154,14 +123,13 @@ class Server(BaseServer):
                     self.client_gpu[i],
                     self.model.state_dict(),
                     self.global_protos,
+                    alpha,
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
                     self.args.lr,
                     self.args.batch_size,
                     self.args.epochs,
-                    self.args.mu,
-                    self.args.temperature,
                     self.num_class,
                     self.args.feature_dim,
                 ]
@@ -176,19 +144,19 @@ class Server(BaseServer):
             )
 
             total_loss = 0.0
-            model_states = []
+            selected_states = []
             all_local_protos = []
 
             for idx, i in enumerate(selected_clients):
                 loss, state, local_protos = results[idx]
                 total_loss += loss
-                model_states.append(state)
+                selected_states.append(state)
                 all_local_protos.append(local_protos)
 
             self.loss.append(total_loss / num_join_clients)
 
             # Aggregate Model
-            self.aggregate(model_states)
+            self.aggregate(selected_states)
 
             # Aggregate Prototypes
             self.global_protos = self.aggregate_protos(all_local_protos)

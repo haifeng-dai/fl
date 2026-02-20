@@ -262,10 +262,11 @@ class Server(BaseServer):
             selected_states = []
             selected_protos = []
             for i in selected_clients:
-                total_loss += results[i][0]
-                self.clients_state[i] = results[i][1]
-                selected_states.append(results[i][1])
-                selected_protos.append(results[i][2])
+                client_loss, client_state, client_proto = results[i]
+                total_loss += client_loss
+                self.clients_state[i] = client_state
+                selected_states.append(client_state)
+                selected_protos.append(client_proto)
             self.loss.append(total_loss / num_join_clients)
 
             uploaded_protos = []
@@ -375,7 +376,9 @@ class Server(BaseServer):
         if self.global_protos is not None:
             # Pre-process global prototypes into a tensor for vectorized calculation
             # Use 'inf' to handle missing classes so they are never selected
-            global_protos_tensor = torch.zeros(self.num_class, self.args.feature_dim, device=self.device)
+            global_protos_tensor = torch.zeros(
+                self.num_class, self.args.feature_dim, device=self.device
+            )
             global_protos_tensor.fill_(1e9)
 
             for k, v in self.global_protos.items():
@@ -383,7 +386,9 @@ class Server(BaseServer):
                     global_protos_tensor[k] = v.to(self.device)
 
             for i in range(self.num_clients):
-                client_model = get_model(self.args.model, self.args.dataset, self.args.feature_dim).to(self.device)
+                client_model = get_model(
+                    self.args.model, self.args.dataset, self.args.feature_dim
+                ).to(self.device)
                 client_model.load_state_dict(self.clients_state[i])
                 client_model.eval()
 
@@ -410,7 +415,9 @@ class Server(BaseServer):
         else:
             # Fallback to standard evaluation
             for i in range(self.num_clients):
-                client_model = get_model(self.args.model, self.args.dataset, self.args.feature_dim).to(self.device)
+                client_model = get_model(
+                    self.args.model, self.args.dataset, self.args.feature_dim
+                ).to(self.device)
                 client_model.load_state_dict(self.clients_state[i])
 
                 acc = evaluate_model(client_model, self.test_set[i], self.device)

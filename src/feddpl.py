@@ -327,10 +327,11 @@ class Server(BaseServer):
             plns_states = []
             current_weights = []
             for i in selected_clients:
-                total_loss_model += results[i][0]
-                total_loss_pln += results[i][1]
-                self.clients_state[i] = results[i][2]
-                plns_states.append(results[i][3])
+                client_loss_model, client_loss_pln, client_state, client_pln = results[i]
+                total_loss_model += client_loss_model
+                total_loss_pln += client_loss_pln
+                self.clients_state[i] = client_state
+                plns_states.append(client_pln)
                 current_weights.append(self.weights[i])
             self.loss.append(total_loss_model / num_join_clients)
             self.loss_p.append(total_loss_pln / num_join_clients)

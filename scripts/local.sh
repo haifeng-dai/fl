@@ -12,7 +12,7 @@ for DATASET in ${DATASETS//,/ }; do
                                     for BATCH_SIZE in ${BATCH_SIZES//,/ }; do
                                         for JOIN_RATIO in ${JOIN_RATIOS//,/ }; do
                                             uv run main.py \
-                                                --algo fedproc \
+                                                --algo local \
                                                 --dataset $DATASET \
                                                 --model $MODEL \
                                                 --feature_dim $FEATURE_DIM \

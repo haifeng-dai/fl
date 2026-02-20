@@ -233,11 +233,12 @@ class Server(BaseServer):
             current_weights = []
             local_anchors = []
             for i in selected_clients:
-                total_loss += results[i][0]
-                self.clients_state[i] = results[i][1]
-                selected_states.append(results[i][1])
+                client_loss, client_state, client_anchor = results[i]
+                total_loss += client_loss
+                self.clients_state[i] = client_state
+                selected_states.append(client_state)
                 current_weights.append(self.weights[i])
-                local_anchors.append(results[i][2])
+                local_anchors.append(client_anchor)
             self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]

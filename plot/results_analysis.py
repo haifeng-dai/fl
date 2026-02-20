@@ -225,7 +225,7 @@ loader = ResultLoader()
 
 # 2. Common Settings (Adjust these)
 common_args = {
-    "dataset": "mnist",
+    "dataset": "cifar10",
     "partition": "dirichlet",
     "num_clients": 10,
     "epochs": 10,
@@ -254,7 +254,7 @@ experiments = {
     "FedDPL": (
         "feddpl",
         {
-            "lambda_": 10.0,
+            "lambda_": 0.01,
             "epoch_pln": 10,
             "lr_pln": 0.01,
             "batch_size_pln": 64,
@@ -297,7 +297,7 @@ experiments = {
         },
     ),
     "FedProc": ("fedproc", {"mu": 1.0, "temperature": 0.5}),
-    "FedProto": ("fedproto", {"mu": 1.0}),
+    "FedProto": ("fedproto", {"mu": 0.1}),
     "SCAFFOLD": ("scaffold", {"global_lr": 1.0}),
     "FedProx": ("fedprox", {"mu": 0.01}),
     "FedRep": ("fedrep", {"epochs_head": 5}),
@@ -317,7 +317,7 @@ experiments = {
     ),
     "FML": ("fml", {"alpha_fml": 1.0, "beta_fml": 1.0}),
     "LGFedAvg": ("lgfedavg", {}),
-    "MOON": ("moon", {"mu": 1.0, "tau": 0.5}),
+    "MOON": ("moon", {"mu": 0.01, "tau": 0.5}),
     "ProxyFL": ("proxyfl", {"mu": 1.0, "adj_type": "ring"}),
     "Fedtest": ("fedtest", {"mu": 0.1}),
 }
@@ -325,13 +325,13 @@ experiments = {
 
 traditional_algos = [
     "FedAvg",
-    "FedProx",
-    "MOON",
-    "FedLSA",
-    "FedPLN",
     "FedDyn",
     "FedFM",
+    "FedLSA",
+    "FedPLN",
     "FedProc",
+    "FedProx",
+    "MOON",
     "SCAFFOLD",
 ]
 
@@ -350,8 +350,8 @@ personalized_algos = [
 ]
 
 # Select algorithms to plot
-# algos = traditional_algos
-algos = personalized_algos
+algos = traditional_algos
+# algos = personalized_algos
 # algos = traditional_algos + personalized_algos
 
 # 4. Load & Plot
@@ -362,7 +362,7 @@ for label, (algo, kwargs) in experiments.items():
 
     args = {**common_args, **kwargs}
     # specific_run=None will load all available runs and average them
-    data = loader.load(algo, **args, specific_run=None)
+    data = loader.load(algo, **args, specific_run=0)
     if data:
         results[label] = data
 

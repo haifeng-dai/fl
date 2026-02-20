@@ -130,10 +130,11 @@ class Server(BaseServer):
             selected_states_head = []
             current_weights = []
             for i in selected_clients:
-                total_loss += results[i][0]
-                selected_states.append(results[i][1])
-                self.clients_state[i] = results[i][1]
-                selected_states_head.append(results[i][2])
+                client_loss, client_body, client_head = results[i]
+                total_loss += client_loss
+                selected_states.append(client_body)
+                self.clients_state[i] = client_body
+                selected_states_head.append(client_head)
                 current_weights.append(self.weights[i])
             self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
@@ -173,5 +174,9 @@ class Server(BaseServer):
             full_state.update(global_head)
             client_states.append(full_state)
 
-        f = {"acc": self.acc, "loss": self.loss, "state_dict": {"extractor": client_states, "classifier": global_head}}
+        f = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "state_dict": {"extractor": client_states, "classifier": global_head},
+        }
         super().deal_save(f)

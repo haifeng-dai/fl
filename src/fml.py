@@ -133,9 +133,7 @@ class Server(BaseServer):
         super().__init__(True, args)
 
         # Initialize local models for each client
-        self.client_states = [
-            self.model.state_dict() for _ in range(self.num_clients)
-        ]
+        self.client_states = [self.model.state_dict() for _ in range(self.num_clients)]
         self.loss_g = []
 
     def fit(self):
@@ -183,11 +181,12 @@ class Server(BaseServer):
             selected_states_g = []
             current_weights = []
             for i in selected_clients:
-                total_loss += results[i][0]
-                total_loss_g += results[i][1]
-                selected_states.append(results[i][2])
-                self.client_states[i] = results[i][2]
-                selected_states_g.append(results[i][3])
+                client_loss, client_loss_g, client_state, client_state_g = results[i]
+                total_loss += client_loss
+                total_loss_g += client_loss_g
+                selected_states.append(client_state)
+                self.client_states[i] = client_state
+                selected_states_g.append(client_state_g)
                 current_weights.append(self.weights[i])
             self.loss.append(total_loss / num_join_clients)
             self.loss_g.append(total_loss_g / num_join_clients)

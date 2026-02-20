@@ -60,11 +60,11 @@ def client_worker(params):
     trainable_names = [n for n, p in model.named_parameters()]
 
     if c_global_state is None:
-         c_global_dict = {n: torch.zeros_like(p) for n, p in model.named_parameters()}
-         c_local_dict = {n: torch.zeros_like(p) for n, p in model.named_parameters()}
+        c_global_dict = {n: torch.zeros_like(p) for n, p in model.named_parameters()}
+        c_local_dict = {n: torch.zeros_like(p) for n, p in model.named_parameters()}
     else:
-         c_global_dict = {k: v.to(device) for k, v in c_global_state.items()}
-         c_local_dict = {k: v.to(device) for k, v in c_local_state.items()}
+        c_global_dict = {k: v.to(device) for k, v in c_global_state.items()}
+        c_local_dict = {k: v.to(device) for k, v in c_local_state.items()}
 
     # Flatten for optimizer
     c_global_list = [c_global_dict[n] for n in trainable_names]
@@ -111,7 +111,12 @@ def client_worker(params):
     avg_loss = total_loss / steps if steps > 0 else 0
 
     # Return: loss, model_state, c_delta, c_local_new
-    return [avg_loss, {k: v.cpu() for k, v in current_state.items()}, c_delta_dict, c_local_new_dict]
+    return [
+        avg_loss,
+        {k: v.cpu() for k, v in current_state.items()},
+        c_delta_dict,
+        c_local_new_dict,
+    ]
 
 
 class Server(BaseServer):
@@ -121,7 +126,9 @@ class Server(BaseServer):
         # Get parameter names
         self.param_names = [n for n, p in self.model.named_parameters()]
 
-        self.c_global = {n: torch.zeros_like(p) for n, p in self.model.named_parameters()}
+        self.c_global = {
+            n: torch.zeros_like(p) for n, p in self.model.named_parameters()
+        }
         self.c_local = [
             {n: torch.zeros_like(p) for n, p in self.model.named_parameters()}
             for _ in range(self.num_clients)
@@ -167,23 +174,26 @@ class Server(BaseServer):
 
             # Process results
             total_loss = 0.0
-            total_delta_c = {n: torch.zeros_like(self.c_global[n]) for n in self.param_names}
+            total_delta_c = {
+                n: torch.zeros_like(self.c_global[n]) for n in self.param_names
+            }
 
-            model_states = []
+            selected_states = []
             for i in selected_clients:
-                total_loss += results[i][0]
-                model_states.append(results[i][1])
+                client_loss, client_state, client_delta_c, client_c_local = results[i]
+                total_loss += client_loss
+                selected_states.append(client_state)
                 # Accumulate delta_c for global update
                 for n in self.param_names:
-                    total_delta_c[n] += results[i][2][n]
+                    total_delta_c[n] += client_delta_c[n]
                 # Update local control variate stored on server
-                self.c_local[i] = results[i][3]
+                self.c_local[i] = client_c_local
             self.loss.append(total_loss / num_join_clients)
 
             # Aggregate model
             # Use uniform weights for SCAFFOLD
-            weights = [1.0 / len(model_states)] * len(model_states)
-            avg_state = param_aggregate(model_states, weights)
+            weights = [1.0 / len(selected_states)] * len(selected_states)
+            avg_state = param_aggregate(selected_states, weights)
 
             if self.args.global_lr == 1.0:
                 self.model.load_state_dict(avg_state)
@@ -192,7 +202,9 @@ class Server(BaseServer):
                 current_state = self.model.state_dict()
                 for k, v in current_state.items():
                     if k in avg_state:
-                         v.mul_(1 - self.args.global_lr).add_(avg_state[k], alpha=self.args.global_lr)
+                        v.mul_(1 - self.args.global_lr).add_(
+                            avg_state[k], alpha=self.args.global_lr
+                        )
 
             factor = 1.0 / self.num_clients
             for n in self.param_names:

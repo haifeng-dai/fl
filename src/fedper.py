@@ -131,10 +131,11 @@ class Server(BaseServer):
             new_head = []
             current_weights = []
             for i in selected_clients:
-                total_loss += results[i][0]
-                new_body.append(results[i][1])
-                new_head.append(results[i][2])
-                self.client_head_states[i] = results[i][2]
+                client_loss, client_body, client_head = results[i]
+                total_loss += client_loss
+                new_body.append(client_body)
+                new_head.append(client_head)
+                self.client_head_states[i] = client_head
                 current_weights.append(self.weights[i])
             self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)

@@ -298,10 +298,11 @@ class Server(BaseServer):
             client_compressed_params_list = []
             current_weights = []
             for i in selected_clients:
-                total_loss += results[i][0]
-                client_compressed_params_list.append(results[i][1])
-                self.clients_state[i] = results[i][2]
-                self.client_wh_states[i] = results[i][3]
+                client_loss, client_compressed, client_body, client_head = results[i]
+                total_loss += client_loss
+                client_compressed_params_list.append(client_compressed)
+                self.clients_state[i] = client_body
+                self.client_wh_states[i] = client_head
                 current_weights.append(self.weights[i])
             self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
@@ -318,7 +319,9 @@ class Server(BaseServer):
     def evaluate(self):
         acc = 0.0
         for i in range(self.num_clients):
-            model = get_model(self.args.model, self.args.dataset, self.args.feature_dim).to(self.device)
+            model = get_model(
+                self.args.model, self.args.dataset, self.args.feature_dim
+            ).to(self.device)
             with torch.no_grad():
                 model.load_state_dict(self.clients_state[i])
             acc_i = evaluate_model(model, self.test_set[i], self.device)

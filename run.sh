@@ -7,7 +7,14 @@
 # export ALGOS="fedala,fedavg,feddpl,feddyn,fedfm,fedkd,fedlsa,fedper,fedpln,fedproc,fedproto,fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl,scaffold"
 # export ALGOS="fedala,fedavg,feddpl,feddyn,fedfm,fedkd,fedlsa,fedper,fedpln"
 # export ALGOS="fedproc,fedproto,fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl,scaffold"
-export ALGOS="feddyn,fedfm,fedproc,scaffold"
+
+# # traditional algorithms
+# export ALGOS="fedavg,feddyn,fedfm,fedlsa,fedpln,fedproc,fedprox,moon,scaffold"
+
+# personalized algorithms
+# export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,proxyfl"
+
+export ALGOS="local"
 
 # =============
 # Data
@@ -42,7 +49,7 @@ export TIMES=5
 # =============
 # 3,2,1,0  0,1,2,3
 # export GPUS="0,1,2,3"
-export GPUS="1,2,3,0"
+export GPUS="2,1,3"
 export MP=1
 export MAX_WORKERS_PER_GPU=10
 
@@ -63,7 +70,7 @@ export ALA_THRESHOLDS_ALA="0.1"
 export NUM_PRE_LOSSES_ALA="10"
 
 # FedDPL
-export LAMBDAS_DPL="0.1"
+export LAMBDAS_DPL="0.01,0.01,0.001,0.0001,1.0,10.0"
 export EPOCH_PLNS_DPL="10"
 export LRS_DPL="0.01"
 export BATCH_SIZE_PLNS_DPL="64"
@@ -136,14 +143,10 @@ export MUS_TEST="10.0,1.0,0.1,0.01"
 export GLOBAL_LRS_SCAFFOLD="1.0"
 
 # FedDyn
-export ALPHA_COEFS_DYNN="0.01"
+export ALPHA_COEFS_DYNN="0.1"
 
 # FedFM
 export MUS_FM="1.0"
-
-# FedProc
-export MUS_PROC="1.0"
-export TEMPS_PROC="0.5"
 
 # ==============================================================================
 # Execution
@@ -214,6 +217,9 @@ for ALGO in ${ALGOS//,/ }; do
             ;;
         "fedtest")
             bash ./scripts/fedtest.sh
+            ;;
+        "local")
+            bash ./scripts/local.sh
             ;;
         *)
             echo "Unknown algorithm: $ALGO. Supported: fedala, fedavg, feddpl, feddyn, fedfm, fedkd, fedlsa, fedper, fedpln, fedproc, fedproto, fedprox, fedrep, fedsa, scaffold, fedtgp, fml, lgfedavg, moon, proxyfl, fedtest"

@@ -4,23 +4,24 @@ import os
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
-from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
+from .utils import BaseServer, ce_loss, evaluate_model, get_model, run_parallel_clients
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}"
+    args.file_name = f"{args.name_pre}_local"
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
 
 
 def client_worker(params):
     """
-    Standard FedAvg local training.
+    Pure local training - independent training without communication.
+    Each client trains from scratch on its own data.
     """
     (
         _,
         device,
-        model_state,
         train_set,
         model_name,
         dataset_name,
@@ -30,15 +31,11 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. Initialize model and load global state
     model = get_model(model_name, dataset_name, feature_dim).to(device)
-    model.load_state_dict(model_state)
 
-    # 2. Setup optimizer and data loader
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # 3. Local training loop
     total_loss = 0.0
     num_batches = 0
     for _ in range(epochs):
@@ -46,36 +43,39 @@ def client_worker(params):
             x, y = x.to(device), y.to(device)
             logits, _ = model(x)
 
-            # Standard Cross Entropy Loss
-            batch_loss = ce_loss(logits, y)
+            loss = ce_loss(logits, y)
 
             optimizer.zero_grad()
-            batch_loss.backward()
+            loss.backward()
             optimizer.step()
 
-            total_loss += batch_loss.item()
+            total_loss += loss.item()
             num_batches += 1
 
-    avg_loss = total_loss / num_batches
+    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-    # 4. Prepare return values (move to CPU)
-    # Move state_dict to CPU to avoid CUDA IPC warnings
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     return [avg_loss, model_state]
 
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        super().__init__(False, args)
+        super().__init__(True, args)
+
+        self.clients_state = [
+            get_model(args.model, args.dataset, args.feature_dim).state_dict()
+            for _ in range(self.num_clients)
+        ]
+
+        self.mp = False
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
-        # Ensure at least one client participates
         num_join_clients = max(1, num_join_clients)
 
         for r in range(self.rounds):
             t0 = time.time()
-            print(f"\n--- FedAvg Round {r + 1}/{self.rounds} ---")
+            print(f"\n--- Local Training Round {r + 1}/{self.rounds} ---")
 
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
@@ -86,7 +86,6 @@ class Server(BaseServer):
                 [
                     i,
                     self.client_gpu[i],
-                    self.model.state_dict(),
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
@@ -101,35 +100,47 @@ class Server(BaseServer):
             results = run_parallel_clients(
                 client_worker=client_worker,
                 parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
+                gpu_pools={},
+                mp=False,
             )
 
-            # Process results
-            # Calculate total loss, get states and weights of selected clients
             total_loss = 0.0
-            selected_states = []
-            current_weights = []
             for i in selected_clients:
                 client_loss, client_state = results[i]
                 total_loss += client_loss
-                selected_states.append(client_state)
-                current_weights.append(self.weights[i])
+                self.clients_state[i] = client_state
             self.loss.append(total_loss / num_join_clients)
-            sum_weights = sum(current_weights)
-            norm_weights = [w / sum_weights for w in current_weights]
 
-            self.aggregate(selected_states, weights=norm_weights)
-            self.evaluate()
+            self.evaluate_personalized()
             print(
-                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+                f"Personalized Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+
+    def evaluate_personalized(self):
+        total_correct = 0
+        total_samples = 0
+
+        for i in range(self.num_clients):
+            client_model = get_model(
+                self.args.model, self.args.dataset, self.args.feature_dim
+            ).to(self.device)
+            client_model.load_state_dict(self.clients_state[i])
+
+            acc = evaluate_model(client_model, self.test_set[i], self.device)
+            test_size = len(self.test_set[i])
+
+            total_correct += acc * test_size / 100
+            total_samples += test_size
+
+        avg_acc = (total_correct / total_samples) * 100
+        self.acc.append(avg_acc)
+        self.model.cpu()
 
     def save(self):
         f = {
             "acc": self.acc,
             "loss": self.loss,
-            "state_dict": self.model.state_dict(),
+            "state_dict": self.clients_state,
         }
         self.deal_save(f)

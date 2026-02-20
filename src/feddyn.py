@@ -155,8 +155,8 @@ class Server(BaseServer):
             sum_model_params = torch.zeros_like(global_model_vector)
 
             # Process results
-            for idx, i in enumerate(selected_clients):
-                loss, client_state_dict = results[idx]
+            for i in selected_clients:
+                loss, client_state_dict = results[i]
                 total_loss += loss
 
                 # Convert client state to vector

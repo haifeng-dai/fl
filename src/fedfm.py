@@ -85,7 +85,9 @@ def client_worker(params):
             _, features = model(data)
 
             sum_features.index_add_(0, target, features)
-            sum_counts.index_add_(0, target, torch.ones_like(target, dtype=torch.float32))
+            sum_counts.index_add_(
+                0, target, torch.ones_like(target, dtype=torch.float32)
+            )
 
     # Average and convert to CPU
     active_classes = torch.where(sum_counts > 0)[0]
@@ -146,15 +148,16 @@ class Server(BaseServer):
             )
 
             total_loss = 0.0
-            model_states = []
+            selected_states = []
             all_local_anchors = []
 
             for i in selected_clients:
-                total_loss += results[i][0]
-                model_states.append(results[i][1])
-                all_local_anchors.append(results[i][2])
+                client_loss, client_state, client_anchor = results[i]
+                total_loss += client_loss
+                selected_states.append(client_state)
+                all_local_anchors.append(client_anchor)
             self.loss.append(total_loss / num_join_clients)
-            self.aggregate(model_states)
+            self.aggregate(selected_states)
 
             # Aggregate Anchors
             self.aggregate_anchors(all_local_anchors)

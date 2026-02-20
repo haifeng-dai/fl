@@ -11,9 +11,9 @@ for DATASET in ${DATASETS//,/ }; do
                                 for LR in ${LRS//,/ }; do
                                     for BATCH_SIZE in ${BATCH_SIZES//,/ }; do
                                         for JOIN_RATIO in ${JOIN_RATIOS//,/ }; do
-                                            for MU in ${MUS_PROTO//,/ }; do
+                                            for MU_TEST in ${MUS_TEST//,/ }; do
                                                 uv run main.py \
-                                                    --algo fedproto \
+                                                    --algo fedtest \
                                                     --dataset $DATASET \
                                                     --model $MODEL \
                                                     --feature_dim $FEATURE_DIM \
@@ -31,7 +31,7 @@ for DATASET in ${DATASETS//,/ }; do
                                                     --max_workers_per_gpu $MAX_WORKERS_PER_GPU \
                                                     --times $TIMES \
                                                     --test $TEST \
-                                                    --mu $MU
+                                                    --mu_test $MU_TEST
                                             done
                                         done
                                     done

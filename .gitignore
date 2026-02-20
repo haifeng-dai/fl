@@ -4,6 +4,7 @@ __pycache__/
 .zed/
 .ruff_cache/
 .claude/
+.sisyphus/
 datasets/
 test/
 results/
@@ -11,4 +12,3 @@ logs/
 figures/
 
 uv.lock
-*test*
