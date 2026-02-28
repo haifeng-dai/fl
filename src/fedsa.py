@@ -9,9 +9,9 @@ from .utils import (
     BaseServer,
     ce_loss,
     get_model,
-    mse_loss,
     param_aggregate,
     run_parallel_clients,
+    evaluate_model,
 )
 
 
@@ -21,7 +21,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--alpha_sa",
         type=float,
         default=0.5,
-        help="Momentum factor for updating semantic anchors",
+        help="Momentum factor for updating semantic anchors (Decay factor alpha in paper)",
     )
     group.add_argument(
         "--lambda_r",
@@ -56,32 +56,40 @@ def mcl_loss(
     y: torch.Tensor,
     d: float,
 ):
+    """Implement Equation (7): Anchor-based margin-enhanced contrastive loss."""
     one_hot = F.one_hot(y, num_classes)
+    # Using negative Euclidean distance as logits for log-sum-exp structure
     dist_final = torch.cdist(feature, protos) + one_hot * d
     return ce_loss(-dist_final, y)
 
 
 def margin(anchor: torch.Tensor) -> float:
-    # anchor shape: [num_classes, feature_dim]
-    # Use cdist for vectorized calculation of pairwise distances
-    dists = torch.cdist(anchor, anchor, p=2)
+    """Implement Equation (6): Average margin among prototypes."""
+    # Filter out inactive classes (zero rows)
+    norms = torch.norm(anchor, dim=1)
+    valid_indices = torch.where(norms > 1e-8)[0]
+    N = len(valid_indices)
+    if N <= 1:
+        return 0.0
+
+    valid_anchors = anchor[valid_indices]
+    dists = torch.cdist(valid_anchors, valid_anchors, p=2)
     d = dists.sum()
 
-    denom = (anchor.shape[0] - 1) ** 2
-    if denom > 0:
-        d /= denom
-    return d.item()
+    denom = (N - 1) ** 2
+    return d.item() / denom
 
 
 def client_worker(params):
     """
     FedSA local training with Semantic Anchors and multiple regularizations.
+    Aligned with paper Equations (5), (7), (8), (9).
     """
     (
         _,
         device,
         model_state,
-        local_anchors,
+        prev_local_anchors,
         global_anchors,
         train_set,
         model_name,
@@ -107,31 +115,35 @@ def client_worker(params):
     total_loss = 0.0
     num_batches = 0
 
-    local_anchors = local_anchors.to(device)
     global_anchors = global_anchors.to(device)
-    # Calculate margin 'd' for MCL loss
-    d = max(margin(global_anchors), margin(local_anchors))
+    prev_local_anchors = prev_local_anchors.to(device)
+
+    # Calculate margin 'd_i^*' for MCL loss - Equation (7) context
+    d_star = max(margin(global_anchors), margin(prev_local_anchors))
 
     # 2. Training Loop
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             logits, features = model(x)
-            # Classifier output for global anchors
-            output = model.classifier(global_anchors)
 
-            # Standard Cross Entropy
+            # Equation (8): Classifier calibration using semantic anchors as inputs
+            output_cc = model.classifier(global_anchors)
+
+            # Supervised Loss
             loss_ce = ce_loss(logits, y)
 
-            # Regression Loss (L_r): Align features with global anchors
-            loss_r = mse_loss(features, global_anchors[y])
+            # Equation (5): Anchor-based regularization (Euclidean distance)
+            # We use features as proxies for local prototypes during batch training
+            loss_r = F.pairwise_distance(features, global_anchors[y], p=2).mean()
 
-            # Margin-enhanced Contrastive Loss (L_mcl)
-            loss_mcl = mcl_loss(features, global_anchors, num_classes, y, d)
+            # Equation (7): Margin-enhanced Contrastive Loss
+            loss_mcl = mcl_loss(features, global_anchors, num_classes, y, d_star)
 
-            # Classifier Calibration Loss (L_cc)
-            loss_cc = ce_loss(output, torch.arange(num_classes, device=device))
+            # Equation (8): Classifier Calibration Loss
+            loss_cc = ce_loss(output_cc, torch.arange(num_classes, device=device))
 
+            # Equation (9): Total Loss
             loss = (
                 loss_ce
                 + lambda_r * loss_r
@@ -144,9 +156,8 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    avg_loss = total_loss / num_batches
-
-    # 3. Calculate new local anchors (average features per class)
+    # 3. Calculate new local prototypes (average features per class)
+    model.eval()
     with torch.no_grad():
         anchor_sums = torch.zeros((num_classes, feature_dim), device=device)
         anchor_counts = torch.zeros(num_classes, device=device)
@@ -154,41 +165,36 @@ def client_worker(params):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             _, features = model(x)
-
             anchor_sums.index_add_(0, y, features)
-            anchor_counts.index_add_(
-                0, y, torch.ones_like(y, dtype=torch.float32, device=device)
-            )
+            anchor_counts.index_add_(0, y, torch.ones_like(y, dtype=torch.float32))
 
-        # Compute average only for classes that appeared
-        active_classes = torch.where(anchor_counts > 0)[0]
         local_anchors_dict = {}
-        for c in active_classes:
+        for c in torch.where(anchor_counts > 0)[0]:
             c_item = int(c.item())
-            local_anchors_dict[c_item] = (
-                anchor_sums[c_item] / anchor_counts[c_item]
-            ).cpu()
+            local_anchors_dict[c_item] = (anchor_sums[c_item] / anchor_counts[c_item]).cpu()
 
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-    return [avg_loss, model_state, local_anchors_dict]
+    return [total_loss / num_batches, model_state, local_anchors_dict]
 
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        super().__init__(False, args)
+        # FedSA is a personalized FL algorithm (pfl=True)
+        super().__init__(True, args)
 
-        # 全局语义锚点 (Prototypes)
-        self.anchors = torch.zeros(self.num_class, self.args.feature_dim)
+        # Initialize Semantic Anchors randomly as per paper
+        self.anchors = torch.randn(self.num_class, self.args.feature_dim)
+        self.anchors = F.normalize(self.anchors, p=2, dim=1)
+
         self.clients_anchors = [
             self.anchors.data.clone() for _ in range(self.num_clients)
         ]
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
         num_join_clients = max(1, num_join_clients)
 
-        print(f"FedSA Training with alpha_sa={self.args.alpha_sa}")
+        print(f"FedSA Training with alpha_sa={self.args.alpha_sa} (EMA factor)")
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -230,80 +236,67 @@ class Server(BaseServer):
 
             total_loss = 0.0
             selected_states = []
+            local_anchors_list = []
             current_weights = []
-            local_anchors = []
             for i in selected_clients:
-                client_loss, client_state, client_anchor = results[i]
+                client_loss, client_state, client_anchors = results[i]
                 total_loss += client_loss
                 self.clients_state[i] = client_state
                 selected_states.append(client_state)
+                local_anchors_list.append(client_anchors)
                 current_weights.append(self.weights[i])
-                local_anchors.append(client_anchor)
-            self.loss.append(total_loss / num_join_clients)
-            sum_weights = sum(current_weights)
-            norm_weights = [w / sum_weights for w in current_weights]
 
-            # 1. 聚合全局模型
+            self.loss.append(total_loss / num_join_clients)
+            norm_weights = [w / sum(current_weights) for w in current_weights]
+
+            # 1. Aggregate global model (for base representation)
             self.model.load_state_dict(param_aggregate(selected_states, norm_weights))
 
-            # 2. 更新全局语义锚点
-            self.update_global_anchors(local_anchors)
+            # 2. Aggregate local prototypes to generate P_bar and update semantic anchors A_bar (Equation 10)
+            self.update_global_anchors(local_anchors_list, norm_weights)
 
-            # 3. 更新 Server 端保存的 Client Anchors
-            # for i in selected_clients:
-            #     self.clients_anchors[i] = local_anchors[i].data.clone()
-            for i, anchors_dict in enumerate(local_anchors):
-                client_idx = selected_clients[i]
+            # 3. Update server-side cache of client anchors for next round's margin calculation
+            for idx, anchors_dict in enumerate(local_anchors_list):
+                c_idx = selected_clients[idx]
+                self.clients_anchors[c_idx].zero_()
                 for label, anchor in anchors_dict.items():
-                    # Update local copy on server device
-                    self.clients_anchors[client_idx][label] = anchor.data.clone()
+                    self.clients_anchors[c_idx][label] = anchor.data.clone()
 
             self.evaluate()
             print(
-                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+                f"Global Accuracy (Avg Personal): {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def update_global_anchors(self, client_anchors_list):
-        # Vectorized anchor aggregation using tensor operations
-        # Infer feature dimension from the first available anchor
-        feature_dim = 0
-        for client_anchors in client_anchors_list:
-            if client_anchors:
-                feature_dim = next(iter(client_anchors.values())).shape[0]
-                break
 
-        if feature_dim == 0:
-            return
+    def update_global_anchors(self, local_anchors_list, norm_weights):
+        """Weighted aggregation of local prototypes and EMA update of semantic anchors."""
+        new_p_bar = torch.zeros_like(self.anchors, device=self.device)
+        weight_sums = torch.zeros(self.num_class, device=self.device)
 
-        # Initialize tensors for accumulation
-        new_anchors = torch.zeros((self.num_class, feature_dim), device=self.device)
-        counts = torch.zeros(self.num_class, device=self.device)
+        for i, anchors_dict in enumerate(local_anchors_list):
+            w = norm_weights[i]
+            for label, anchor in anchors_dict.items():
+                new_p_bar[label] += anchor.to(self.device) * w
+                weight_sums[label] += w
 
-        for client_anchors in client_anchors_list:
-            for label, anchor in client_anchors.items():
-                new_anchors[label] += anchor.to(self.device)
-                counts[label] += 1
+        mask = weight_sums > 0
+        new_p_bar[mask] /= weight_sums[mask].unsqueeze(1)
 
-        # Average aggregation
-        mask = counts > 0
-        new_anchors[mask] /= counts[mask].unsqueeze(1)
-
-        # Exponential moving average update
+        # Equation (10): A_t+1 = alpha * A_t + (1 - alpha) * P_bar_t
         alpha = self.args.alpha_sa
-        for label in range(self.num_class):
-            if counts[label] > 0:
-                self.anchors[label] = (1 - alpha) * self.anchors[
-                    label
-                ] + alpha * new_anchors[label].cpu()
+        mask_cpu = mask.cpu()
+        self.anchors[mask_cpu] = alpha * self.anchors[mask_cpu] + (1 - alpha) * new_p_bar[mask].cpu()
 
     def save(self):
         f = {
             "acc": self.acc,
             "loss": self.loss,
             "state_dict": {
-                "anchors": self.anchors.data,
-                "clients": self.clients_state,
+                "global": self.model.state_dict(),
+                "client": self.clients_state,
+                "proto": self.anchors.data,
+                "aux": self.clients_anchors,
             },
         }
         super().deal_save(f)

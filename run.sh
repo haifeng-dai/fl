@@ -12,9 +12,9 @@
 # export ALGOS="fedavg,feddyn,fedfm,fedlsa,fedpln,fedproc,fedprox,moon,scaffold"
 
 # personalized algorithms
-# export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,proxyfl"
+# export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
-export ALGOS="local"
+export ALGOS="feddpl1"
 
 # =============
 # Data
@@ -39,17 +39,17 @@ export N_CLASSES="2"
 # =============
 export EPOCHS="10"
 export LRS="0.01"
-export ROUNDS="1000"
+export ROUNDS="200"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
-export TIMES=5
+export TIMES=1
 
 # =============
 # Compute
 # =============
 # 3,2,1,0  0,1,2,3
 # export GPUS="0,1,2,3"
-export GPUS="2,1,3"
+export GPUS="2,3,0,1"
 export MP=1
 export MAX_WORKERS_PER_GPU=10
 
@@ -70,7 +70,7 @@ export ALA_THRESHOLDS_ALA="0.1"
 export NUM_PRE_LOSSES_ALA="10"
 
 # FedDPL
-export LAMBDAS_DPL="0.01,0.01,0.001,0.0001,1.0,10.0"
+export LAMBDAS_DPL="10.0"
 export EPOCH_PLNS_DPL="10"
 export LRS_DPL="0.01"
 export BATCH_SIZE_PLNS_DPL="64"
@@ -148,84 +148,18 @@ export ALPHA_COEFS_DYNN="0.1"
 # FedFM
 export MUS_FM="1.0"
 
-# ==============================================================================
+# =============
 # Execution
-# ==============================================================================
+# =============
 
 for ALGO in ${ALGOS//,/ }; do
     echo "Starting experiment for algorithm: $ALGO"
-    case $ALGO in
-        "fedala")
-            bash ./scripts/fedala.sh
-            ;;
-        "fedavg")
-            bash ./scripts/fedavg.sh
-            ;;
-        "feddpl")
-            bash ./scripts/feddpl.sh
-            ;;
-        "feddyn")
-            bash ./scripts/feddyn.sh
-            ;;
-        "fedfm")
-            bash ./scripts/fedfm.sh
-            ;;
-        "fedkd")
-            bash ./scripts/fedkd.sh
-            ;;
-        "fedlsa")
-            bash ./scripts/fedlsa.sh
-            ;;
-        "fedper")
-            bash ./scripts/fedper.sh
-            ;;
-        "fedpln")
-            bash ./scripts/fedpln.sh
-            ;;
-        "fedproc")
-            bash ./scripts/fedproc.sh
-            ;;
-        "fedproto")
-            bash ./scripts/fedproto.sh
-            ;;
-        "fedprox")
-            bash ./scripts/fedprox.sh
-            ;;
-        "fedrep")
-            bash ./scripts/fedrep.sh
-            ;;
-        "fedsa")
-            bash ./scripts/fedsa.sh
-            ;;
-        "scaffold")
-            bash ./scripts/scaffold.sh
-            ;;
-        "fedtgp")
-            bash ./scripts/fedtgp.sh
-            ;;
-        "fml")
-            bash ./scripts/fml.sh
-            ;;
-        "lgfedavg")
-            bash ./scripts/lgfedavg.sh
-            ;;
-        "moon")
-            bash ./scripts/moon.sh
-            ;;
-        "proxyfl")
-            bash ./scripts/proxyfl.sh
-            ;;
-        "fedtest")
-            bash ./scripts/fedtest.sh
-            ;;
-        "local")
-            bash ./scripts/local.sh
-            ;;
-        *)
-            echo "Unknown algorithm: $ALGO. Supported: fedala, fedavg, feddpl, feddyn, fedfm, fedkd, fedlsa, fedper, fedpln, fedproc, fedproto, fedprox, fedrep, fedsa, scaffold, fedtgp, fml, lgfedavg, moon, proxyfl, fedtest"
-            exit 1
-            ;;
-    esac
+    if [ -f "./scripts/${ALGO}.sh" ]; then
+        bash ./scripts/${ALGO}.sh
+    else
+        echo "Script not found: ./scripts/${ALGO}.sh"
+        exit 1
+    fi
     echo "Finished experiment for algorithm: $ALGO"
     echo "------------------------------------------------"
 done

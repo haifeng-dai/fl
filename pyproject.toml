@@ -35,5 +35,6 @@ torchvision = { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sy
 
 [dependency-groups]
 dev = [
+    "notebook>=7.5.4",
     "ty>=0.0.15",
 ]

@@ -220,6 +220,9 @@ class Server(BaseServer):
         f = {
             "acc": self.acc,
             "loss": self.loss,
-            "state_dict": self.model.state_dict(),
+            "state_dict": {
+                "global": self.model.state_dict(),
+                "aux": {"server_c": self.c_global, "clients_c": self.c_local},
+            },
         }
         self.deal_save(f)

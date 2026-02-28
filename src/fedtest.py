@@ -178,11 +178,10 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        super().__init__(False, args)
+        super().__init__(True, args)
 
         self.global_protos = None
-        self.acc_proto: list[float] = []
-        self.proto_similarities: list[dict] = []  # 存储每轮的相似度
+        self.proto_similarities: list[dict] = []
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -205,7 +204,7 @@ class Server(BaseServer):
                 [
                     i,
                     self.client_gpu[i],
-                    self.model.state_dict(),
+                    self.clients_state[i],
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
@@ -234,6 +233,7 @@ class Server(BaseServer):
             for i in selected_clients:
                 client_loss, client_state, client_proto = results[i]
                 total_loss += client_loss
+                self.clients_state[i] = client_state
                 selected_states.append(client_state)
                 selected_protos.append(client_proto)
                 current_weights.append(self.weights[i])
@@ -262,40 +262,22 @@ class Server(BaseServer):
                 )
                 print(f"  Per-class: {sim_str}")
 
-            self.evaluate()
+            self.evaluate(protos=self.global_protos)
 
             print(
-                f"Global Accuracy: {self.acc[-1]:.2f}%, Proto Accuracy: {self.acc_proto[-1]:.2f}%, "
+                f"Personalized Accuracy: {self.acc[-1]:.2f}%, Proto Accuracy: {self.acc_proto[-1]:.2f}%, "
                 f"Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def evaluate(self):
-        self.acc.append(evaluate_model(self.model, self.test_set, self.device))
-
-        if self.global_protos is not None:
-            global_protos_tensor = torch.zeros(
-                self.num_class, self.args.feature_dim, device=self.device
-            )
-            for k, v in self.global_protos.items():
-                if k < self.num_class:
-                    global_protos_tensor[k] = v.to(self.device)
-            acc_proto = evaluate_prototype(
-                self.model, global_protos_tensor, self.test_set, self.device
-            )
-        else:
-            acc_proto = 0.0
-        self.acc_proto.append(acc_proto)
-
-        self.model.cpu()
-
     def save(self):
         f = {
-            "acc": self.acc,
-            "acc_proto": self.acc_proto,
+            "acc": {"model": self.acc, "proto": self.acc_proto},
             "loss": self.loss,
-            "global_protos": self.global_protos,
-            "state_dict": self.model.state_dict(),
-            "proto_similarities": self.proto_similarities,
+            "state_dict": {
+                "client": self.clients_state,
+                "proto": self.global_protos,
+            },
+            "aux": self.proto_similarities,
         }
         self.deal_save(f)

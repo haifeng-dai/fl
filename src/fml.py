@@ -132,8 +132,6 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
 
-        # Initialize local models for each client
-        self.client_states = [self.model.state_dict() for _ in range(self.num_clients)]
         self.loss_g = []
 
     def fit(self):
@@ -154,7 +152,7 @@ class Server(BaseServer):
                     i,
                     self.client_gpu[i],
                     self.model.state_dict(),
-                    self.client_states[i],
+                    self.clients_state[i],
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
@@ -185,7 +183,7 @@ class Server(BaseServer):
                 total_loss += client_loss
                 total_loss_g += client_loss_g
                 selected_states.append(client_state)
-                self.client_states[i] = client_state
+                self.clients_state[i] = client_state
                 selected_states_g.append(client_state_g)
                 current_weights.append(self.weights[i])
             self.loss.append(total_loss / num_join_clients)
@@ -202,24 +200,13 @@ class Server(BaseServer):
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def evaluate(self):
-        accs = []
-        for i in range(self.num_clients):
-            self.model.load_state_dict(self.client_states[i])
-            acc = evaluate_model(self.model, self.test_set[i], self.device)
-            accs.append(acc)
-
-        avg_acc = sum(accs) / len(accs)
-        self.acc.append(avg_acc)
-        self.model.cpu()
-
     def save(self):
         f = {
             "acc": self.acc,
-            "loss": self.loss,
+            "loss": {"model": self.loss, "global": self.loss_g},
             "state_dict": {
                 "global": self.model.state_dict(),
-                "local": self.client_states,
+                "client": self.clients_state,
             },
         }
         super().deal_save(f)

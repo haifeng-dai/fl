@@ -111,36 +111,19 @@ class Server(BaseServer):
                 self.clients_state[i] = client_state
             self.loss.append(total_loss / num_join_clients)
 
-            self.evaluate_personalized()
+            self.evaluate()
             print(
                 f"Personalized Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def evaluate_personalized(self):
-        total_correct = 0
-        total_samples = 0
-
-        for i in range(self.num_clients):
-            client_model = get_model(
-                self.args.model, self.args.dataset, self.args.feature_dim
-            ).to(self.device)
-            client_model.load_state_dict(self.clients_state[i])
-
-            acc = evaluate_model(client_model, self.test_set[i], self.device)
-            test_size = len(self.test_set[i])
-
-            total_correct += acc * test_size / 100
-            total_samples += test_size
-
-        avg_acc = (total_correct / total_samples) * 100
-        self.acc.append(avg_acc)
-        self.model.cpu()
 
     def save(self):
         f = {
             "acc": self.acc,
             "loss": self.loss,
-            "state_dict": self.clients_state,
+            "state_dict": {
+                "global": self.model.state_dict(),
+            },
         }
         self.deal_save(f)

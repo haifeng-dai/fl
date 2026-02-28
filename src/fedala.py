@@ -317,7 +317,6 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         # FedALA is a personalized FL method
         super().__init__(True, args)
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
         self.clients_weights = [None] * self.num_clients
 
     def fit(self):
@@ -388,42 +387,21 @@ class Server(BaseServer):
             norm_weights = [w / sum_weights for w in current_weights]
 
             self.aggregate(selected_states, weights=norm_weights)
-            self.evaluate_personalized()
+            self.evaluate()
 
             print(
                 f"Personalized Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def evaluate_personalized(self):
-        """Evaluate personalized client models"""
-
-        total_correct = 0
-        total_samples = 0
-
-        for i in range(self.num_clients):
-            # Load client model
-            client_model = get_model(
-                self.args.model, self.args.dataset, self.args.feature_dim
-            ).to(self.device)
-            client_model.load_state_dict(self.clients_state[i])
-
-            # Evaluate on client's test set
-            acc = evaluate_model(client_model, self.test_set[i], self.device)
-            test_size = len(self.test_set[i])
-
-            total_correct += acc * test_size / 100
-            total_samples += test_size
-
-        avg_acc = (total_correct / total_samples) * 100
-        self.acc.append(avg_acc)
-        self.model.cpu()
 
     def save(self):
         f = {
             "acc": self.acc,
             "loss": self.loss,
-            "state_dict": self.clients_state,
-            "clients_weights": self.clients_weights,
+            "state_dict": {
+                "client": self.clients_state,
+                "aux": self.clients_weights,
+            },
         }
         self.deal_save(f)

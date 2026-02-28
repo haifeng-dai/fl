@@ -250,7 +250,6 @@ class Server(BaseServer):
             self.compressed_params[name] = decompose_param(param, args.energy)
 
         self.client_wh_states = [None for _ in range(self.num_clients)]
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -316,19 +315,6 @@ class Server(BaseServer):
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def evaluate(self):
-        acc = 0.0
-        for i in range(self.num_clients):
-            model = get_model(
-                self.args.model, self.args.dataset, self.args.feature_dim
-            ).to(self.device)
-            with torch.no_grad():
-                model.load_state_dict(self.clients_state[i])
-            acc_i = evaluate_model(model, self.test_set[i], self.device)
-            acc += acc_i
-        self.acc.append(acc / self.num_clients)
-        self.model.cpu()
-
     def aggregate_svd(self, client_params_list, weights):
         """Aggregate SVD compressed parameters"""
         # 1. Reconstruct all params to CPU
@@ -361,8 +347,8 @@ class Server(BaseServer):
             "loss": self.loss,
             "state_dict": {
                 "global": self.model.state_dict(),
-                "clients": self.clients_state,
-                "wh": self.client_wh_states,
+                "client": self.clients_state,
+                "aux": self.client_wh_states,
             },
         }
         self.deal_save(f)

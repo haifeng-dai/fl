@@ -132,9 +132,6 @@ class Server(BaseServer):
         super().__init__(True, args)
 
         self.global_protos = None
-        self.acc_proto: list[float] = []
-
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -189,47 +186,16 @@ class Server(BaseServer):
             self.loss.append(total_loss / num_join_clients)
 
             self.global_protos = proto_cluster(selected_protos)
-            self.evaluate()
+            self.evaluate(protos=self.global_protos)
 
             print(
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Proto Accuracy: {self.acc_proto[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def evaluate(self):
-        accs = []
-        for i in range(self.num_clients):
-            client_model = get_model(
-                self.args.model, self.args.dataset, self.args.feature_dim
-            ).to(self.device)
-            client_model.load_state_dict(self.clients_state[i])
-            acc = evaluate_model(client_model, self.test_set[i], self.device)
-            accs.append(acc)
-        self.acc.append(sum(accs) / len(accs))
-
-        if self.global_protos is not None:
-            global_protos_tensor = torch.zeros(
-                self.num_class, self.args.feature_dim, device=self.device
-            )
-            for k, v in self.global_protos.items():
-                if k < self.num_class:
-                    global_protos_tensor[k] = v.to(self.device)
-            client_model = get_model(
-                self.args.model, self.args.dataset, self.args.feature_dim
-            ).to(self.device)
-            client_model.load_state_dict(self.clients_state[0])
-            acc_proto = evaluate_prototype(
-                client_model, global_protos_tensor, self.test_set[0], self.device
-            )
-        else:
-            acc_proto = 0.0
-        self.acc_proto.append(acc_proto)
-
-        self.model.cpu()
-
     def save(self):
         f = {
-            "acc": self.acc,
+            "acc": {"model": self.acc, "proto": self.acc_proto},
             "loss": self.loss,
             "state_dict": {
                 "client": self.clients_state,

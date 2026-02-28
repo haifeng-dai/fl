@@ -5,7 +5,7 @@ import torch.multiprocessing as mp
 
 from ..models import CNN, ResNet18, ResNet50, HARCNN, HARMLP
 from .aggregate import param_aggregate
-from .evaluate import evaluate_model
+from .evaluate import evaluate_model, evaluate_prototype
 from .load_data import load_data
 
 
@@ -19,6 +19,7 @@ class BaseServer:
         self.num_clients: int = self.args.num_clients
         self.pfl = pfl
         self.acc: list[float] = []
+        self.acc_proto: list[float] = []
         self.loss: list[float] = []
 
         self.train_sets, self.test_set, train_counts, self.num_class = load_data(
@@ -34,6 +35,7 @@ class BaseServer:
         self.weights = [
             train_counts[i] / total_samples for i in range(len(train_counts))
         ]
+        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
         self._BaseServer__start_pools(args.gpus)
 
@@ -81,9 +83,82 @@ class BaseServer:
         aggregated_state = param_aggregate(client_state_dicts, weights)
         self.model.load_state_dict(aggregated_state)
 
-    def evaluate(self, *args, **kwargs):
-        acc = evaluate_model(self.model, self.test_set, self.device)
-        self.acc.append(acc)
+    def evaluate(self, model_states=None, protos=None):
+        """
+        Smart evaluation interface that automatically switches between global
+        and personalized evaluation, with optional prototype matching.
+
+        Args:
+            model_states: Optional list of state dicts to use for evaluation.
+                          If None, defaults to self.clients_state.
+            protos: Optional current global prototypes (Dict or Tensor).
+        """
+        # 1. State Protection: backup global model if in pFL mode
+        if self.pfl:
+            global_backup = {
+                k: v.cpu().clone() for k, v in self.model.state_dict().items()
+            }
+
+        # 2. Model-based Evaluation
+        if not self.pfl:
+            # Mode A: Traditional/Global FL
+            acc = evaluate_model(self.model, self.test_set, self.device)
+            self.acc.append(acc)
+        else:
+            # Mode B: Personalized FL
+            accs = []
+            self.model.to(self.device)
+
+            # Use provided states or fallback to instance state
+            target_states = (
+                model_states if model_states is not None else self.clients_state
+            )
+
+            assert (
+                target_states
+            ), "Personalized algorithms (pfl=True) must provide model_states or maintain self.clients_state."
+
+            for i in range(self.num_clients):
+                self.model.load_state_dict(target_states[i])
+                accs.append(evaluate_model(self.model, self.test_set[i], self.device))
+            self.acc.append(sum(accs) / len(accs) if accs else 0.0)
+
+        # 3. Prototype-based Evaluation (Optional)
+        if protos is not None:
+            # Standardize protos to Tensor [C, d]
+            if isinstance(protos, dict):
+                proto_tensor = torch.zeros(
+                    self.num_class, self.args.feature_dim, device=self.device
+                )
+                for k, v in protos.items():
+                    proto_tensor[k] = v.to(self.device)
+            else:
+                proto_tensor = protos.to(self.device)
+
+            if not self.pfl:
+                p_acc = evaluate_prototype(
+                    self.model, proto_tensor, self.test_set, self.device
+                )
+            else:
+                p_accs = []
+                # Re-evaluate prototypes using the same target_states for consistency
+                target_states = (
+                    model_states if model_states is not None else self.clients_state
+                )
+                for i in range(self.num_clients):
+                    self.model.load_state_dict(target_states[i])
+                    p_accs.append(
+                        evaluate_prototype(
+                            self.model, proto_tensor, self.test_set[i], self.device
+                        )
+                    )
+                p_acc = sum(p_accs) / len(p_accs) if p_accs else 0.0
+            self.acc_proto.append(p_acc)
+
+        # 4. State Restoration
+        if self.pfl:
+            self.model.load_state_dict(global_backup)
+
         self.model.cpu()
 
     def fit(self, *args, **kwargs):

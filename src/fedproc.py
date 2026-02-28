@@ -98,7 +98,6 @@ def client_worker(params):
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
         self.global_protos = torch.zeros((self.num_class, self.args.feature_dim))
 
     def fit(self):
@@ -171,8 +170,10 @@ class Server(BaseServer):
         f = {
             "acc": self.acc,
             "loss": self.loss,
-            "state_dict": self.model.state_dict(),
-            "global_protos": self.global_protos,
+            "state_dict": {
+                "global": self.model.state_dict(),
+                "proto": self.global_protos,
+            },
         }
         self.deal_save(f)
 

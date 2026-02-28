@@ -128,8 +128,6 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
 
-        # Initialize local models for each client (Private)
-        self.client_states = [self.model.state_dict() for _ in range(self.num_clients)]
         # Initialize proxy models for each client (Public/Shared)
         self.client_states_p = [
             self.model.state_dict() for _ in range(self.num_clients)
@@ -175,7 +173,6 @@ class Server(BaseServer):
                 neighbor_weights = self.adj_matrix[i, neighbor_indices].tolist()
 
                 # Perform local aggregation
-                # Note: We access self.proxy_model_states which contains the latest available states (possibly from previous rounds for non-active clients)
                 neighbor_states = [self.client_states_p[j] for j in neighbor_indices]
                 aggregated_proxy_state = param_aggregate(
                     neighbor_states, neighbor_weights
@@ -185,7 +182,7 @@ class Server(BaseServer):
                     i,
                     self.client_gpu[i],
                     aggregated_proxy_state,
-                    self.client_states[i],
+                    self.clients_state[i],
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
@@ -209,18 +206,12 @@ class Server(BaseServer):
             # 3. Update states and calculate average losses
             total_loss = 0.0
             total_loss_p = 0.0
-            selected_states = []
-            selected_states_p = []
-            current_weights = []
             for i in selected_clients:
                 client_loss, client_loss_p, client_state, client_state_p = results[i]
                 total_loss += client_loss
                 total_loss_p += client_loss_p
-                selected_states.append(client_state)
-                self.client_states[i] = client_state
-                selected_states_p.append(client_state_p)
+                self.clients_state[i] = client_state
                 self.client_states_p[i] = client_state_p
-                current_weights.append(self.weights[i])
             self.loss.append(total_loss / num_join_clients)
             self.loss_p.append(total_loss_p / num_join_clients)
 
@@ -231,21 +222,13 @@ class Server(BaseServer):
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def evaluate(self):
-        # Evaluate Personalized Local Models on Local Test Sets
-        accs = []
-        for i in range(self.num_clients):
-            self.model.load_state_dict(self.client_states[i])
-            acc = evaluate_model(self.model, self.test_set[i], self.device)
-            accs.append(acc)
-
-        avg_acc = sum(accs) / len(accs)
-        self.acc.append(avg_acc)
-
     def save(self):
         f = {
             "acc": self.acc,
             "loss": {"model": self.loss, "proxy": self.loss_p},
-            "state_dict": self.client_states,
+            "state_dict": {
+                "client": self.clients_state,
+                "proxy": self.client_states_p,
+            },
         }
         super().deal_save(f)

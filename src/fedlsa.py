@@ -312,10 +312,13 @@ class Server(BaseServer):
             "acc": self.acc,
             "loss": self.loss,
             "state_dict": {
-                "R": self.R.cpu(),
-                "anchor_mapping": self.anchor_mapping.state_dict(),
-                "model": self.model.state_dict(),
-                "clients": self.clients_state,
+                "global": self.model.state_dict(),
+                "client": self.clients_state,
+                "proto": self.get_anchors().detach().cpu(),
+                "aux": {
+                    "R": self.R.cpu(),
+                    "anchor_mapping": self.anchor_mapping.state_dict(),
+                },
             },
         }
         super().deal_save(f)

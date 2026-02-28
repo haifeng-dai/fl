@@ -12,7 +12,7 @@
 
 ## 支持列表
 
-### 📚 算法 (17种)
+### 📚 算法 (23种)
 
 本项目目前支持以下主流及前沿联邦学习算法：
 
@@ -21,6 +21,8 @@
 | **基础** | **FedAvg** | 联邦平均算法 | AISTATS 2017 |
 | | **FedProx** | 针对异构数据的近端项优化 | MLSys 2020 |
 | | **LG-FedAvg** | 本地/全局表示解耦 | arXiv 2020 |
+| | **Scaffold** | 使用控制变量缓解客端偏移 | ICML 2020 |
+| | **FedDyn** | 动态正则化联邦学习 | ICLR 2021 |
 | **个性化** | **FedPer** | 个性化层（Base + Personalized Head） | arXiv 2019 |
 | | **FedRep** | 学习表示（Representation Learning） | ICML 2021 |
 | | **FedProto** | 基于原型的联邦学习 | AAAI 2022 |
@@ -28,13 +30,17 @@
 | | **FedTGP** | 可训练全局原型 (Trainable Global Prototypes) | -- |
 | | **FedPLN** | 原型学习网络 | -- |
 | | **FedDPL** | 双重原型学习 | -- |
+| | **FedDPL1** | 双重原型学习变体 | -- |
+| | **FedFM** | 特征匹配联邦学习 | -- |
+| | **FedProc** | 原型对比联邦学习 | -- |
 | **蒸馏** | **FedKD** | 知识蒸馏 | -- |
-| | **FedAMD** | 聚合互蒸馏 | -- |
 | | **FML** | 联邦互学习 (Federated Mutual Learning) | -- |
 | | **ProxyFL** | 代理模型互学习 | -- |
 | **对比学习** | **MOON** | 模型对比学习 | CVPR 2021 |
 | **语义/锚点** | **FedSA** | 语义锚点 (Semantic Anchors) | -- |
 | | **FedLSA** | 位置感知语义锚点 | -- |
+| **其他** | **FedTest** | 测试/实验性算法 | -- |
+| | **Local** | 本地训练基准 (Baseline) | -- |
 
 ### 💾 数据集
 

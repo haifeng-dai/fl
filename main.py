@@ -34,6 +34,7 @@ def get_args():
             "moon",
             "fedpln",
             "feddpl",
+            "feddpl1",
             "fedproto",
             "fedkd",
             "fml",

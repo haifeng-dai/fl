@@ -120,18 +120,16 @@ def client_worker(params):
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     model.train()
-    total_loss = 0.0
+    total_loss_ce = 0.0
+    total_loss_proto = 0.0
     num_batches = 0
 
     # Pre-process global prototypes for efficient GPU access
     global_protos_tensor = None
     if global_protos is not None:
-        # Create a tensor of shape [num_classes, feature_dim]
-        # We need to determine feature_dim from the first available prototype
         first_proto = next(iter(global_protos.values()))
-        feature_dim = first_proto.shape[0]
-        global_protos_tensor = torch.zeros(num_classes, feature_dim, device=device)
-
+        feat_dim = first_proto.shape[0]
+        global_protos_tensor = torch.zeros(num_classes, feat_dim, device=device)
         for label, proto in global_protos.items():
             global_protos_tensor[label] = proto.to(device)
 
@@ -140,26 +138,29 @@ def client_worker(params):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             output, features = model(x)
-            loss = ce_loss(output, y)
+            
+            l_ce = ce_loss(output, y)
+            l_proto = torch.tensor(0.0, device=device)
 
-            # Prototype matching loss
             if global_protos_tensor is not None:
                 target_protos = global_protos_tensor[y]
-                loss += mse_loss(features, target_protos) * lamda_
+                l_proto = mse_loss(features, target_protos)
+
+            loss = l_ce + lamda_ * l_proto
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item()
+            total_loss_ce += l_ce.item()
+            total_loss_proto += l_proto.item()
             num_batches += 1
 
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    avg_loss_ce = total_loss_ce / num_batches if num_batches > 0 else 0.0
+    avg_loss_proto = total_loss_proto / num_batches if num_batches > 0 else 0.0
 
     # Collect local prototypes
     model.eval()
-
-    # Initialize accumulators on device for vectorized operation
     proto_sum = torch.zeros(num_classes, feature_dim, device=device)
     proto_count = torch.zeros(num_classes, device=device)
 
@@ -167,40 +168,28 @@ def client_worker(params):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             _, features = model(x)
-
             proto_sum.index_add_(0, y, features)
             ones = torch.ones_like(y, dtype=torch.float)
             proto_count.index_add_(0, y, ones)
 
-    # Calculate average prototypes
     local_protos_avg = {}
-    # Only process classes that appeared in the local dataset
     present_classes = torch.nonzero(proto_count).squeeze(1)
-
     for cls_idx in present_classes:
-        # Calculate mean: sum / count
         avg = proto_sum[cls_idx] / proto_count[cls_idx]
         local_protos_avg[cls_idx.item()] = avg.cpu()
 
-    # Return results (move to CPU)
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-
-    return [avg_loss, model_state, local_protos_avg]
+    return [avg_loss_ce, avg_loss_proto, model_state, local_protos_avg]
 
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        # FedTGP is a personalized FL method
         super().__init__(True, args)
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
-
-        # Use model's actual feature dimension if available, otherwise use args
         if hasattr(self.model, "feature_dim"):
             self.feature_dim = self.model.feature_dim
         else:
             self.feature_dim = args.feature_dim
 
-        # Initialize TGP module
         self.tgp = TGP(
             num_classes=self.num_class,
             hidden_dim=self.feature_dim,
@@ -210,6 +199,9 @@ class Server(BaseServer):
 
         self.global_protos = None
         self.gap = torch.ones(self.num_class, device=self.device) * 1e9
+        
+        # Consistent metrics
+        self.loss_proto = []
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -219,13 +211,11 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- FedTGP Round {r + 1}/{self.rounds} ---")
 
-            # Select clients
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
             )
             print(f"Selected clients: {selected_clients}")
 
-            # Prepare parameters for parallel execution
             global_protos_cpu = None
             if self.global_protos is not None:
                 global_protos_cpu = {k: v.cpu() for k, v in self.global_protos.items()}
@@ -249,7 +239,6 @@ class Server(BaseServer):
                 for i in selected_clients
             ]
 
-            # Run parallel client training
             results = run_parallel_clients(
                 client_worker=client_worker,
                 parameters=p,
@@ -257,45 +246,40 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # Process results
-            total_loss = 0.0
+            total_loss_ce = 0.0
+            total_loss_proto = 0.0
             selected_states = []
             selected_protos = []
             for i in selected_clients:
-                client_loss, client_state, client_proto = results[i]
-                total_loss += client_loss
+                l_ce, l_p, client_state, client_proto = results[i]
+                total_loss_ce += l_ce
+                total_loss_proto += l_p
                 self.clients_state[i] = client_state
                 selected_states.append(client_state)
                 selected_protos.append(client_proto)
-            self.loss.append(total_loss / num_join_clients)
+            
+            self.loss.append(total_loss_ce / num_join_clients)
+            self.loss_proto.append(total_loss_proto / num_join_clients)
 
             uploaded_protos = []
-            for p in selected_protos:
-                for label, proto in p.items():
+            for p_dict in selected_protos:
+                for label, proto in p_dict.items():
                     uploaded_protos.append((proto.to(self.device), label))
 
-            # Calculate class-wise minimum distance (gap)
             self.calculate_gap(selected_protos)
-
-            # Update TGP on server
             self.update_tgp(uploaded_protos)
-
-            # Evaluate personalized models
-            self.evaluate_personalized()
+            self.evaluate(protos=self.global_protos)
 
             print(
-                f"Personalized Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+                f"Model Acc: {self.acc[-1]:.2f}%, Proto Acc: {self.acc_proto[-1]:.2f}%, "
+                f"Loss CE: {self.loss[-1]:.4f}, Loss Proto: {self.loss_proto[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def calculate_gap(self, protos_per_client):
-        """Calculate class-wise minimum distance between prototypes"""
         self.gap = torch.ones(self.num_class, device=self.device) * 1e9
-
-        # Average prototypes across clients
         avg_protos = proto_cluster(protos_per_client)
 
-        # Calculate pairwise distances
         for k1 in avg_protos.keys():
             for k2 in avg_protos.keys():
                 if k1 > k2:
@@ -310,53 +294,27 @@ class Server(BaseServer):
         for i in range(len(self.gap)):
             if self.gap[i] > 1e8:
                 self.gap[i] = min_gap
-
-        max_gap = torch.max(self.gap)
-        # print(f"Class-wise minimum distance: {self.gap.cpu().numpy()}")
-        print(f"Min gap: {min_gap:.4f}, Max gap: {max_gap:.4f}")
+        print(f"Min gap: {min_gap:.4f}, Max gap: {torch.max(self.gap):.4f}")
 
     def update_tgp(self, uploaded_protos):
-        """Update Trainable Global Prototypes"""
         self.tgp.train()
         optimizer = torch.optim.SGD(self.tgp.parameters(), lr=self.args.server_lr)
 
-        for epoch in range(self.args.server_epochs):
-            proto_loader = DataLoader(
-                uploaded_protos,
-                batch_size=self.args.batch_size,
-                shuffle=True,
-                drop_last=False,
-            )
-
-            epoch_loss = 0.0
-            num_batches = 0
-
+        for _ in range(self.args.server_epochs):
+            proto_loader = DataLoader(uploaded_protos, batch_size=self.args.batch_size, shuffle=True)
             for proto_batch, labels_batch in proto_loader:
                 proto_batch = proto_batch.to(self.device)
                 labels_batch = labels_batch.to(self.device, dtype=torch.long)
-
-                # Generate prototypes for all classes
                 proto_gen = self.tgp(list(range(self.num_class)))
-
-                # Calculate distances
                 dist = torch.cdist(proto_batch, proto_gen, p=2.0)
-
-                # Add margin for true class
                 one_hot = F.one_hot(labels_batch, self.num_class).to(self.device)
                 margin = min(torch.max(self.gap).item(), self.args.margin_threshold)
                 dist = dist + one_hot * margin
-
-                # Loss: use negative distance as logits
                 loss = ce_loss(-dist, labels_batch)
-
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-                epoch_loss += loss.item()
-                num_batches += 1
-
-        # Generate global prototypes
         self.tgp.eval()
         self.global_protos = {}
         with torch.no_grad():
@@ -365,80 +323,15 @@ class Server(BaseServer):
                     torch.tensor(class_id, device=self.device)
                 ).data.clone()
 
-    def evaluate_personalized(self):
-        """Evaluate personalized client models using global prototypes"""
-        from .utils.evaluate import evaluate_model
-
-        total_correct = 0
-        total_samples = 0
-
-        # Use global prototypes for evaluation if available
-        if self.global_protos is not None:
-            # Pre-process global prototypes into a tensor for vectorized calculation
-            # Use 'inf' to handle missing classes so they are never selected
-            global_protos_tensor = torch.zeros(
-                self.num_class, self.args.feature_dim, device=self.device
-            )
-            global_protos_tensor.fill_(1e9)
-
-            for k, v in self.global_protos.items():
-                if k < self.num_class:
-                    global_protos_tensor[k] = v.to(self.device)
-
-            for i in range(self.num_clients):
-                client_model = get_model(
-                    self.args.model, self.args.dataset, self.args.feature_dim
-                ).to(self.device)
-                client_model.load_state_dict(self.clients_state[i])
-                client_model.eval()
-
-                test_loader = DataLoader(self.test_set[i], batch_size=64, shuffle=False)
-
-                correct = 0
-                total = 0
-
-                with torch.no_grad():
-                    for x, y in test_loader:
-                        x, y = x.to(self.device), y.to(self.device)
-                        _, features = client_model(x)
-
-                        # Minimizing L2 distance is equivalent to minimizing MSE
-                        dists = torch.cdist(features, global_protos_tensor, p=2.0)
-
-                        # Predict class with minimum distance
-                        pred = torch.argmin(dists, dim=1)
-                        correct += (pred == y).sum().item()
-                        total += y.shape[0]
-
-                total_correct += correct
-                total_samples += total
-        else:
-            # Fallback to standard evaluation
-            for i in range(self.num_clients):
-                client_model = get_model(
-                    self.args.model, self.args.dataset, self.args.feature_dim
-                ).to(self.device)
-                client_model.load_state_dict(self.clients_state[i])
-
-                acc = evaluate_model(client_model, self.test_set[i], self.device)
-                test_size = len(self.test_set[i])
-
-                total_correct += acc * test_size / 100
-                total_samples += test_size
-
-        avg_acc = (total_correct / total_samples) * 100 if total_samples > 0 else 0.0
-        self.acc.append(avg_acc)
-        self.model.cpu()
-
     def save(self):
         f = {
-            "acc": self.acc,
-            "loss": self.loss,
+            "acc": {"model": self.acc, "proto": self.acc_proto},
+            "loss": {"model": self.loss, "proto": self.loss_proto},
             "state_dict": {
                 "global": self.model.state_dict(),
                 "client": self.clients_state,
-                "tgp": self.tgp.state_dict(),
                 "proto": self.global_protos,
+                "aux": {"tgp": self.tgp.state_dict(), "gap": self.gap.cpu()},
             },
         }
-        super().deal_save(f)
+        self.deal_save(f)

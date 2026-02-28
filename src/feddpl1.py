@@ -1,8 +1,10 @@
 import argparse
-import time, os
+import time
+import os
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
@@ -10,18 +12,19 @@ from .utils import (
     evaluate_model,
     evaluate_prototype,
     get_model,
+    mse_loss,
     param_aggregate,
     run_parallel_clients,
 )
 
 
 def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedPLN Specific Arguments")
+    group = parser.add_argument_group("FedDPL Specific Arguments")
     group.add_argument(
-        "--lambda_", type=float, default=10.0, help="Weight for PLN Contrastive Loss"
+        "--lambda_", type=float, default=1.0, help="Weight for PLN Contrastive Loss"
     )
     group.add_argument(
-        "--epoch_pln", type=int, default=10, help="Epochs for PLN learning"
+        "--epoch_pln", type=int, default=2, help="Epochs for PLN learning"
     )
     group.add_argument(
         "--lr_pln", type=float, default=0.01, help="Learning rate for PLN learning"
@@ -116,7 +119,7 @@ class PLN(torch.nn.Module):
 
 def client_worker(params):
     """
-    FedPLN local training with Prototype Learning Network.
+    FedDPL local training with Dual Prototype Learning.
     """
     (
         _,
@@ -143,89 +146,94 @@ def client_worker(params):
         har,
     ) = params
 
-    # 1. Initialize Model and PLN
+    # 1. Initialize Model and PLN (Prototype Learning Network)
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
+
     pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
         device
     )
     pln.load_state_dict(pln_state)
+
     all_classes = torch.arange(0, num_classes).to(device)
 
-    # 2. Phase 1: Train Model (Feature Extractor)
-    avg_loss_m = 0.0
-    model.train()
-    pln.eval()
-    opt = torch.optim.SGD(model.parameters(), lr=lr)
-    total_loss_m = 0.0
-    num_batches_m = 0
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    # 2. Train Model (Feature Extractor)
+    avg_loss_m_m = 0.0
+    avg_loss_m_p = 0.0
+    if mode in ["model", "normal", "all"]:
+        model.train()
+        pln.eval()
+        opt = torch.optim.SGD(model.parameters(), lr=lr)
+        total_loss_m = 0.0
+        total_loss_p = 0.0
+        num_batches_m = 0
+        loader = torch.utils.data.DataLoader(
+            train_set, batch_size=batch_size, shuffle=True
+        )
 
-    # Prototype Loss: Distance between features and PLN prototypes
-    with torch.no_grad():
-        protos = pln(all_classes)
-    for _ in range(epochs):
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            output, feature = model(x)
-            loss_ce = ce_loss(output, y)
+        for _ in range(epochs):
+            for x, y in loader:
+                x, y = x.to(device), y.to(device)
+                output, feature = model(x)
+                loss_ce = ce_loss(output, y)
 
-            dist = torch.cdist(feature, protos, p=2) ** 2
-            loss_proto = ce_loss(-torch.sqrt(dist), y)
+                # PLN Loss: Encourage features to be close to their class prototypes
+                with torch.no_grad():
+                    protos = pln(all_classes)
+                loss_proto = mse_loss(feature, protos[y])
 
-            loss = loss_ce + lambda_ * loss_proto
+                loss = loss_ce + lambda_ * loss_proto
 
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            total_loss_m += loss.item()
-            num_batches_m += 1
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                total_loss_m += loss_ce.item()
+                total_loss_p += loss_proto.item()
+                num_batches_m += 1
 
-    avg_loss_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
+        avg_loss_m_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
+        avg_loss_m_p = total_loss_p / num_batches_m if num_batches_m > 0 else 0.0
 
-    # 3. Phase 2: Train PLN (Prototypes)
+    # 3. Train PLN (Prototypes)
     avg_loss_p = 0.0
-    model.eval()
-    pln.train()
-    opt_pln = torch.optim.SGD(pln.parameters(), lr=lr_pln)
-    total_loss_p = 0.0
-    num_batches_p = 0
+    if mode in ["pln", "normal", "all"]:
+        model.eval()
+        pln.train()
+        opt_pln = torch.optim.SGD(pln.parameters(), lr=lr_pln)
+        total_loss_p = 0.0
+        num_batches_p = 0
 
-    if batch_size_pln != batch_size:
         loader_pln = torch.utils.data.DataLoader(
             train_set, batch_size=batch_size_pln, shuffle=True
         )
-    else:
-        loader_pln = loader
 
-    for _ in range(epoch_pln):
-        for x, y in loader_pln:
-            x, y = x.to(device), y.to(device)
-            protos = pln(all_classes)
+        for _ in range(epoch_pln):
+            for x, y in loader_pln:
+                x, y = x.to(device), y.to(device)
+                protos = pln(all_classes)
 
-            with torch.no_grad():
-                _, feature = model(x)
+                with torch.no_grad():
+                    _, feature = model(x)
 
-            # Loss: Classification based on distance to prototypes
-            dist = torch.cdist(feature, protos, p=2) ** 2
-            loss = ce_loss(-torch.sqrt(dist), y)
+                # Update prototypes to be closer to features
+                loss = mse_loss(feature, protos[y])
 
-            opt_pln.zero_grad()
-            loss.backward()
-            opt_pln.step()
-            total_loss_p += loss.item()
-            num_batches_p += 1
+                opt_pln.zero_grad()
+                loss.backward()
+                opt_pln.step()
+                total_loss_p += loss.item()
+                num_batches_p += 1
 
         avg_loss_p = total_loss_p / num_batches_p if num_batches_p > 0 else 0.0
 
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     pln_state = {k: v.cpu() for k, v in pln.state_dict().items()}
-    return [avg_loss_m, avg_loss_p, model_state, pln_state]
+    return [avg_loss_m_m, avg_loss_m_p, avg_loss_p, model_state, pln_state]
 
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        super().__init__(False, args)
+        super().__init__(True, args)
 
         self.pln = PLN(
             num_classes=self.num_class,
@@ -235,8 +243,11 @@ class Server(BaseServer):
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
         )
+
         self.all_classes = torch.arange(0, self.num_class)
         self.loss_p: list[float] = []
+        self.loss_m_m: list[float] = []
+        self.loss_m_p: list[float] = []
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -244,7 +255,7 @@ class Server(BaseServer):
 
         for r in range(self.rounds):
             t0 = time.time()
-            print(f"\n--- FedPLN Round {r + 1}/{self.rounds} ---")
+            print(f"\n--- FedDPL Round {r + 1}/{self.rounds} ---")
 
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
@@ -255,7 +266,7 @@ class Server(BaseServer):
                 [
                     i,
                     self.client_gpu[i],
-                    self.model.state_dict(),
+                    self.clients_state[i],
                     self.pln.state_dict(),
                     self.train_sets[i],
                     self.args.model,
@@ -288,42 +299,46 @@ class Server(BaseServer):
 
             # Calculate average losses using incremental summation
             total_loss_model = 0.0
+            total_loss_model_m = 0.0
+            total_loss_model_p = 0.0
             total_loss_pln = 0.0
-            selected_states = []
-            selected_plns = []
-            current_weights = []
+            plns_states = []
             for i in selected_clients:
-                client_loss_model, client_loss_pln, client_state, client_pln = results[
+                client_loss_model_m, client_loss_model_p, client_loss_pln, client_state, client_pln = results[
                     i
                 ]
-                total_loss_model += client_loss_model
+                total_loss_model += client_loss_model_m + client_loss_model_p
+                total_loss_model_m += client_loss_model_m
+                total_loss_model_p += client_loss_model_p
                 total_loss_pln += client_loss_pln
-                selected_states.append(client_state)
-                selected_plns.append(client_pln)
-                current_weights.append(self.weights[i])
+                self.clients_state[i] = client_state
+                plns_states.append(client_pln)
             self.loss.append(total_loss_model / num_join_clients)
+            self.loss_m_m.append(total_loss_model_m / num_join_clients)
+            self.loss_m_p.append(total_loss_model_p / num_join_clients)
             self.loss_p.append(total_loss_pln / num_join_clients)
-            sum_weights = sum(current_weights)
-            norm_weights = [w / sum_weights for w in current_weights]
+            
+            # Aggregate PLN parameters
+            self.pln.load_state_dict(param_aggregate(plns_states, [1.0/num_join_clients]*num_join_clients))
 
-            self.aggregate(selected_states, selected_plns, weights=norm_weights)
-            # Use PLN module directly for prototype evaluation
+            # Evaluate using unified interface
             protos_tensor = self.pln(self.all_classes)
             self.evaluate(protos=protos_tensor)
-
+            
+            print(f"Loss: {self.loss[-1]:.4f}, PLN Loss: {self.loss_p[-1]:.4f}")
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_proto[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
-
-    def aggregate(self, clients_params, plns_params, weights):
-        super().aggregate(clients_params, weights)
-        self.pln.load_state_dict(param_aggregate(plns_params, weights))
 
     def save(self):
         f = {
             "acc": {"model": self.acc, "proto": self.acc_proto},
-            "loss": {"model": self.loss, "proto": self.loss_p},
+            "loss": {
+                "model": self.loss,
+                "proto": self.loss_p,
+                "aux": {"model_m": self.loss_m_m, "model_p": self.loss_m_p},
+            },
             "state_dict": {
-                "global": self.model.state_dict(),
+                "client": self.clients_state,
                 "proto": self.pln.state_dict(),
             },
         }

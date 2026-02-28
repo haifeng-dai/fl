@@ -174,5 +174,5 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
-        f = {"acc": self.acc, "loss": self.loss, "state_dict": self.model.state_dict()}
+        f = {"acc": self.acc, "loss": self.loss, "state_dict": {"global": self.model.state_dict()}}
         super().deal_save(f)

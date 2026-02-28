@@ -175,6 +175,7 @@ def client_worker(params):
     pln.load_state_dict(pln_state)
 
     all_classes = torch.arange(0, num_classes).to(device)
+    dcl_loss_fn = DCL(temperature=0.1)
 
     # 2. Train Model (Feature Extractor)
     avg_loss_m = 0.0
@@ -197,8 +198,9 @@ def client_worker(params):
                 # PLN Loss: Encourage features to be close to their class prototypes
                 with torch.no_grad():
                     protos = pln(all_classes)
-                dist = torch.cdist(feature, protos, p=2) ** 2
-                loss_proto = ce_loss(-torch.sqrt(dist), y)
+                # dist = torch.cdist(feature, protos, p=2) ** 2
+                # loss_proto = ce_loss(-torch.sqrt(dist), y)
+                loss_proto = dcl_loss_fn(feature, protos, y)
 
                 loss = loss_ce + lambda_ * loss_proto
 
@@ -219,16 +221,9 @@ def client_worker(params):
         total_loss_p = 0.0
         num_batches_p = 0
 
-        # Use separate loader if batch sizes differ, otherwise reuse or create new
-        if batch_size_pln != batch_size:
-            loader_pln = torch.utils.data.DataLoader(
-                train_set, batch_size=batch_size_pln, shuffle=True
-            )
-        else:
-            # Re-create loader to ensure full shuffle traversal for PLN epochs
-            loader_pln = torch.utils.data.DataLoader(
-                train_set, batch_size=batch_size, shuffle=True
-            )
+        loader_pln = torch.utils.data.DataLoader(
+            train_set, batch_size=batch_size_pln, shuffle=True
+        )
 
         for _ in range(epoch_pln):
             for x, y in loader_pln:
@@ -239,8 +234,9 @@ def client_worker(params):
                     _, feature = model(x)
 
                 # Update prototypes to be closer to features
-                dist = torch.cdist(feature, protos, p=2) ** 2
-                loss = ce_loss(-torch.sqrt(dist), y)
+                # dist = torch.cdist(feature, protos, p=2) ** 2
+                # loss = ce_loss(-torch.sqrt(dist), y)
+                loss = dcl_loss_fn(feature, protos, y)
 
                 opt_pln.zero_grad()
                 loss.backward()
@@ -267,10 +263,8 @@ class Server(BaseServer):
             fixed=args.fixed_proto,
             init_emb=args.init_emb,
         )
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
         self.all_classes = torch.arange(0, self.num_class)
-        self.acc_p: list[float] = []
         self.loss_p: list[float] = []
 
     def fit(self):
@@ -327,7 +321,9 @@ class Server(BaseServer):
             plns_states = []
             current_weights = []
             for i in selected_clients:
-                client_loss_model, client_loss_pln, client_state, client_pln = results[i]
+                client_loss_model, client_loss_pln, client_state, client_pln = results[
+                    i
+                ]
                 total_loss_model += client_loss_model
                 total_loss_pln += client_loss_pln
                 self.clients_state[i] = client_state
@@ -341,44 +337,23 @@ class Server(BaseServer):
             # Aggregate PLN parameters
             self.aggregate(plns_states, weights=norm_weights)
 
-            self.evaluate()
-            print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_p[-1]:.4f}")
+            # Use PLN module directly for prototype evaluation
+            protos_tensor = self.pln(self.all_classes)
+            self.evaluate(protos=protos_tensor)
+
+            print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_proto[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def aggregate(self, pln_params, weights):
         self.pln.load_state_dict(param_aggregate(pln_params, weights))
 
-    def evaluate(self):
-        current_acc = []
-        current_acc_p = []
-
-        # Global PLN prototype for evaluation
-        prototype = self.pln(self.all_classes)
-
-        for i in range(self.num_clients):
-            # Load local model
-            self.model.load_state_dict(self.clients_state[i])
-
-            # Evaluate model accuracy on local test set
-            acc = evaluate_model(self.model, self.test_set[i], self.device)
-            current_acc.append(acc)
-
-            # Evaluate prototype accuracy on local test set
-            acc_p = evaluate_prototype(
-                self.model, prototype, self.test_set[i], self.device
-            )
-            current_acc_p.append(acc_p)
-
-        self.acc.append(sum(current_acc) / len(current_acc))
-        self.acc_p.append(sum(current_acc_p) / len(current_acc_p))
-
     def save(self):
         f = {
-            "acc": {"model": self.acc, "prototype": self.acc_p},
-            "loss": {"model": self.loss, "prototype": self.loss_p},
+            "acc": {"model": self.acc, "proto": self.acc_proto},
+            "loss": {"model": self.loss, "proto": self.loss_p},
             "state_dict": {
-                "model": self.clients_state,
-                "pln": self.pln.state_dict(),
+                "client": self.clients_state,
+                "proto": self.pln.state_dict(),
             },
         }
         self.deal_save(f)
