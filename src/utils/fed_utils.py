@@ -169,7 +169,7 @@ class BaseServer:
         if hasattr(self, "gpu_pools"):
             for device, pool in self.gpu_pools.items():
                 print(f"-> 正在关闭设备 {device} 的并行池...")
-                pool.close()
+                pool.terminate()
                 pool.join()
             # 防止重复关闭
             self.gpu_pools = {}

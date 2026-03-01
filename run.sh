@@ -12,9 +12,9 @@
 # export ALGOS="fedavg,feddyn,fedfm,fedlsa,fedpln,fedproc,fedprox,moon,scaffold"
 
 # personalized algorithms
-# export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
+export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
-export ALGOS="feddpl1"
+# export ALGOS="fml,lgfedavg,local,proxyfl"
 
 # =============
 # Data
@@ -30,7 +30,7 @@ export NUM_CLIENTS="10"
 # Partition
 # =============
 # iid,dirichlet,pathological
-export PARTITIONS="dirichlet"
+export PARTITIONS="pathological"
 export ALPHAS="0.1"
 export N_CLASSES="2"
 

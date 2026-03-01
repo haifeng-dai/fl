@@ -35,13 +35,18 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
         data_path = os.path.join(part_dir, f"client_{i}.pt")
         data = torch.load(data_path, weights_only=False)
 
-        # 加载训练集
-        train_datasets[i] = TensorDataset(data["train"]["x"], data["train"]["y"])
-        train_counts[i] = len(data["train"]["x"])
+        # 加载训练集并开启共享内存 (消除多进程 IPC 序列化开销)
+        train_x = data["train"]["x"].share_memory_()
+        train_y = data["train"]["y"].share_memory_()
+        train_datasets[i] = TensorDataset(train_x, train_y)
+        train_counts[i] = len(train_x)
 
-        test_datasets[i] = TensorDataset(data["test"]["x"], data["test"]["y"])
+        # 加载测试集并开启共享内存
+        test_x = data["test"]["x"].share_memory_()
+        test_y = data["test"]["y"].share_memory_()
+        test_datasets[i] = TensorDataset(test_x, test_y)
 
-    num_class = data["num_classes"]  # type: ignore
+    num_class = data["num_classes"]
 
     if not pfl:
         # 非 pFL 模式，聚合所有客户端的测试集作为全局测试集
