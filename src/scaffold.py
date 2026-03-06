@@ -52,11 +52,11 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. Initialize model
+    # 1. 初始化模型并加载全局状态
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
-    # 2. Prepare control variates
+    # 2. 准备控制变量 (Control Variates)
     trainable_names = [n for n, p in model.named_parameters()]
 
     if c_global_state is None:
@@ -66,14 +66,14 @@ def client_worker(params):
         c_global_dict = {k: v.to(device) for k, v in c_global_state.items()}
         c_local_dict = {k: v.to(device) for k, v in c_local_state.items()}
 
-    # Flatten for optimizer
+    # 将参数展平以便传入优化器
     c_global_list = [c_global_dict[n] for n in trainable_names]
     c_local_list = [c_local_dict[n] for n in trainable_names]
 
     optimizer = SCAFFOLDOptimizer(model.parameters(), lr=lr, weight_decay=0.0)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # 3. Training
+    # 3. 本地模型多轮次训练
     model.train()
     steps = 0
     total_loss = 0.0
@@ -110,7 +110,7 @@ def client_worker(params):
 
     avg_loss = total_loss / steps if steps > 0 else 0
 
-    # Return: loss, model_state, c_delta, c_local_new
+    # 返回值：损失，模型状态，控制变量差值，新的本地控制变量
     return [
         avg_loss,
         {k: v.cpu() for k, v in current_state.items()},
@@ -123,7 +123,7 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
 
-        # Get parameter names
+        # 获取所有可训练参数的名称
         self.param_names = [n for n, p in self.model.named_parameters()]
 
         self.c_global = {
@@ -172,7 +172,7 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # Process results
+            # 汇集并处理各客户端结果
             total_loss = 0.0
             total_delta_c = {
                 n: torch.zeros_like(self.c_global[n]) for n in self.param_names
@@ -183,22 +183,22 @@ class Server(BaseServer):
                 client_loss, client_state, client_delta_c, client_c_local = results[i]
                 total_loss += client_loss
                 selected_states.append(client_state)
-                # Accumulate delta_c for global update
+                # 累加 delta_c 用于全局控制变量的更新
                 for n in self.param_names:
                     total_delta_c[n] += client_delta_c[n]
-                # Update local control variate stored on server
+                # 更新存储在服务端的各个客户端的本地控制变量
                 self.c_local[i] = client_c_local
             self.loss.append(total_loss / num_join_clients)
 
-            # Aggregate model
-            # Use uniform weights for SCAFFOLD
+            # 聚合模型参数
+            # 取所有参与者本地模型的平均数作为聚合策略 (SCAFFOLD 要求统一权重)
             weights = [1.0 / len(selected_states)] * len(selected_states)
             avg_state = param_aggregate(selected_states, weights)
 
             if self.args.global_lr == 1.0:
                 self.model.load_state_dict(avg_state)
             else:
-                # Custom aggregation with global learning rate
+                # 采用全局学习率进行自定义模型聚合并更新全局状态
                 current_state = self.model.state_dict()
                 for k, v in current_state.items():
                     if k in avg_state:

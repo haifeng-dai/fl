@@ -45,7 +45,7 @@ def client_worker(params):
     ) = params
 
     model = get_model(model_name, dataset_name, feature_dim).to(device)
-    # Load sub-modules directly
+    # 直接加载子模块 (特征提取器与分类器)
     model.extractor.load_state_dict(global_body_state)
     if local_head_state is not None:
         model.classifier.load_state_dict(local_head_state)
@@ -54,7 +54,7 @@ def client_worker(params):
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     model.train()
-    # Phase 1: Head only
+    # 阶段 1：仅训练分类头 (Head)
     for param in model.extractor.parameters(): param.requires_grad = False
     for param in model.classifier.parameters(): param.requires_grad = True
     for _ in range(epochs_head):
@@ -65,7 +65,7 @@ def client_worker(params):
             ce_loss(logits, y).backward()
             optimizer.step()
 
-    # Phase 2: Body only
+    # 阶段 2：仅训练特征提取器 (Body)
     for param in model.extractor.parameters(): param.requires_grad = True
     for param in model.classifier.parameters(): param.requires_grad = False
     total_loss = 0.0
@@ -101,8 +101,8 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- FedRep Round {r + 1}/{self.rounds} ---")
             selected_clients = np.random.choice(self.num_clients, num_join_clients, replace=False)
-            
-            # Shared global body
+
+            # 全局共享特征提取器 (Body)
             global_body_state = self.model.extractor.state_dict()
 
             p = [[i, self.client_gpu[i], global_body_state, self.client_head_states[i],
@@ -125,7 +125,7 @@ class Server(BaseServer):
             self.loss.append(total_loss / num_join_clients)
             norm_weights = [w / sum(current_weights) for w in current_weights]
 
-            # Aggregate Body Only
+            # 仅聚合特征提取器 (Body)
             self.model.extractor.load_state_dict(param_aggregate(new_bodies, norm_weights))
 
             self.evaluate()

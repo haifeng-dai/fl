@@ -34,7 +34,7 @@ def get_path(args):
 
 def client_worker(params):
     """
-    MOON local training with Model-Contrastive Loss.
+    带有模型交叉学习对抗损失 (Model-Contrastive Loss) 的 MOON 本地训练流程。
     """
     (
         _,
@@ -52,16 +52,16 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. Initialize current local model with global state
+    # 1. 初始化包含全局权重的当前本地模型
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(global_state)
 
-    # 2. Initialize global model (frozen) for contrastive loss
+    # 2. 初始化全局模型（冻结）用于计算对抗损失
     global_model = get_model(model_name, dataset_name, feature_dim).to(device)
     global_model.load_state_dict(global_state)
     global_model.eval()
 
-    # 3. Initialize previous local model (frozen) for contrastive loss
+    # 3. 初始化上一轮本地模型（冻结）用于计算对抗损失
     prev_model = get_model(model_name, dataset_name, feature_dim).to(device)
     prev_model.load_state_dict(prev_state)
     prev_model.eval()
@@ -77,17 +77,17 @@ def client_worker(params):
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
 
-            # Forward pass: get output and representation (z)
+            # 前向传播：获取输出和表达特征 (z)
             output, z = model(x)
             with torch.no_grad():
                 _, z_glob = global_model(x)
                 _, z_prev = prev_model(x)
 
-            # Standard Cross Entropy Loss
+            # 标准交叉熵分类损失
             loss_ce = ce_loss(output, y)
 
-            # MOON Contrastive Loss
-            # Similarity with global model (positive) and previous local model (negative)
+            # MOON 对抗损失计算
+            # 拉近与全局模型的相似度（正样本），推远与上一轮本地模型的相似度（负样本）
             pos_sim = ce_moon(z, z_glob)
             neg_sim = ce_moon(z, z_prev)
             logits = torch.cat([pos_sim.reshape(-1, 1), neg_sim.reshape(-1, 1)], dim=1)
@@ -95,7 +95,7 @@ def client_worker(params):
             labels = torch.zeros(z.size(0)).to(device).long()
             loss_con = ce_loss(logits, labels)
 
-            # Total Loss
+            # 整体损失
             loss = loss_ce + mu * loss_con
             loss.backward()
             optimizer.step()
@@ -110,8 +110,8 @@ def client_worker(params):
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
-        # Initialize previous model states for all clients with the initial global model
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
+        # 使用最初始的全局模型来初始化所有客户端作为其“上一轮状态”
+
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -152,7 +152,7 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # Calculate average loss using incremental summation
+            # 汇集各客户端回传结果，增量计算加权平均损失
             total_loss = 0.0
             selected_states = []
             current_weights = []

@@ -11,10 +11,11 @@
 # # traditional algorithms
 # export ALGOS="fedavg,feddyn,fedfm,fedlsa,fedpln,fedproc,fedprox,moon,scaffold"
 
-# personalized algorithms
-export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
+# # personalized algorithms
+# export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
-# export ALGOS="fml,lgfedavg,local,proxyfl"
+export ALGOS="feddyn,fedfm,fedlsa"
+# export ALGOS="fedala"
 
 # =============
 # Data
@@ -30,7 +31,7 @@ export NUM_CLIENTS="10"
 # Partition
 # =============
 # iid,dirichlet,pathological
-export PARTITIONS="pathological"
+export PARTITIONS="dirichlet"
 export ALPHAS="0.1"
 export N_CLASSES="2"
 
@@ -64,8 +65,8 @@ export TEST=0
 
 # FedALA
 export ETAS_ALA="1.0"
-export RAND_PERCENTS_ALA="80"
-export LAYER_IDXS_ALA="2"
+export RAND_PERCENTS_ALA="20"
+export LAYER_IDXS_ALA="1"
 export ALA_THRESHOLDS_ALA="0.1"
 export NUM_PRE_LOSSES_ALA="10"
 

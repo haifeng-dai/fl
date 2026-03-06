@@ -34,7 +34,7 @@ def get_path(args):
 
 
 def proto_cluster(protos_list):
-    """Aggregate prototypes from multiple clients by class."""
+    """按类别汇总聚合对于多个客户端的原型向量。"""
     proto_clusters = defaultdict(list)
     for protos in protos_list:
         for k, v in protos.items():
@@ -53,12 +53,12 @@ def compute_prototype_similarity(client_protos_list, num_classes):
     计算客户端之间每个类别的原型的余弦相似度。
 
     Args:
-        client_protos_list: List of dicts, 每个dict是 {class_id: prototype_tensor}
+        client_protos_list: 字典列表, 每个 dict 为 {类别ID: 原型 Tensor}
         num_classes: 类别数量
 
     Returns:
-        dict: {class_id: avg_similarity} 每个类别的平均余弦相似度
-        dict: {class_id: similarity_matrix} 每个类别的完整相似度矩阵
+        dict: {类别ID: 平均余弦相似度} 每个类别的平均余弦相似度
+        dict: {类别ID: 相似度矩阵} 每个类别的完整相似度矩阵
     """
     class_similarities = {}
     class_matrices = {}

@@ -41,7 +41,7 @@ def get_path(args):
 
 def client_worker(params):
     """
-    ProxyFL local training with mutual distillation between private local model and shared proxy model.
+    ProxyFL 本地训练流程，利用私有本地模型与共享代理模型之间的相互蒸馏机制 (Mutual Distillation)。
     """
     (
         _,
@@ -58,16 +58,16 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. Initialize Proxy Model (Shared/Public)
+    # 1. 初始化代理模型 (公共/共享模型)
     proxy_model = get_model(model_name, dataset_name, feature_dim).to(device)
     proxy_model.load_state_dict(proxy_state)
 
-    # 2. Initialize Local Model (Private/Personalized)
+    # 2. 初始化本地模型 (私有/个性化模型)
     local_model = get_model(model_name, dataset_name, feature_dim).to(device)
     local_model.load_state_dict(local_state)
 
-    # Optimizers
-    # Usually ProxyFL allows different LRs, but we use the same for simplicity unless specified
+    # 优化器设置
+    # 通常 ProxyFL 允许设置不同的学习率 LR，但为了简便我们在未指明时均使用相同学习率
     opt_p = torch.optim.SGD(proxy_model.parameters(), lr=lr)
     opt_l = torch.optim.SGD(local_model.parameters(), lr=lr)
 
@@ -84,30 +84,30 @@ def client_worker(params):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
 
-            # Forward pass
+            # 模型前向传播
             out_p, _ = proxy_model(x)
             out_l, _ = local_model(x)
 
-            # Cross Entropy Loss
+            # 标准交叉熵损失
             ce_p = ce_loss(out_p, y)
             ce_l = ce_loss(out_l, y)
 
-            # Mutual Distillation (KL Divergence)
-            # KL(Local || Proxy) -> Proxy learns from Local (to aggregate info)
+            # 相互知识蒸馏 (Mutual Distillation, 基于 KL 散度)
+            # KL(Local || Proxy) -> Proxy 模型从 Local 模型学习并聚合知识信息
             loss_kl_p = kl_loss(out_p, out_l.detach())
 
-            # KL(Proxy || Local) -> Local learns from Proxy (to gain global info)
+            # KL(Proxy || Local) -> Local 模型从 Proxy 模型学习并获取全局特征信息
             loss_kl_l = kl_loss(out_l, out_p.detach())
 
             loss_p = ce_p + mu * loss_kl_p
             loss_l = ce_l + mu * loss_kl_l
 
-            # Update Proxy
+            # 反向传播并更新代理模型
             opt_p.zero_grad()
             loss_p.backward()
             opt_p.step()
 
-            # Update Local
+            # 反向传播并更新本地模型
             opt_l.zero_grad()
             loss_l.backward()
             opt_l.step()
@@ -128,7 +128,7 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
 
-        # Initialize proxy models for each client (Public/Shared)
+        # 为每个客户端初始化对应的代理模型 (Public/Shared)
         self.client_states_p = [
             self.model.state_dict() for _ in range(self.num_clients)
         ]
@@ -147,7 +147,7 @@ class Server(BaseServer):
         elif self.args.adj_type == "centralized":
             adj.fill_(1.0)
 
-        # Normalize weights for each client
+        # 为每个客户端作权重标准化归一处理
         row_sums = adj.sum(dim=1, keepdim=True)
         adj = adj / row_sums
         return adj
@@ -165,14 +165,14 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # 1. Neighbor Aggregation for each client
-            # Each client aggregates models from its neighbors based on the adjacency matrix
+            # 1. 为每个客户端执行邻居聚合
+            # 每个客户端根据拓扑邻接矩阵聚合其邻居的模型参数
             def get_client_param(i):
-                # Identify neighbors and their weights
+                # 识别当前客户端相连的邻居及其权重分布
                 neighbor_indices = torch.where(self.adj_matrix[i] > 0)[0].tolist()
                 neighbor_weights = self.adj_matrix[i, neighbor_indices].tolist()
 
-                # Perform local aggregation
+                # 执行本地模型聚合运算
                 neighbor_states = [self.client_states_p[j] for j in neighbor_indices]
                 aggregated_proxy_state = param_aggregate(
                     neighbor_states, neighbor_weights
@@ -195,7 +195,7 @@ class Server(BaseServer):
 
             p = [get_client_param(i) for i in selected_clients]
 
-            # 2. Parallel Client Training
+            # 2. 启动客户端多进程并行训练
             results = run_parallel_clients(
                 client_worker=client_worker,
                 parameters=p,
@@ -203,7 +203,7 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # 3. Update states and calculate average losses
+            # 3. 收集更新客户端状态数据与评估并计算平均损失
             total_loss = 0.0
             total_loss_p = 0.0
             for i in selected_clients:
@@ -215,7 +215,7 @@ class Server(BaseServer):
             self.loss.append(total_loss / num_join_clients)
             self.loss_p.append(total_loss_p / num_join_clients)
 
-            # 4. Evaluation (using local personalized models)
+            # 4. 执行预测评估 (基于最新状态的本地个性化模型)
             self.evaluate()
             print(
                 f"Avg Local Accuracy: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}"

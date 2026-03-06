@@ -56,16 +56,16 @@ def mcl_loss(
     y: torch.Tensor,
     d: float,
 ):
-    """Implement Equation (7): Anchor-based margin-enhanced contrastive loss."""
+    """实现公式 (7)：基于锚点的边界增强对比损失。"""
     one_hot = F.one_hot(y, num_classes)
-    # Using negative Euclidean distance as logits for log-sum-exp structure
+    # 使用负欧氏距离作为 Log-Sum-Exp 结构的 Logits
     dist_final = torch.cdist(feature, protos) + one_hot * d
     return ce_loss(-dist_final, y)
 
 
 def margin(anchor: torch.Tensor) -> float:
-    """Implement Equation (6): Average margin among prototypes."""
-    # Filter out inactive classes (zero rows)
+    """实现公式 (6)：计算原型间的平均边界 (Average margin)。"""
+    # 过滤掉未激活类别（全零行）
     norms = torch.norm(anchor, dim=1)
     valid_indices = torch.where(norms > 1e-8)[0]
     N = len(valid_indices)
@@ -82,8 +82,8 @@ def margin(anchor: torch.Tensor) -> float:
 
 def client_worker(params):
     """
-    FedSA local training with Semantic Anchors and multiple regularizations.
-    Aligned with paper Equations (5), (7), (8), (9).
+    基于语义锚点 (Semantic Anchors) 与多重正则化的 FedSA 本地训练流程。
+    对齐论文公式 (5), (7), (8), (9)。
     """
     (
         _,
@@ -104,7 +104,7 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. Initialize Model
+    # 1. 初始化模型
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
@@ -118,32 +118,32 @@ def client_worker(params):
     global_anchors = global_anchors.to(device)
     prev_local_anchors = prev_local_anchors.to(device)
 
-    # Calculate margin 'd_i^*' for MCL loss - Equation (7) context
+    # 为 MCL 损失计算边界 'd_i^*' - 公式 (7) 上下文
     d_star = max(margin(global_anchors), margin(prev_local_anchors))
 
-    # 2. Training Loop
+    # 2. 训练循环
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             logits, features = model(x)
 
-            # Equation (8): Classifier calibration using semantic anchors as inputs
+            # 公式 (8): 使用语义锚点作为输入进行分类器校准 (Classifier Calibration)
             output_cc = model.classifier(global_anchors)
 
-            # Supervised Loss
+            # 监督分类损失
             loss_ce = ce_loss(logits, y)
 
-            # Equation (5): Anchor-based regularization (Euclidean distance)
-            # We use features as proxies for local prototypes during batch training
+            # 公式 (5): 基于锚点的正则化（欧几里得距离）
+            # 在批处理训练期间，我们使用当前特征作为本地原型的代理
             loss_r = F.pairwise_distance(features, global_anchors[y], p=2).mean()
 
-            # Equation (7): Margin-enhanced Contrastive Loss
+            # 公式 (7): 边界增强对比损失 (Margin-enhanced Contrastive Loss)
             loss_mcl = mcl_loss(features, global_anchors, num_classes, y, d_star)
 
-            # Equation (8): Classifier Calibration Loss
+            # 公式 (8): 分类器校准损失
             loss_cc = ce_loss(output_cc, torch.arange(num_classes, device=device))
 
-            # Equation (9): Total Loss
+            # 公式 (9): 总体损失
             loss = (
                 loss_ce
                 + lambda_r * loss_r
@@ -156,7 +156,7 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    # 3. Calculate new local prototypes (average features per class)
+    # 3. 计算最新的本地原型（按类别平均特征向量）
     model.eval()
     with torch.no_grad():
         anchor_sums = torch.zeros((num_classes, feature_dim), device=device)
@@ -179,10 +179,10 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        # FedSA is a personalized FL algorithm (pfl=True)
+        # FedSA 是个性化联邦学习算法 (pfl=True)
         super().__init__(True, args)
 
-        # Initialize Semantic Anchors randomly as per paper
+        # 根据论文按随机分布初始化语义锚点
         self.anchors = torch.randn(self.num_class, self.args.feature_dim)
         self.anchors = F.normalize(self.anchors, p=2, dim=1)
 
@@ -249,13 +249,13 @@ class Server(BaseServer):
             self.loss.append(total_loss / num_join_clients)
             norm_weights = [w / sum(current_weights) for w in current_weights]
 
-            # 1. Aggregate global model (for base representation)
+            # 1. 聚合全局模型（用于提供基础的特征表达能力）
             self.model.load_state_dict(param_aggregate(selected_states, norm_weights))
 
-            # 2. Aggregate local prototypes to generate P_bar and update semantic anchors A_bar (Equation 10)
+            # 2. 聚合各个本地原型以生成全局 P_bar 并更新语义锚点 A_bar (公式 10)
             self.update_global_anchors(local_anchors_list, norm_weights)
 
-            # 3. Update server-side cache of client anchors for next round's margin calculation
+            # 3. 更新服务端缓存的客户端锚点字典，用于下一轮的边界 (margin) 计算
             for idx, anchors_dict in enumerate(local_anchors_list):
                 c_idx = selected_clients[idx]
                 self.clients_anchors[c_idx].zero_()
@@ -270,7 +270,7 @@ class Server(BaseServer):
 
 
     def update_global_anchors(self, local_anchors_list, norm_weights):
-        """Weighted aggregation of local prototypes and EMA update of semantic anchors."""
+        """对本地原型进行加权聚合，并对语义锚点执行 EMA（指数移动平均）更新。"""
         new_p_bar = torch.zeros_like(self.anchors, device=self.device)
         weight_sums = torch.zeros(self.num_class, device=self.device)
 
@@ -283,7 +283,7 @@ class Server(BaseServer):
         mask = weight_sums > 0
         new_p_bar[mask] /= weight_sums[mask].unsqueeze(1)
 
-        # Equation (10): A_t+1 = alpha * A_t + (1 - alpha) * P_bar_t
+        # 公式 (10): A_t+1 = alpha * A_t + (1 - alpha) * P_bar_t
         alpha = self.args.alpha_sa
         mask_cpu = mask.cpu()
         self.anchors[mask_cpu] = alpha * self.anchors[mask_cpu] + (1 - alpha) * new_p_bar[mask].cpu()

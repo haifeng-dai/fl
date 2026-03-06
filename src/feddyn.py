@@ -1,9 +1,9 @@
 import argparse
-import copy
-import time
 import os
-import torch
+import time
+
 import numpy as np
+import torch
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
@@ -12,7 +12,10 @@ from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
 def add_args(parser: argparse.ArgumentParser):
     group = parser.add_argument_group("FedDyn Specific Arguments")
     group.add_argument(
-        "--alpha_coef", type=float, default=0.01, help="Regularization coefficient (alpha)"
+        "--alpha_coef",
+        type=float,
+        default=0.01,
+        help="Regularization coefficient (alpha)",
     )
     return parser
 
@@ -27,8 +30,8 @@ def client_worker(params):
         client_id,
         device,
         model_state,
-        grad_prev,  # Local gradient history (nabla L_k(w^{t-1}))
-        global_model_vector,  # Flattened global model
+        grad_prev,  # 本地梯度历史记录 (nabla L_k(w^{t-1}))
+        global_model_vector,  # 展平后的全局模型参数向量
         train_set,
         model_name,
         dataset_name,
@@ -39,13 +42,13 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. Initialize model
+    # 1. 初始化模型并加载全局状态
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # Move vectors to device
+    # 将参数向量移动到计算设备
     if grad_prev is not None:
         grad_prev = grad_prev.to(device)
     if global_model_vector is not None:
@@ -60,23 +63,23 @@ def client_worker(params):
             x, y = x.to(device), y.to(device)
             logits, _ = model(x)
 
-            # Task Loss
+            # 基本任务预测损失
             task_loss = ce_loss(logits, y)
 
-            # FedDyn Regularization
+            # FedDyn 动态正则化项
             # L = L_task - <grad_prev, w> + (alpha/2) * ||w - w_global||^2
             curr_params = parameters_to_vector(model.parameters())
 
-            # Linear penalty: - <grad_prev, w>
+            # 线性惩罚项: - <grad_prev, w>
             lin_penalty = 0.0
             if grad_prev is not None:
                 lin_penalty = -torch.dot(grad_prev, curr_params)
 
-            # Quadratic penalty: (alpha/2) * ||w - w_global||^2
+            # 二次惩罚项: (alpha/2) * ||w - w_global||^2
             quad_penalty = 0.0
             if global_model_vector is not None:
                 diff = curr_params - global_model_vector
-                quad_penalty = (alpha_coef / 2.0) * torch.sum(diff ** 2)
+                quad_penalty = (alpha_coef / 2.0) * torch.sum(diff**2)
 
             loss = task_loss + lin_penalty + quad_penalty
 
@@ -89,7 +92,7 @@ def client_worker(params):
 
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-    # Return updated model state (cpu)
+    # 将更新后的模型状态（存放于 CPU）返回
     return_state = {k: v.cpu() for k, v in model.state_dict().items()}
     return [avg_loss, return_state]
 
@@ -98,13 +101,13 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
 
-        # FedDyn State
-        # h: global gradient history (vector)
-        # Use parameters_to_vector to get the shape and initial zero vector
+        # FedDyn 服务器状态
+        # h: 全局梯度历史记录（向量模式）
+        # 使用 parameters_to_vector 获取其结构并初始化为零向量
         self.h = parameters_to_vector(self.model.parameters()).detach().clone().zero_()
 
-        # Local gradients history (nabla L_k)
-        # Stored on CPU to save GPU memory
+        # 本地梯度历史记录 (nabla L_k)
+        # 存储于 CPU 内存中以节省 GPU 显存
         self.local_grads = {
             i: torch.zeros_like(self.h) for i in range(self.num_clients)
         }
@@ -113,8 +116,10 @@ class Server(BaseServer):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
         num_join_clients = max(1, num_join_clients)
 
-        # Global model vector for next round
-        global_model_vector = parameters_to_vector(self.model.parameters()).detach().clone()
+        # 用于下一轮次训练的全局模型向量
+        global_model_vector = (
+            parameters_to_vector(self.model.parameters()).detach().clone()
+        )
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -153,39 +158,40 @@ class Server(BaseServer):
 
             total_loss = 0.0
             sum_model_params = torch.zeros_like(global_model_vector)
-
-            # Process results
             for i in selected_clients:
                 loss, client_state_dict = results[i]
                 total_loss += loss
 
-                # Convert client state to vector
-                # Faster: manually flatten the dict values in order
-                # Safe way: load into self.model (cpu) then flatten.
+                # 将客户端模型状态字典转化为一维向量
                 self.model.load_state_dict(client_state_dict)
                 client_flat = parameters_to_vector(self.model.parameters()).detach()
 
                 sum_model_params += client_flat
 
-                # Update local grad history:
-                # nabla L_k(w^{t+1}) approx nabla L_k(w^t) - alpha * (w^{t+1} - w^t)
+                # 更新本地梯度历史记录：
+                # nabla L_k(w^{t+1}) 约等于 nabla L_k(w^t) - alpha * (w^{t+1} - w^t)
                 model_diff = client_flat - global_model_vector
                 self.local_grads[i] -= self.args.alpha_coef * model_diff
-
             self.loss.append(total_loss / num_join_clients)
 
-            # 1. Average Client Models
+            # 1. 计算所有客户端模型的平均值
             avg_model_params = sum_model_params / num_join_clients
 
-            # 2. Update Global History h
-            # h_{t+1} = h_t - alpha * (w_{avg} - w_t)
-            self.h -= self.args.alpha_coef * (avg_model_params - global_model_vector)
+            # 2. 更新全局历史梯度 h
+            # 理论公式: h_{t+1} = h_t - \alpha * \frac{|P_t|}{N} * (w_{avg} - w_t)
+            # 在非全量客户端参与时，必须乘以参与比例 (num_join_clients / num_clients) 防止更新过激导致散度爆炸
+            scale_factor = num_join_clients / self.num_clients
+            self.h -= (
+                self.args.alpha_coef
+                * scale_factor
+                * (avg_model_params - global_model_vector)
+            )
 
-            # 3. Update Global Model
+            # 3. 更新全局模型参数
             # w_{t+1} = w_{avg} - (1/alpha) * h_{t+1}
             new_global_vector = avg_model_params - (1.0 / self.args.alpha_coef) * self.h
 
-            # Load back to model
+            # 重新加载回模型实体中
             vector_to_parameters(new_global_vector, self.model.parameters())
             global_model_vector = new_global_vector
 

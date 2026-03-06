@@ -47,7 +47,7 @@ def get_path(args):
 
 
 class TGP(nn.Module):
-    """Trainable Global Prototypes module"""
+    """可训练的全局原型模块 (Trainable Global Prototypes, TGP)"""
 
     def __init__(self, num_classes, hidden_dim, feature_dim, device):
         super().__init__()
@@ -77,7 +77,7 @@ class TGP(nn.Module):
 
 
 def proto_cluster(protos_list):
-    """Cluster prototypes from multiple clients"""
+    """从多个客户端中聚合并计算平均原型"""
     proto_clusters = defaultdict(list)
     for protos in protos_list:
         for k, v in protos.items():
@@ -93,7 +93,7 @@ def proto_cluster(protos_list):
 
 def client_worker(params):
     """
-    FedTGP client worker with prototype-based training.
+    FedTGP 客户端训练流程（基于原型匹配训练）。
     """
     (
         _,
@@ -111,11 +111,11 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # Initialize model
+    # 初始化模型并加载全局状态
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
-    # Setup
+    # 设置配置与优化器
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
@@ -124,7 +124,7 @@ def client_worker(params):
     total_loss_proto = 0.0
     num_batches = 0
 
-    # Pre-process global prototypes for efficient GPU access
+    # 预处理全局原型以便在 GPU 上高效访问和计算
     global_protos_tensor = None
     if global_protos is not None:
         first_proto = next(iter(global_protos.values()))
@@ -133,12 +133,12 @@ def client_worker(params):
         for label, proto in global_protos.items():
             global_protos_tensor[label] = proto.to(device)
 
-    # Local training
+    # 本地模型多轮次训练
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             output, features = model(x)
-            
+
             l_ce = ce_loss(output, y)
             l_proto = torch.tensor(0.0, device=device)
 
@@ -159,7 +159,7 @@ def client_worker(params):
     avg_loss_ce = total_loss_ce / num_batches if num_batches > 0 else 0.0
     avg_loss_proto = total_loss_proto / num_batches if num_batches > 0 else 0.0
 
-    # Collect local prototypes
+    # 收集最新的本地原型 (按类别平均特征向量)
     model.eval()
     proto_sum = torch.zeros(num_classes, feature_dim, device=device)
     proto_count = torch.zeros(num_classes, device=device)
@@ -199,8 +199,8 @@ class Server(BaseServer):
 
         self.global_protos = None
         self.gap = torch.ones(self.num_class, device=self.device) * 1e9
-        
-        # Consistent metrics
+
+        # 初始化指标记录列表
         self.loss_proto = []
 
     def fit(self):
@@ -257,7 +257,7 @@ class Server(BaseServer):
                 self.clients_state[i] = client_state
                 selected_states.append(client_state)
                 selected_protos.append(client_proto)
-            
+
             self.loss.append(total_loss_ce / num_join_clients)
             self.loss_proto.append(total_loss_proto / num_join_clients)
 

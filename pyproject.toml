@@ -21,6 +21,10 @@ dev = [
   "matplotlib>=3.10.8",
 ]
 
+[[tool.uv.index]]
+url="https://pypi.tuna.tsinghua.edu.cn/simple"
+default=true
+
 [tool.basedpyright]
 typeCheckingMode = "standard"
 

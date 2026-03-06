@@ -20,7 +20,7 @@ def get_path(args):
 
 def client_worker(params):
     """
-    FedProx local training with proximal term.
+    带有近端项 (Proximal term) 的 FedProx 本地训练流程。
     """
     (
         _,
@@ -36,11 +36,11 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. Initialize model
+    # 1. 初始化模型并加载全局状态
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
-    # 2. Store global parameters for proximal term calculation
+    # 2. 缓存全局模型参数，用于计算近端正则化项
     global_model_params = {k: v.to(device) for k, v in model_state.items()}
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
@@ -54,16 +54,16 @@ def client_worker(params):
             x, y = x.to(device), y.to(device)
             logits, _ = model(x)
 
-            # Standard Cross Entropy Loss
+            # 标准交叉熵分类损失
             loss = ce_loss(logits, y)
 
             optimizer.zero_grad()
             loss.backward()
 
-            # FedProx Proximal Term Optimization:
-            # Instead of adding (mu/2)*||w-w_t||^2 to loss and backpropagating,
-            # we directly add the gradient of the proximal term: mu*(w-w_t) to param.grad.
-            # This avoids constructing a large computation graph for the regularization term.
+            # FedProx 近端项优化算法：
+            # 相比于将 (mu/2)*||w-w_t||^2 加入损失函数并进行反向传播，
+            # 这里直接将其关于参数的导数 mu*(w-w_t) 累加到 param.grad 中。
+            # 这可以避免为正则化项构建庞大的计算图，极大节省内存和算力。
             if mu > 0:
                 with torch.no_grad():
                     for name, param in model.named_parameters():
@@ -74,7 +74,7 @@ def client_worker(params):
 
             optimizer.step()
 
-            # For logging, we only track the task loss to avoid confusion
+            # 仅记录任务原本的分类损失用于分析，以避免和加入了正则化的计算混淆
             total_loss += loss.item()
             num_batches += 1
 
@@ -125,7 +125,7 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # Process results
+            # 汇集并处理各客户端结果
             total_loss = 0.0
             selected_states = []
             current_weights = []

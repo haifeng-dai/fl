@@ -1,16 +1,14 @@
 import argparse
-import time
 import os
+import time
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+from torch.nn.functional import normalize
 
 from .utils import (
     BaseServer,
     ce_loss,
-    evaluate_model,
-    evaluate_prototype,
     get_model,
     param_aggregate,
     run_parallel_clients,
@@ -112,7 +110,6 @@ class PLN(torch.nn.Module):
         emb = self.embedings(class_id)
         mid = self.middle(emb)
         out = self.fc(mid)
-
         return out
 
 
@@ -124,8 +121,8 @@ class DCL(torch.nn.Module):
     def forward(
         self, feature: torch.Tensor, protos: torch.Tensor, y: torch.Tensor
     ) -> torch.Tensor:
-        feature_norm = F.normalize(feature, dim=1)
-        protos_norm = F.normalize(protos, dim=1)
+        feature_norm = normalize(feature, dim=1)
+        protos_norm = normalize(protos, dim=1)
         sim = torch.mm(feature_norm, protos_norm.t()) / self.temperature
         batch_indices = torch.arange(feature.size(0), device=feature.device)
         pos_sim = sim[batch_indices, y]
@@ -138,7 +135,7 @@ class DCL(torch.nn.Module):
 
 def client_worker(params):
     """
-    FedDPL local training with Dual Prototype Learning.
+    带有双重原型学习 (Dual Prototype Learning) 的 FedDPL 本地训练流程。
     """
     (
         _,
@@ -162,22 +159,19 @@ def client_worker(params):
         mode,
         fixed_proto,
         init_emb,
-        har,
     ) = params
 
-    # 1. Initialize Model and PLN (Prototype Learning Network)
+    # 1. 初始化核心模型与 PLN（原型网络）
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
-
-    pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
-        device
-    )
+    pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb)
+    pln.to(device)
     pln.load_state_dict(pln_state)
 
     all_classes = torch.arange(0, num_classes).to(device)
     dcl_loss_fn = DCL(temperature=0.1)
 
-    # 2. Train Model (Feature Extractor)
+    # 2. 训练核心模型（特征提取器）
     avg_loss_m = 0.0
     if mode in ["model", "normal", "all"]:
         model.train()
@@ -185,9 +179,7 @@ def client_worker(params):
         opt = torch.optim.SGD(model.parameters(), lr=lr)
         total_loss_m = 0.0
         num_batches_m = 0
-        loader = torch.utils.data.DataLoader(
-            train_set, batch_size=batch_size, shuffle=True
-        )
+        loader = torch.utils.data.DataLoader(train_set, batch_size, True)
 
         for _ in range(epochs):
             for x, y in loader:
@@ -195,7 +187,7 @@ def client_worker(params):
                 output, feature = model(x)
                 loss_ce = ce_loss(output, y)
 
-                # PLN Loss: Encourage features to be close to their class prototypes
+                # PLN 损失：鼓励实例特征向其所属类的原型靠拢
                 with torch.no_grad():
                     protos = pln(all_classes)
                 # dist = torch.cdist(feature, protos, p=2) ** 2
@@ -203,16 +195,14 @@ def client_worker(params):
                 loss_proto = dcl_loss_fn(feature, protos, y)
 
                 loss = loss_ce + lambda_ * loss_proto
-
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
                 total_loss_m += loss.item()
                 num_batches_m += 1
-
         avg_loss_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
 
-    # 3. Train PLN (Prototypes)
+    # 3. 训练 PLN 网络（优化类原型）
     avg_loss_p = 0.0
     if mode in ["pln", "normal", "all"]:
         model.eval()
@@ -221,9 +211,7 @@ def client_worker(params):
         total_loss_p = 0.0
         num_batches_p = 0
 
-        loader_pln = torch.utils.data.DataLoader(
-            train_set, batch_size=batch_size_pln, shuffle=True
-        )
+        loader_pln = torch.utils.data.DataLoader(train_set, batch_size_pln, True)
 
         for _ in range(epoch_pln):
             for x, y in loader_pln:
@@ -233,7 +221,7 @@ def client_worker(params):
                 with torch.no_grad():
                     _, feature = model(x)
 
-                # Update prototypes to be closer to features
+                # 更新原型，使其更贴近各类的实例特征
                 # dist = torch.cdist(feature, protos, p=2) ** 2
                 # loss = ce_loss(-torch.sqrt(dist), y)
                 loss = dcl_loss_fn(feature, protos, y)
@@ -315,17 +303,15 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # Calculate average losses using incremental summation
+            # 汇集各客户端的回传结果，以增量方式计算整体特征提取模型与 PLN 的加权平均损失
             total_loss_model = 0.0
             total_loss_pln = 0.0
             plns_states = []
             current_weights = []
             for i in selected_clients:
-                client_loss_model, client_loss_pln, client_state, client_pln = results[
-                    i
-                ]
-                total_loss_model += client_loss_model
-                total_loss_pln += client_loss_pln
+                client_loss_m, client_loss_p, client_state, client_pln = results[i]
+                total_loss_model += client_loss_m
+                total_loss_pln += client_loss_p
                 self.clients_state[i] = client_state
                 plns_states.append(client_pln)
                 current_weights.append(self.weights[i])
@@ -334,10 +320,10 @@ class Server(BaseServer):
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
-            # Aggregate PLN parameters
+            # 聚合各客户端学习到的 PLN 参数
             self.aggregate(plns_states, weights=norm_weights)
 
-            # Use PLN module directly for prototype evaluation
+            # 直接使用最新聚合后的 PLN 模块输出作为当前全局原型进行效果评估
             protos_tensor = self.pln(self.all_classes)
             self.evaluate(protos=protos_tensor)
 

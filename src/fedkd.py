@@ -1,6 +1,6 @@
 import argparse
-import time
 import os
+import time
 
 import numpy as np
 import torch
@@ -8,7 +8,6 @@ import torch
 from .utils import (
     BaseServer,
     ce_loss,
-    evaluate_model,
     get_model,
     kl_loss,
     mse_loss,
@@ -37,49 +36,49 @@ def get_path(args):
 
 def decompose_param(param, energy_threshold):
     """
-    Decompose a single parameter tensor using SVD based on energy threshold.
+    基于能量阈值 (Energy Threshold) 使用 SVD 分解单个参数向量。
 
     Args:
-        param: Parameter tensor
-        energy_threshold: Energy threshold (0-1)
+        param: 待分解的参数向量
+        energy_threshold: 能量阈值 (0-1)
 
     Returns:
-        compressed_param: Compressed parameter (dict or tensor)
+        compressed_param: 压缩后的参数 (字典或张量)
     """
-    # Keep on original device, do not force move to CPU
+    # 保持在原生设备上处理，不用强制移至 CPU
     param_shape = param.shape
 
-    # Check if decomposition is possible (2D or 4D tensor)
-    # Also usually skip embedding layers
+    # 检查分解是否可行（仅支持 2D 或 4D tensor）
+    # 通常我们也跳过 embedding 层
     if len(param_shape) not in [2, 4] or "embedding" in str(param.dtype):
         return param.detach().cpu()
 
-    # Reshape to 2D matrix
+    # 将其重置为 2D 矩阵
     if len(param_shape) == 4:
-        # Conv layer: (out, in, h, w) -> (out, in*h*w)
+        # 卷积层: (out, in, h, w) -> (out, in*h*w)
         mat = param.view(param_shape[0], -1)
     else:
         mat = param
 
-    # Perform SVD decomposition
+    # 执行 SVD 分解运算
     try:
-        # Prefer execution on original device (e.g., GPU)
+        # 优先在原始设备上执行 (例如, GPU 显存)
         u, s, vh = torch.linalg.svd(mat, full_matrices=False)
     except RuntimeError:
-        # Fallback for SVD failure (e.g., OOM), fallback to CPU
+        # SVD 失败时的回退机制 (例如, 显存溢出 OOM)，将回退至 CPU
         mat = mat.cpu()
         try:
             u, s, vh = torch.linalg.svd(mat, full_matrices=False)
         except RuntimeError:
             return param.detach().cpu()
 
-    # Determine rank based on energy threshold
+    # 根据能量阈值决定秩 (Rank)
     total_energy = torch.sum(s**2)
     if total_energy == 0:
         return param.detach().cpu()
 
     cumulative_energy = torch.cumsum(s**2, dim=0)
-    # Find the first index where cumulative energy exceeds threshold * total
+    # 找到累计能量超过 (总能量 * 阈值) 的第一个索引
     mask = cumulative_energy > (energy_threshold * total_energy)
     if not mask.any():
         rank = len(s)
@@ -97,37 +96,37 @@ def decompose_param(param, energy_threshold):
 
 def reconstruct_param(compressed_param, device):
     """
-    Reconstruct parameter from compressed representation.
+    从压缩表示中重建原本的模型参数。
 
     Args:
-        compressed_param: Compressed parameter (from decompose_param)
-        device: Target device
+        compressed_param: 压缩后的参数 (来自 decompose_param)
+        device: 目标设备
 
     Returns:
-        Reconstructed parameter tensor
+        重建后的参数张量
     """
     if isinstance(compressed_param, dict) and compressed_param.get("is_compressed"):
         u = compressed_param["u"].to(device)
         s = compressed_param["s"].to(device)
         vh = compressed_param["vh"].to(device)
 
-        # Reconstruct: U * diag(S) * Vh
+        # 重建矩阵: U * diag(S) * Vh
         mat = u @ (torch.diag(s) @ vh)
 
-        # Reshape back to original shape
+        # 重塑回原始形状
         return mat.view(compressed_param["original_shape"])
     elif isinstance(compressed_param, torch.Tensor):
         return compressed_param.to(device)
     else:
-        # Should not happen if data is clean
+        # 在数据无损情况下应不会走到这步
         raise ValueError(f"Unknown parameter type: {type(compressed_param)}")
 
 
 def client_worker(params):
     """
-    FedKD local training with SVD-based communication compression and mutual knowledge distillation.
+    FedKD 本地训练流程，采用基于 SVD 的通信压缩与相互知识蒸馏机制。
     """
-    # Safe unpacking
+    # 安全解包参数
     (
         _,
         device,
@@ -145,37 +144,37 @@ def client_worker(params):
         energy_threshold,
     ) = params
 
-    # 1. Initialize Models
-    # Local personalized model
+    # 1. 初始化模型
+    # 本地个性化专家模型 (Student)
     model = get_model(model_name, dataset_name, feature_dim).to(device)
-    # Global proxy model (constructed from compressed SVD params)
+    # 全局代理模型 (从压缩的 SVD 参数重建)
     model_g = get_model(model_name, dataset_name, feature_dim).to(device)
 
     with torch.no_grad():
-        # A. Reconstruct and load global proxy parameters from SVD components
+        # A. 从 SVD 参数中重建并加载全局代理模型参数
         global_state_dict = {}
         for name, param_data in compressed_params_g.items():
             global_state_dict[name] = reconstruct_param(param_data, device)
         model_g.load_state_dict(global_state_dict)
 
-        # B. Load local model parameters
+        # B. 加载本地模型参数
         if prev_local_state is not None:
             model.load_state_dict(prev_local_state)
         else:
-            # First round: start from global state
+            # 首轮训练：从全局状态起始
             model.load_state_dict(global_state_dict)
 
-    # 2. Initialize Feature Alignment Layer (W_h)
+    # 2. 初始化特征对齐层 (W_h)
     W_h = torch.nn.Linear(feature_dim, feature_dim, bias=False, device=device)
     if wh_state is not None:
         W_h.load_state_dict(wh_state)
 
-    # 3. Optimizers
+    # 3. 初始化优化器
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     optimizer_g = torch.optim.SGD(model_g.parameters(), lr=lr_g)
     optimizer_W = torch.optim.SGD(W_h.parameters(), lr=lr)
 
-    # 4. Training Loop (Mutual Knowledge Distillation)
+    # 4. 训练循环 (Mutual Knowledge Distillation)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     model.train()
@@ -188,31 +187,29 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-
-            # Forward pass
             output, rep = model(x)
             output_g, rep_g = model_g(x)
 
-            # Task Loss (Cross Entropy)
+            # 基础任务预测损失 (Cross Entropy)
             loss_ce = ce_loss(output, y)
             loss_ce_g = ce_loss(output_g, y)
 
-            # Mutual Knowledge Distillation (KL Divergence)
+            # 互相知识蒸馏 (KL 散度)
             loss_kd = kl_loss(output, output_g.detach())
             loss_kd_g = kl_loss(output_g, output.detach())
 
-            # Feature Alignment Loss
+            # 特征对齐损失
             loss_h = mse_loss(rep, W_h(rep_g.detach()))
             loss_h_g = mse_loss(rep.detach(), W_h(rep_g))
 
-            # Normalization factor
+            # 放缩归一化因子
             scale = loss_ce.item() + loss_ce_g.item() + 1e-8
 
-            # Total Losses
+            # 最终整体损失
             loss = loss_ce + loss_kd / scale + loss_h / scale
             loss_g = loss_ce_g + loss_kd_g / scale + loss_h_g / scale
 
-            # Optimization Steps
+            # 反向传播与优化器更新
             optimizer.zero_grad()
             optimizer_g.zero_grad()
             optimizer_W.zero_grad()
@@ -227,13 +224,13 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    # 5. Compress updated global model using SVD for uplink transmission
+    # 5. 使用 SVD 压缩更新后的全局模型用于上行通信
     avg_loss = total_loss / num_batches
     compressed_params_g_new = {}
     for name, param in model_g.state_dict().items():
         compressed_params_g_new[name] = decompose_param(param, energy_threshold)
 
-    # Prepare return states
+    # 准备返回状态数据
     local_state = {k: v.cpu() for k, v in model.state_dict().items()}
     wh_state = {k: v.cpu() for k, v in W_h.state_dict().items()}
 
@@ -244,7 +241,7 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(True, args)
 
-        # Initial decomposition
+        # 初始分解运算
         self.compressed_params = {}
         for name, param in self.model.state_dict().items():
             self.compressed_params[name] = decompose_param(param, args.energy)
@@ -264,7 +261,7 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # Send compressed global params to clients
+            # 向全体客户端下发压缩后的全局参数
             p = [
                 [
                     i,
@@ -292,7 +289,7 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # Update server-side stored client local states
+            # 汇集各客户端回传结果并更新服务器端存储的客户端本地状态
             total_loss = 0.0
             client_compressed_params_list = []
             current_weights = []
@@ -316,27 +313,27 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def aggregate_svd(self, client_params_list, weights):
-        """Aggregate SVD compressed parameters"""
-        # 1. Reconstruct all params to CPU
+        """聚合通过 SVD 压缩的模型参数"""
+        # 1. 在 CPU 上重建所有参数
         aggregated_state_dict = {}
         ref_params = client_params_list[0]
 
-        # Initialize with first client
+        # 从首个客户端开始初始化
         for name in ref_params.keys():
             param_0 = reconstruct_param(ref_params[name], torch.device("cpu"))
             aggregated_state_dict[name] = param_0 * weights[0]
 
-        # Accumulate remaining clients
+        # 累加剩余的客户端数据
         for i in range(1, len(client_params_list)):
             client_params = client_params_list[i]
             for name in client_params.keys():
                 param = reconstruct_param(client_params[name], torch.device("cpu"))
                 aggregated_state_dict[name] += param * weights[i]
 
-        # 2. Update server model
+        # 2. 更新服务端全局模型
         self.model.load_state_dict(aggregated_state_dict)
 
-        # 3. Re-compress for next round distribution
+        # 3. 为下一轮次分发重新进行压缩
         self.compressed_params = {}
         for name, param in self.model.state_dict().items():
             self.compressed_params[name] = decompose_param(param, self.args.energy)

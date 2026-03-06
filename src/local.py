@@ -16,8 +16,8 @@ def get_path(args):
 
 def client_worker(params):
     """
-    Pure local training - independent training without communication.
-    Each client trains from scratch on its own data.
+    纯本地训练机制 - 无任何通信的独立训练流程。
+    各个客户端完全基于私有数据从头开始训练模型。
     """
     (
         _,

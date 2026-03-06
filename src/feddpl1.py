@@ -146,7 +146,7 @@ def client_worker(params):
         har,
     ) = params
 
-    # 1. Initialize Model and PLN (Prototype Learning Network)
+    # 1. 初始化核心模型与 PLN（原型网络）
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
 
@@ -157,7 +157,7 @@ def client_worker(params):
 
     all_classes = torch.arange(0, num_classes).to(device)
 
-    # 2. Train Model (Feature Extractor)
+    # 2. 训练核心模型（特征提取器）
     avg_loss_m_m = 0.0
     avg_loss_m_p = 0.0
     if mode in ["model", "normal", "all"]:
@@ -177,7 +177,7 @@ def client_worker(params):
                 output, feature = model(x)
                 loss_ce = ce_loss(output, y)
 
-                # PLN Loss: Encourage features to be close to their class prototypes
+                # PLN 损失：促使特征向其对应类别的原型靠拢
                 with torch.no_grad():
                     protos = pln(all_classes)
                 loss_proto = mse_loss(feature, protos[y])
@@ -194,7 +194,7 @@ def client_worker(params):
         avg_loss_m_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
         avg_loss_m_p = total_loss_p / num_batches_m if num_batches_m > 0 else 0.0
 
-    # 3. Train PLN (Prototypes)
+    # 3. 训练 PLN 网络（优化类原型）
     avg_loss_p = 0.0
     if mode in ["pln", "normal", "all"]:
         model.eval()
@@ -215,7 +215,7 @@ def client_worker(params):
                 with torch.no_grad():
                     _, feature = model(x)
 
-                # Update prototypes to be closer to features
+                # 更新原型，使其更贴近所在类的实例特征
                 loss = mse_loss(feature, protos[y])
 
                 opt_pln.zero_grad()
@@ -297,19 +297,17 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # Calculate average losses using incremental summation
+            # 汇集各客户端回传结果，以增量方式计算加权平均损失
             total_loss_model = 0.0
             total_loss_model_m = 0.0
             total_loss_model_p = 0.0
             total_loss_pln = 0.0
             plns_states = []
             for i in selected_clients:
-                client_loss_model_m, client_loss_model_p, client_loss_pln, client_state, client_pln = results[
-                    i
-                ]
-                total_loss_model += client_loss_model_m + client_loss_model_p
-                total_loss_model_m += client_loss_model_m
-                total_loss_model_p += client_loss_model_p
+                client_loss_m_m, client_loss_m_p, client_loss_pln, client_state, client_pln = results[i]
+                total_loss_model += client_loss_m_m + client_loss_m_p
+                total_loss_model_m += client_loss_m_m
+                total_loss_model_p += client_loss_m_p
                 total_loss_pln += client_loss_pln
                 self.clients_state[i] = client_state
                 plns_states.append(client_pln)
@@ -317,17 +315,20 @@ class Server(BaseServer):
             self.loss_m_m.append(total_loss_model_m / num_join_clients)
             self.loss_m_p.append(total_loss_model_p / num_join_clients)
             self.loss_p.append(total_loss_pln / num_join_clients)
-            
-            # Aggregate PLN parameters
-            self.pln.load_state_dict(param_aggregate(plns_states, [1.0/num_join_clients]*num_join_clients))
 
-            # Evaluate using unified interface
+            # 聚合各客户端学习到的 PLN 参数
+            self.aggregate(plns_states, weights=norm_weights)
+
+            # 使用统一接口进行全量客户端测试验证
             protos_tensor = self.pln(self.all_classes)
             self.evaluate(protos=protos_tensor)
-            
+
             print(f"Loss: {self.loss[-1]:.4f}, PLN Loss: {self.loss_p[-1]:.4f}")
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_proto[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+
+    def aggregate(self, pln_params, weights):
+        self.pln.load_state_dict(param_aggregate(pln_params, weights))
 
     def save(self):
         f = {

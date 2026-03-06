@@ -116,7 +116,7 @@ class PLN(torch.nn.Module):
 
 def client_worker(params):
     """
-    FedPLN local training with Prototype Learning Network.
+    带有原型学习网络 (PLN) 的 FedPLN 本地训练流程。
     """
     (
         _,
@@ -143,7 +143,7 @@ def client_worker(params):
         har,
     ) = params
 
-    # 1. Initialize Model and PLN
+    # 1. 初始化模型与 PLN 网络
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
     pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
@@ -152,7 +152,7 @@ def client_worker(params):
     pln.load_state_dict(pln_state)
     all_classes = torch.arange(0, num_classes).to(device)
 
-    # 2. Phase 1: Train Model (Feature Extractor)
+    # 2. 阶段一：训练核心模型（特征提取器）
     avg_loss_m = 0.0
     model.train()
     pln.eval()
@@ -161,7 +161,7 @@ def client_worker(params):
     num_batches_m = 0
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # Prototype Loss: Distance between features and PLN prototypes
+    # 原型损失：特征向量与 PLN 对应原型之间的欧式距离
     with torch.no_grad():
         protos = pln(all_classes)
     for _ in range(epochs):
@@ -183,7 +183,7 @@ def client_worker(params):
 
     avg_loss_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
 
-    # 3. Phase 2: Train PLN (Prototypes)
+    # 3. 阶段二：训练 PLN 网络（优化类原型）
     avg_loss_p = 0.0
     model.eval()
     pln.train()
@@ -206,7 +206,7 @@ def client_worker(params):
             with torch.no_grad():
                 _, feature = model(x)
 
-            # Loss: Classification based on distance to prototypes
+            # 损失计算：基于样本到原型距离的交差熵分类损失
             dist = torch.cdist(feature, protos, p=2) ** 2
             loss = ce_loss(-torch.sqrt(dist), y)
 
@@ -286,7 +286,7 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # Calculate average losses using incremental summation
+            # 汇集各客户端的回传结果，计算模型与 PLN 的加权整体损失
             total_loss_model = 0.0
             total_loss_pln = 0.0
             selected_states = []
@@ -307,7 +307,7 @@ class Server(BaseServer):
             norm_weights = [w / sum_weights for w in current_weights]
 
             self.aggregate(selected_states, selected_plns, weights=norm_weights)
-            # Use PLN module directly for prototype evaluation
+            # 直接使用聚合后的 PLN 模块输出作为当前全局原型进行评估
             protos_tensor = self.pln(self.all_classes)
             self.evaluate(protos=protos_tensor)
 

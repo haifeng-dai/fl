@@ -1,7 +1,6 @@
 import argparse
-import copy
-import time
 import os
+import time
 
 import numpy as np
 import torch
@@ -9,7 +8,6 @@ import torch
 from .utils import (
     BaseServer,
     ce_loss,
-    evaluate_model,
     get_model,
     param_aggregate,
     run_parallel_clients,
@@ -38,8 +36,7 @@ def client_worker(params):
 
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.extractor.load_state_dict(global_body_state)
-    if local_head_state is not None:
-        model.classifier.load_state_dict(local_head_state)
+    model.classifier.load_state_dict(local_head_state)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
@@ -59,7 +56,7 @@ def client_worker(params):
             num_batches += 1
 
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-    # Return split states for efficient communication
+    # 将拆分后的特征提取器和分类头状态返回，以实现高效通信
     new_body = {k: v.cpu() for k, v in model.extractor.state_dict().items()}
     new_head = {k: v.cpu() for k, v in model.classifier.state_dict().items()}
     return [avg_loss, new_body, new_head]
@@ -78,15 +75,29 @@ class Server(BaseServer):
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedPer Round {r + 1}/{self.rounds} ---")
-            selected_clients = np.random.choice(self.num_clients, num_join_clients, replace=False)
-            
-            # Global shared body
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+
+            # 全局共享特征提取器 (Body)
             global_body_state = self.model.extractor.state_dict()
 
-            p = [[i, self.client_gpu[i], global_body_state, self.client_head_states[i],
-                  self.train_sets[i], self.args.model, self.args.dataset, self.args.lr,
-                  self.args.batch_size, self.args.epochs, self.args.feature_dim]
-                 for i in selected_clients]
+            p = [
+                [
+                    i,
+                    self.client_gpu[i],
+                    global_body_state,
+                    self.client_head_states[i],
+                    self.train_sets[i],
+                    self.args.model,
+                    self.args.dataset,
+                    self.args.lr,
+                    self.args.batch_size,
+                    self.args.epochs,
+                    self.args.feature_dim,
+                ]
+                for i in selected_clients
+            ]
 
             results = run_parallel_clients(client_worker, p, self.gpu_pools, self.mp)
 
@@ -103,32 +114,44 @@ class Server(BaseServer):
             self.loss.append(total_loss / num_join_clients)
             norm_weights = [w / sum(current_weights) for w in current_weights]
 
-            # Aggregate Body Only
-            self.model.extractor.load_state_dict(param_aggregate(new_bodies, norm_weights))
+            # 仅聚合特征提取器 (Body)
+            self.model.extractor.load_state_dict(
+                param_aggregate(new_bodies, norm_weights)
+            )
 
             self.evaluate()
             print(f"Accuracy: {self.acc[-1]:.2f}%, Loss: {self.loss[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def evaluate(self):
-        """Build full state dicts with proper prefixes for BaseServer evaluation."""
+        """构建包含正确前缀的完整模型状态字典，以供 BaseServer 进行评估。"""
         full_states = []
-        global_body = {f"extractor.{k}": v for k, v in self.model.extractor.state_dict().items()}
+        global_body = {
+            f"extractor.{k}": v for k, v in self.model.extractor.state_dict().items()
+        }
         for i in range(self.num_clients):
-            # Clone to ensure no memory side-effects
+            # 克隆数据以避免内存副作用 (共享变量意外修改)
             full_state = {k: v.clone() for k, v in global_body.items()}
-            head_state = {f"classifier.{k}": v.clone() for k, v in self.client_head_states[i].items()}
+            head_state = {
+                f"classifier.{k}": v.clone()
+                for k, v in self.client_head_states[i].items()
+            }
             full_state.update(head_state)
             full_states.append(full_state)
         super().evaluate(model_states=full_states)
 
     def save(self):
-        # Construct full states for saving as well
+        # 为保存状态同时也构建完整的模型状态
         client_states = []
-        global_body = {f"extractor.{k}": v for k, v in self.model.extractor.state_dict().items()}
+        global_body = {
+            f"extractor.{k}": v for k, v in self.model.extractor.state_dict().items()
+        }
         for i in range(self.num_clients):
             full_state = {k: v.clone() for k, v in global_body.items()}
-            head_state = {f"classifier.{k}": v.clone() for k, v in self.client_head_states[i].items()}
+            head_state = {
+                f"classifier.{k}": v.clone()
+                for k, v in self.client_head_states[i].items()
+            }
             full_state.update(head_state)
             client_states.append(full_state)
 

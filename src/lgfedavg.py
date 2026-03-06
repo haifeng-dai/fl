@@ -21,10 +21,10 @@ def get_path(args):
 
 def client_worker(params):
     """
-    LG-FedAvg Local Worker:
-    - Takes local extractor state and global classifier state.
-    - Trains full model.
-    - Returns updated extractor (for local storage) and classifier (for global aggregation).
+    LG-FedAvg 本地训练流程:
+    - 接收本地特征提取器状态与全局分类器状态。
+    - 训练完整模型。
+    - 训练完毕后返回更新后的提取器 (用于本地缓存) 和分类器 (用于全局聚合)。
     """
     (
         _,
@@ -42,7 +42,7 @@ def client_worker(params):
 
     model = get_model(model_name, dataset_name, feature_dim).to(device)
 
-    # Load sub-modules (Key values in these dicts should be prefix-free)
+    # 加载子模块 (注意：字典中的键不应带前缀)
     model.extractor.load_state_dict(local_body_state)
     model.classifier.load_state_dict(global_head_state)
 
@@ -64,7 +64,7 @@ def client_worker(params):
             num_batches += 1
 
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-    # Return split states (prefix-free)
+    # 返回拆分的模块状态
     new_body = {k: v.cpu() for k, v in model.extractor.state_dict().items()}
     new_head = {k: v.cpu() for k, v in model.classifier.state_dict().items()}
     return [avg_loss, new_body, new_head]
@@ -72,9 +72,9 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        # pfl=True uses local test sets
+        # pfl=True 表示此算法是个性化算法，评估时使用本地测试集
         super().__init__(True, args)
-        # Override BaseServer initialization: LG-FedAvg only stores Extractor states
+        # 覆盖 BaseServer 的初始化逻辑：LG-FedAvg 只需存储各客户端的特征提取器 (Extractor) 状态
         self.clients_state = [
             self.model.extractor.state_dict() for _ in range(self.num_clients)
         ]
@@ -87,7 +87,7 @@ class Server(BaseServer):
             print(f"\n--- LG-FedAvg Round {r + 1}/{self.rounds} ---")
             selected_clients = np.random.choice(self.num_clients, num_join_clients, replace=False)
 
-            # Global shared head
+            # 获取当前的全局共享分类头 (Head)
             global_head_state = self.model.classifier.state_dict()
 
             p = [[i, self.client_gpu[i], self.clients_state[i], global_head_state,
@@ -103,7 +103,7 @@ class Server(BaseServer):
             for i in selected_clients:
                 client_loss, client_body, client_head = results[i]
                 total_loss += client_loss
-                # Store local body back
+                # 将更新后的本地主体结构保存回服务端
                 self.clients_state[i] = client_body
                 new_heads.append(client_head)
                 current_weights.append(self.weights[i])
@@ -111,7 +111,7 @@ class Server(BaseServer):
             self.loss.append(total_loss / num_join_clients)
             norm_weights = [w / sum(current_weights) for w in current_weights]
 
-            # Aggregate Head Only
+            # 仅聚合分类头模块的过程
             self.model.classifier.load_state_dict(param_aggregate(new_heads, norm_weights))
 
             self.evaluate()
@@ -120,26 +120,26 @@ class Server(BaseServer):
 
     def evaluate(self):
         """
-        Build full state dicts with proper prefixes for BaseServer.evaluate().
-        This ensures correct load_state_dict behavior during personalized testing.
+        构建带有正确前缀的完整 state_dicts 用于 BaseServer.evaluate() 的评估指标提取。
+        这确保了在个性化测试期间 load_state_dict 功能的正常行为。
         """
         full_states = []
-        # Get latest global classifier and add prefix
+        # 获取最新的全局分类器并为其加载键前缀
         global_head_kv = {f"classifier.{k}": v for k, v in self.model.classifier.state_dict().items()}
 
         for i in range(self.num_clients):
-            # Get this client's local extractor and add prefix
+            # 获取当前客户端的本地提取器并添加字典键前缀
             local_body_kv = {f"extractor.{k}": v for k, v in self.clients_state[i].items()}
-            # Merge
+            # 合并形成完整的状态字典
             full_state = local_body_kv
             full_state.update(global_head_kv)
             full_states.append(full_state)
 
-        # Call smart evaluation from base class
+        # 调用父类的智能评估方法
         super().evaluate(model_states=full_states)
 
     def save(self):
-        # Prepare full model state_dicts for saving/analysis
+        # 准备用于保存或分析的完整模型 state_dicts
         client_states_full = []
         global_head_kv = {f"classifier.{k}": v for k, v in self.model.classifier.state_dict().items()}
         for i in range(self.num_clients):
@@ -151,8 +151,8 @@ class Server(BaseServer):
             "acc": self.acc,
             "loss": self.loss,
             "state_dict": {
-                "global": self.model.classifier.state_dict(), # Global part
-                "client": client_states_full,                 # Full personalized models
+                "global": self.model.classifier.state_dict(), # 全局部分 (分享层)
+                "client": client_states_full,                 # 完整的个性化模型聚合
             },
         }
         self.deal_save(f)

@@ -40,7 +40,7 @@ def get_path(args):
 
 def client_worker(params):
     """
-    FML (Federated Mutual Learning) local training.
+    FML (Federated Mutual Learning) 联邦互学习本地训练。
     """
     (
         _,
@@ -58,15 +58,15 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. Initialize Global Model (MEME)
+    # 1. 初始化全局模型 (MEME)
     global_model = get_model(model_name, dataset_name, feature_dim).to(device)
     global_model.load_state_dict(global_state)
 
-    # 2. Initialize Local Model (Personalized)
+    # 2. 初始化本地模型 (个性化模型)
     local_model = get_model(model_name, dataset_name, feature_dim).to(device)
     local_model.load_state_dict(local_state)
 
-    # Optimizers
+    # 优化器设置
     opt_g = torch.optim.SGD(global_model.parameters(), lr=lr)
     opt_l = torch.optim.SGD(local_model.parameters(), lr=lr)
 
@@ -83,34 +83,34 @@ def client_worker(params):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
 
-            # Forward pass
+            # 模型前向传播
             out_g, _ = global_model(x)
             out_l, _ = local_model(x)
 
-            # Cross Entropy Loss
+            # 标准交叉熵损失
             ce_g = ce_loss(out_g, y)
             ce_l = ce_loss(out_l, y)
 
-            # Mutual Learning (KL Divergence)
-            # KL(P || Q) -> P is target (detach), Q is input (log_softmax)
+            # 互学习损失 (KL 散度)
+            # KL(P || Q) -> P 作为目标 (需 detach)，Q 作为评估输入 (底层使用 log_softmax)
 
-            # Loss for Global: CE + beta * KL(Local || Global)
-            # Global model learns from Local model
+            # 全局模型损失：CE + beta * KL(Local || Global)
+            # 全局模型从本地模型中吸收知识
             loss_kl_g = kl_loss(out_g, out_l.detach())
 
-            # Loss for Local: CE + alpha * KL(Global || Local)
-            # Local model learns from Global model
+            # 本地模型损失：CE + alpha * KL(Global || Local)
+            # 本地模型从全局模型中吸收知识
             loss_kl_l = kl_loss(out_l, out_g.detach())
 
             loss_g = ce_g + beta_fml * loss_kl_g
             loss_l = ce_l + alpha_fml * loss_kl_l
 
-            # Update Global
+            # 更新全局模型
             opt_g.zero_grad()
             loss_g.backward()
             opt_g.step()
 
-            # Update Local
+            # 更新本地模型
             opt_l.zero_grad()
             loss_l.backward()
             opt_l.step()
@@ -122,7 +122,7 @@ def client_worker(params):
     avg_loss_g = total_loss_g.item() / num_batches
     avg_loss_l = total_loss_l.item() / num_batches
 
-    # Return: client_id, [avg_loss, new_global_state, new_local_state]
+    # 返回参数：客户设备运行结果 [本地损失，全局损失，本地模型新状态，全局模型新状态]
     global_state = {k: v.cpu() for k, v in global_model.state_dict().items()}
     local_state = {k: v.cpu() for k, v in local_model.state_dict().items()}
     return [avg_loss_l, avg_loss_g, local_state, global_state]
@@ -191,7 +191,7 @@ class Server(BaseServer):
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
-            # Aggregate Global Models
+            # 聚合全局模型参数
             self.model.load_state_dict(param_aggregate(selected_states_g, norm_weights))
 
             self.evaluate()

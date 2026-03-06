@@ -1,6 +1,6 @@
 import argparse
-import time
 import os
+import time
 
 import numpy as np
 import torch
@@ -11,7 +11,6 @@ from .utils import (
     BaseServer,
     ce_loss,
     get_model,
-    param_aggregate,
     run_parallel_clients,
 )
 
@@ -81,7 +80,7 @@ def separation_loss(anchors, tau=0.1):
 
 class AnchorMapping(nn.Module):
     """
-    Two-layer MLP mapping function Theta(.) to map random vectors R to anchors A.
+    两层 MLP 映射函数 Theta(.) 用于将随机向量 R 映射到语义锚点 A。
     """
 
     def __init__(self, feature_dim):
@@ -98,7 +97,7 @@ class AnchorMapping(nn.Module):
 
 def client_worker(params):
     """
-    FedLSA local training with Location-aware Semantic Anchors (Compactness Loss).
+    FedLSA 基于位置感知语义锚点 (Location-aware Semantic Anchors) 的本地训练流程 (计算紧凑度损失 Compactness Loss)。
     """
     (
         _,
@@ -126,28 +125,28 @@ def client_worker(params):
     total_loss = 0.0
     num_batches = 0
 
-    # Ensure anchors are on the correct device and detached (fixed during client training)
+    # 确保锚点在正确的设备上并分离计算图 (在客户端训练期间保持固定)
     global_anchors = global_anchors.to(device).detach()
     anchors_norm = F.normalize(global_anchors, p=2, dim=1)
 
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, features = model(x)
-            # L_CE: Standard Cross Entropy Loss
+            _, features = model(x)
+
+            # 伪代码第 4 行: h_i = nor(phi(psi(x_i)))
+            # 必须先归一化特征，再送入分类器，保证与服务端 L_ACE 的输入分布一致
+            features_norm = F.normalize(features, p=2, dim=1)
+
+            # L_CE: 使用归一化特征通过分类器计算交叉熵损失
+            logits = model.classifier(features_norm)
             loss_ce = ce_loss(logits, y)
 
-            # L_COM: Compactness Loss using Softmax with Temperature
-            features_norm = F.normalize(features, p=2, dim=1)
-            logits_com = torch.matmul(features_norm, anchors_norm.T)
-
-            # 2. Apply Temperature scaling
-            logits_com = logits_com / tau
-
-            # 3. CE Loss on similarity logits
+            # L_COM: 带有温度系数 (Temperature) 的紧凑度损失
+            logits_com = torch.matmul(features_norm, anchors_norm.T) / tau
             loss_com = ce_loss(logits_com, y)
 
-            # Total Loss: L_HC = L_CE + lambda * L_COM
+            # 整体损失: L_HC = L_CE + lambda * L_COM
             loss = loss_ce + lambda_com * loss_com
 
             optimizer.zero_grad()
@@ -166,18 +165,17 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
 
-        # 1. Initialize Random Vectors R (learnable)
-        # R has the same shape as Anchors: [C, d]
+        # 1. 初始化随机向量 R (可学习)
+        # R 的形状与语义锚点保持一致: [C, d]
         self.R = torch.randn(self.num_class, self.args.feature_dim, device=self.device)
 
-        # 2. Initialize Mapping Function Theta (MLP)
+        # 2. 初始化映射函数 Theta (即 MLP)
         self.anchor_mapping = AnchorMapping(self.args.feature_dim).to(self.device)
 
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
         self.labels = torch.arange(self.num_class, device=self.device)
 
     def get_anchors(self):
-        """Generate anchors A = Theta(R)"""
+        """生成语义锚点 A = Theta(R)"""
         return self.anchor_mapping(self.R)
 
     def fit(self):
@@ -197,8 +195,8 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # Generate current anchors for distribution
-            # Note: We must detach here because clients don't update R or Theta
+            # 生成下发前的最新当前语义锚点
+            # 注意: 此处必须分离计算图，因为客户端不负责优化 R 或 Theta
             current_anchors = self.get_anchors().detach().cpu()
 
             p = [
@@ -250,17 +248,16 @@ class Server(BaseServer):
 
     def server_optimization(self):
         """
-        Optimize Latent Vectors R and Anchor Mapping Function Theta using
-        L_LSA = L_ACE + alpha * L_SEP
+        使用 L_LSA = L_ACE + alpha * L_SEP 损失优化潜在向量集 R 和锚点映射函数 Theta。
 
-        NOTE: Global model Phi_glo is FROZEN during this phase and only used for evaluation.
+        注意：全局模型 Phi_glo 在此阶段是冻结的，仅仅用于正向评估。
         """
-        self.model.eval()  # Set model to eval mode (frozen)
+        self.model.eval()  # 设置模型为评估模式 (即冻结处理)
         self.model.to(self.device)
         self.anchor_mapping.train()
 
-        # Joint optimizer for R and Theta
-        # We DO NOT include self.model.parameters() here
+        # 为 R 和 Theta 构建联合优化器
+        # 此处严禁包含 self.model.parameters()
         if not self.R.requires_grad:
             self.R.requires_grad_(True)
 
@@ -269,29 +266,29 @@ class Server(BaseServer):
             lr=self.args.server_lr,
         )
 
-        # Temporarily disable gradients for model parameters to ensure they are not updated
-        # and to save memory/computation
+        # 临时禁用模型主参数的梯度计算，以确保它们不被更新，
+        # 同时能最大化地节省内存和算力
         for param in self.model.parameters():
             param.requires_grad = False
 
         print(f"-> Server Optimization for {self.args.server_epochs} epochs...")
 
         for e in range(self.args.server_epochs):
-            # 1. Generate Anchors A = Theta(R)
+            # 1. 生成语义锚点 A = Theta(R)
             anchors = self.get_anchors()
 
-            # Normalize anchors for losses
+            # 为计算损失将锚点特征归一化
             anchors_norm = F.normalize(anchors, p=2, dim=1)
 
-            # 2. Compute L_ACE (Adaptive Class Energy Loss)
-            # Use frozen global classifier to classify anchors
+            # 2. 计算自适应类别能量损失 L_ACE (Adaptive Class Energy Loss)
+            # 使用冻结的全局分类器对锚点进行计算分类
             logits = self.model.classifier(anchors_norm)
             loss_ace = ce_loss(logits, self.labels)
 
-            # 3. Compute L_SEP (Separation Loss)
+            # 3. 计算分离损失 L_SEP (Separation Loss)
             loss_sep = separation_loss(anchors, tau=self.args.tau)
 
-            # Total Server Loss
+            # 整体服务端优化损失
             loss_lsa = loss_ace + self.args.alpha_sep * loss_sep
 
             optimizer.zero_grad()
@@ -303,9 +300,33 @@ class Server(BaseServer):
                     f"   Epoch {e + 1}: L_ACE={loss_ace.item():.4f}, L_SEP={loss_sep.item():.4f}"
                 )
 
-        # Re-enable gradients for model parameters (for aggregation/client updates if needed)
+        # 恢复模型主参数的梯度计算能力 (为后续多轮聚合和客户端下发做准备)
         for param in self.model.parameters():
             param.requires_grad = True
+
+    def evaluate(self, **kwargs):
+        """
+        FedLSA 专用评估：必须对特征归一化后再通过分类器，
+        与训练时的流程保持一致（训练时分类器接收的是归一化后的特征）。
+        """
+        loader = torch.utils.data.DataLoader(
+            self.test_set, batch_size=128, shuffle=False
+        )
+        self.model.to(self.device)
+        self.model.eval()
+        correct = 0.0
+        count = 0.0
+        with torch.no_grad():
+            for data, target in loader:
+                data, target = data.to(self.device), target.to(self.device)
+                _, features = self.model(data)
+                features_norm = F.normalize(features, p=2, dim=1)
+                logits = self.model.classifier(features_norm)
+                pred = logits.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                count += target.size(0)
+        self.model.cpu()
+        self.acc.append(100.0 * correct / count)
 
     def save(self):
         f = {

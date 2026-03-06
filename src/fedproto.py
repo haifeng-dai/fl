@@ -34,7 +34,7 @@ def get_path(args):
 
 
 def proto_cluster(protos_list):
-    """Aggregate prototypes from multiple clients by class."""
+    """按类别汇总聚合来自多个客户端的原型向量。"""
     proto_clusters = defaultdict(list)
     for protos in protos_list:
         for k, v in protos.items():

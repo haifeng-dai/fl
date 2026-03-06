@@ -30,7 +30,7 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. Initialize Model
+    # 1. 初始化模型并加载全局状态
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
     global_protos = global_protos.data.clone().to(device)
@@ -38,7 +38,7 @@ def client_worker(params):
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # 2. Train Model
+    # 2. 本地模型多轮次训练
     total_loss = 0.0
     num_batches = 0
 
@@ -49,15 +49,15 @@ def client_worker(params):
             optimizer.zero_grad()
             output, features = model(data)
 
-            # Cross Entropy Loss
+            # 标准交叉熵分类损失
             loss_ce = ce_loss(output, target)
 
-            # Prototypical Contrastive Loss
-            # Normalize features and prototypes
+            # 基于原型的对比损失 (Prototypical Contrastive Loss)
+            # 将特征和原型进行标准化
             features_norm = F.normalize(features, dim=1)
             protos_norm = F.normalize(global_protos, dim=1)
 
-            # Compute similarity and cross-entropy loss (without temperature)
+            # 计算相似度并求取交叉熵损失 (不带温度缩放系数)
             logits_con = torch.matmul(features_norm, protos_norm.T)
             loss_con = ce_loss(logits_con, target)
 
@@ -68,7 +68,7 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    # 3. Calculate Local Prototypes
+    # 3. 计算最新的本地原型（按类别平均特征向量）
     model.eval()
     local_protos = {}
     sum_features = torch.zeros((num_classes, feature_dim), device=device)
@@ -113,7 +113,7 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # Compute dynamic weight alpha = 1 - r/rounds
+            # 计算动态权重系数 alpha = 1 - r/rounds
             alpha = 1.0 - (r / self.rounds)
 
             p = [
@@ -154,10 +154,10 @@ class Server(BaseServer):
 
             self.loss.append(total_loss / num_join_clients)
 
-            # Aggregate Model
+            # 聚合模型参数
             self.aggregate(selected_states)
 
-            # Aggregate Prototypes
+            # 聚合原型向量
             self.global_protos = self.aggregate_protos(all_local_protos)
 
             self.evaluate()
@@ -188,7 +188,7 @@ class Server(BaseServer):
 
         mask = counts > 0
         new_protos[mask] /= counts[mask].unsqueeze(1)
-        # Momentum update could be used, but simple average is standard for basic impl
+        # 此处亦可使用动量更新，但在基础实现中简单平均是标准做法
         new_protos[~mask] = self.global_protos[~mask]
 
         return new_protos

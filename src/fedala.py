@@ -1,24 +1,22 @@
 import argparse
+import os
 import random
 import time
-import os
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from .utils import (
     BaseServer,
     ce_loss,
     get_model,
     run_parallel_clients,
-    evaluate_model,
 )
 
 
 def add_args(parser: argparse.ArgumentParser):
-    """Add FedALA specific arguments"""
+    """添加 FedALA 算法特定的参数"""
     group = parser.add_argument_group("FedALA Specific Arguments")
     group.add_argument(
         "--eta",
@@ -59,7 +57,7 @@ def get_path(args):
 
 
 class ALA:
-    """Adaptive Local Aggregation module for FedALA"""
+    """FedALA 的自适应本地聚合 (Adaptive Local Aggregation) 模块"""
 
     def __init__(
         self,
@@ -89,100 +87,87 @@ class ALA:
         self.feature_dim = feature_dim
         self.device = device
 
-        self.weights = None  # Learnable local aggregation weights
+        self.weights = None  # 可学习的本地聚合权重
         self.start_phase = True
 
     def adaptive_local_aggregation(
-        self, global_model: nn.Module, local_model: nn.Module
+        self, global_model: torch.nn.Module, local_model: torch.nn.Module
     ):
         """
-        Apply adaptive local aggregation to initialize local model.
+        应用自适应本地聚合来初始化本地模型。
 
-        Args:
-            global_model: The received global model
-            local_model: The current local model
+        参数:
+            global_model: 接收到的全局模型
+            local_model: 当前的本地模型
         """
-        # Randomly sample partial local training data
+        # 随机采样部分本地训练数据进行权重优化抽样过程
         rand_ratio = self.rand_percent / 100
         rand_num = int(rand_ratio * len(self.train_data))
         rand_idx = random.randint(0, len(self.train_data) - rand_num)
 
-        # Use Subset to create a proper Dataset for DataLoader
-        # Slicing the dataset directly might return a tuple of tensors (x, y)
-        # which DataLoader interprets incorrectly as two samples
+        # 为聚合权重优化准备采样数据
         indices = list(range(rand_idx, rand_idx + rand_num))
-        subset = torch.utils.data.Subset(self.train_data, indices)
-
+        subset = Subset(self.train_data, indices)
         rand_loader = DataLoader(subset, self.batch_size, drop_last=False)
 
-        # Get parameter references
+        # 获取参数引用
         params_g = list(global_model.parameters())
         params = list(local_model.parameters())
 
-        # Deactivate ALA at the 1st communication iteration
+        # 如果本地模型和全局模型完全一致（例如初始轮次），则跳过 ALA
         if torch.sum(params_g[0] - params[0]) == 0:
             return
 
-        # Preserve all updates in the lower layers
+        # 保留底层的所有更新内容
         if self.layer_idx > 0:
             for param, param_g in zip(
                 params[: -self.layer_idx], params_g[: -self.layer_idx]
             ):
                 param.data = param_g.data.clone()
 
-        # Temp local model only for weight learning
-        model_t = get_model(self.model_name, self.dataset_name, self.feature_dim).to(
-            self.device
-        )
+        # 初始化用于精炼聚合权重的辅助模型
+        model_t = get_model(self.model_name, self.dataset_name, self.feature_dim)
+        model_t.to(self.device)
         model_t.load_state_dict(local_model.state_dict())
         params_t = list(model_t.parameters())
 
-        # Only consider higher layers
-        if self.layer_idx > 0:
-            params_p = params[-self.layer_idx :]
-            params_gp = params_g[-self.layer_idx :]
-            params_tp = params_t[-self.layer_idx :]
-        else:
-            # If layer_idx == 0, apply ALA to all layers
-            params_p = params
-            params_gp = params_g
-            params_tp = params_t
+        # 选择 ALA 的候选层；如果 layer_idx 为 0，则默认选择所有层
+        params_p = params[-self.layer_idx :]
+        params_gp = params_g[-self.layer_idx :]
+        params_tp = params_t[-self.layer_idx :]
 
-        # Freeze lower layers to reduce computational cost
+        # 冻结低层参数以减少计算开销
         if self.layer_idx > 0:
             for param in params_t[: -self.layer_idx]:
                 param.requires_grad = False
 
-        # Optimizer for weight learning (lr=0 as we manually update)
+        # 使用占位优化器；权重将通过 ALA 特定的推导过程手动更新
         optimizer = torch.optim.SGD(params_tp, lr=0)
 
-        # Initialize weights to all ones in the beginning
+        # 初始时将权重初始化为全 1
         if self.weights is None:
             self.weights = [
                 torch.ones_like(param.data).to(self.device) for param in params_p
             ]
 
-        # Initialize higher layers in temp local model
+        # 初始化辅助模型中的高层参数
         for param_t, param, param_g, weight in zip(
             params_tp, params_p, params_gp, self.weights
         ):
             param_t.data = param + (param_g - param) * weight
 
-        # Weight learning loop
+        # 权重学习循环
         loss_t = []
         losses = []
         while True:
             for x, y in rand_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 optimizer.zero_grad()
-
-                # Forward pass
                 output, _ = model_t(x)
-
                 loss = ce_loss(output, y)
                 loss.backward()
 
-                # Update weights based on gradients
+                # 利用 ALA 梯度推导新的聚合权重
                 for param_t, param, param_g, weight in zip(
                     params_tp, params_p, params_gp, self.weights
                 ):
@@ -191,7 +176,7 @@ class ALA:
                         weight - self.eta * (param_t.grad * (param_g - param)), 0, 1
                     )
 
-                # Update temp local model with new weights
+                # 使用更新后的权重执行自适应本地聚合步骤
                 for param_t, param, param_g, weight in zip(
                     params_tp, params_p, params_gp, self.weights
                 ):
@@ -200,25 +185,25 @@ class ALA:
                 loss_t.append(loss.item())
             losses.append(np.mean(loss_t))
 
-            # Only train one epoch in subsequent iterations
+            # 在随后的迭代中仅训练一个 epoch
             if not self.start_phase:
                 break
 
-            # Train until convergence in the first iteration
+            # 在第一轮迭代中训练至收敛
             if (
                 len(losses) > self.num_pre_loss
                 and np.std(losses[-self.num_pre_loss :]) < self.threshold
             ):
                 break
 
-        # Apply learned aggregation to local model
+        # 将学习到的聚合参数应用到本地模型中
         for param, param_t in zip(params_p, params_tp):
             param.data = param_t.data.clone()
 
 
 def client_worker(params):
     """
-    FedALA client worker with adaptive local aggregation.
+    带有自适应本地聚合的 FedALA 客户端 worker 进程。
     """
     (
         client_id,
@@ -241,14 +226,13 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # Initialize models
+    # 初始化模型
     global_model = get_model(model_name, dataset_name, feature_dim).to(device)
     global_model.load_state_dict(global_model_state)
-
     local_model = get_model(model_name, dataset_name, feature_dim).to(device)
     local_model.load_state_dict(local_model_state)
 
-    # Initialize ALA module
+    # 初始化 ALA 模块
     ala = ALA(
         client_id=client_id,
         train_data=train_set,
@@ -264,24 +248,18 @@ def client_worker(params):
         feature_dim=feature_dim,
     )
 
-    # Round 1 (r=0): skip ALA, use w=1 (initial value)
-    # Round 2 (r=1): ALA train to convergence (start_phase=True)
-    # Round 3+ (r>=2): ALA train once (start_phase=False)
-    if r == 0:
-        # Skip ALA in first round, weights remain None (will be initialized to ones in return)
-        pass
-    else:
-        # Set saved weights if available (r>=1), move to correct device
-        if saved_weights is not None:
-            ala.weights = [w.to(device) for w in saved_weights]
-        # r=1: start_phase remains True (train to convergence)
-        # r>=2: set start_phase to False (train once)
-        if r >= 2:
-            ala.start_phase = False
-        # Apply adaptive local aggregation
-        ala.adaptive_local_aggregation(global_model, local_model)
+    # 如果存在（非首次参与），则加载先前学习到的聚合权重
+    if saved_weights is not None:
+        ala.weights = [w.to(device) for w in saved_weights]
 
-    # Standard local training
+    # 确定 ALA 阶段：从未参与过的客户端（无权重）执行收敛学习，
+    # 而对于具有聚合历史记录的客户端，则进行后续的微观调优。
+    ala.start_phase = saved_weights is None
+
+    # 执行 ALA（内部逻辑会自动处理模型一致的情况并跳过）
+    ala.adaptive_local_aggregation(global_model, local_model)
+
+    # 执行标准的本地训练流程
     optimizer = torch.optim.SGD(local_model.parameters(), lr=lr)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
@@ -290,22 +268,17 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-
-            # Forward pass
             output, _ = local_model(x)
-
             loss = ce_loss(output, y)
-
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item()
             num_batches += 1
-
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-    # Return results (move to CPU)
+    # 返回结果（移动至 CPU 以节省显存空间资源容量详情信息备注）
     model_state = {k: v.cpu() for k, v in local_model.state_dict().items()}
     weights_cpu = None
     if ala.weights is not None:
@@ -315,11 +288,12 @@ def client_worker(params):
 
 class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
-        # FedALA is a personalized FL method
+        # FedALA 是一种个性化联邦学习 (pFL) 方法
         super().__init__(True, args)
         self.clients_weights = [None] * self.num_clients
 
     def fit(self):
+        """运行 FedALA 训练流程"""
         num_join_clients = int(self.num_clients * self.args.join_ratio)
         num_join_clients = max(1, num_join_clients)
 
@@ -327,13 +301,13 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- FedALA Round {r + 1}/{self.rounds} ---")
 
-            # Select clients
+            # 选择本轮参与的客户端
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
             )
             print(f"Selected clients: {selected_clients}")
 
-            # Prepare parameters for parallel execution
+            # 为并行执行准备参数配置
             global_model_state_cpu = {
                 k: v.cpu() for k, v in self.model.state_dict().items()
             }
@@ -362,7 +336,7 @@ class Server(BaseServer):
                 for i in selected_clients
             ]
 
-            # Run parallel client training
+            # 运行并行客户端训练任务
             results = run_parallel_clients(
                 client_worker=client_worker,
                 parameters=p,
@@ -370,8 +344,7 @@ class Server(BaseServer):
                 mp=self.mp,
             )
 
-            # Process results
-            # Calculate total loss, get states and weights of selected clients
+            # 处理结果：计算总损失，获取所选客户端的状态和权重信息清单。
             total_loss = 0.0
             selected_states = []
             current_weights = []
@@ -394,8 +367,8 @@ class Server(BaseServer):
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-
     def save(self):
+        """保存实验结果和模型状态"""
         f = {
             "acc": self.acc,
             "loss": self.loss,

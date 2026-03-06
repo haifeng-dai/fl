@@ -85,31 +85,31 @@ class BaseServer:
 
     def evaluate(self, model_states=None, protos=None):
         """
-        Smart evaluation interface that automatically switches between global
-        and personalized evaluation, with optional prototype matching.
+        智能评估接口：自动在全局评估与个性化评估之间切换，
+        并支持可选的原型匹配功能。
 
-        Args:
-            model_states: Optional list of state dicts to use for evaluation.
-                          If None, defaults to self.clients_state.
-            protos: Optional current global prototypes (Dict or Tensor).
+        参数说明:
+            model_states: (可选) 用于进行评估的模型状态字典列表。
+                          如果为 None，则默认使用 self.clients_state。
+            protos: (可选) 当前用于评估的全局原型参数 (Dict 或 Tensor 格式)。
         """
-        # 1. State Protection: backup global model if in pFL mode
+        # 1. 状态保存保护：若处于 pFL (个性化联邦学习) 模式下，则备份全局模型
         if self.pfl:
             global_backup = {
                 k: v.cpu().clone() for k, v in self.model.state_dict().items()
             }
 
-        # 2. Model-based Evaluation
+        # 2. 基于普通模型的指标评估
         if not self.pfl:
-            # Mode A: Traditional/Global FL
+            # 模式 A: 传统/全局联邦学习
             acc = evaluate_model(self.model, self.test_set, self.device)
             self.acc.append(acc)
         else:
-            # Mode B: Personalized FL
+            # 模式 B: 个性化联邦学习 (pFL)
             accs = []
             self.model.to(self.device)
 
-            # Use provided states or fallback to instance state
+            # 使用提供传入的状态列表或回退使用实例自身的 clients_state
             target_states = (
                 model_states if model_states is not None else self.clients_state
             )
@@ -123,9 +123,9 @@ class BaseServer:
                 accs.append(evaluate_model(self.model, self.test_set[i], self.device))
             self.acc.append(sum(accs) / len(accs) if accs else 0.0)
 
-        # 3. Prototype-based Evaluation (Optional)
+        # 3. 基于原型的指标评估（可选调用）
         if protos is not None:
-            # Standardize protos to Tensor [C, d]
+            # 将所传原型参数标准化为 Tensor 形态 [C, d]
             if isinstance(protos, dict):
                 proto_tensor = torch.zeros(
                     self.num_class, self.args.feature_dim, device=self.device
@@ -141,7 +141,7 @@ class BaseServer:
                 )
             else:
                 p_accs = []
-                # Re-evaluate prototypes using the same target_states for consistency
+                # 为保持一致性，使用相同的 target_states 来重新评估对应的原型参数
                 target_states = (
                     model_states if model_states is not None else self.clients_state
                 )
@@ -155,7 +155,7 @@ class BaseServer:
                 p_acc = sum(p_accs) / len(p_accs) if p_accs else 0.0
             self.acc_proto.append(p_acc)
 
-        # 4. State Restoration
+        # 4. 模型状态恢复复原
         if self.pfl:
             self.model.load_state_dict(global_backup)
 
