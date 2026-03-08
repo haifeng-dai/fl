@@ -1,6 +1,6 @@
 import argparse
-import copy
-import time, os
+import os
+import time
 
 import numpy as np
 import torch
@@ -12,7 +12,6 @@ from .utils import (
     get_model,
     kl_loss,
     param_aggregate,
-    run_parallel_clients,
 )
 
 
@@ -82,24 +81,13 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-
-            # 模型前向传播
-            out_g, _ = global_model(x)
-            out_l, _ = local_model(x)
-
-            # 标准交叉熵损失
+            out_g, _, _ = global_model(x)
+            out_l, _, _ = local_model(x)
             ce_g = ce_loss(out_g, y)
             ce_l = ce_loss(out_l, y)
 
             # 互学习损失 (KL 散度)
-            # KL(P || Q) -> P 作为目标 (需 detach)，Q 作为评估输入 (底层使用 log_softmax)
-
-            # 全局模型损失：CE + beta * KL(Local || Global)
-            # 全局模型从本地模型中吸收知识
             loss_kl_g = kl_loss(out_g, out_l.detach())
-
-            # 本地模型损失：CE + alpha * KL(Global || Local)
-            # 本地模型从全局模型中吸收知识
             loss_kl_l = kl_loss(out_l, out_g.detach())
 
             loss_g = ce_g + beta_fml * loss_kl_g
@@ -133,6 +121,9 @@ class Server(BaseServer):
         super().__init__(True, args)
 
         self.loss_g = []
+        self.acc_g = []
+        # 聚合所有客户端的测试集用于全局模型评估
+        self.test_set_global = torch.utils.data.ConcatDataset(list(self.test_set.values()))
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -165,13 +156,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
             total_loss_g = 0.0
@@ -194,19 +179,25 @@ class Server(BaseServer):
             # 聚合全局模型参数
             self.model.load_state_dict(param_aggregate(selected_states_g, norm_weights))
 
+            # 评估个性化模型准确率 (BaseServer.evaluate 在 pfl=True 时计算各客户端本地模型在其测试集上的均值)
             self.evaluate()
+            # 评估聚合后的全局模型在全量测试集上的准确率
+            acc_g = evaluate_model(self.model, self.test_set_global, self.device)
+            self.acc_g.append(acc_g)
+
             print(
-                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}"
+                f"Acc Global: {acc_g:.2f}%, Acc Local: {self.acc[-1]:.2f}%, "
+                f"Loss Global: {self.loss_g[-1]:.4f}, Loss Local: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
         f = {
-            "acc": self.acc,
-            "loss": {"model": self.loss, "global": self.loss_g},
+            "acc": {"local": self.acc, "global": self.acc_g},
+            "loss": {"local": self.loss, "global": self.loss_g},
             "state_dict": {
                 "global": self.model.state_dict(),
                 "client": self.clients_state,
             },
         }
-        super().deal_save(f)
+        self.deal_save(f)

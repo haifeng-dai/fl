@@ -35,7 +35,7 @@ class ResNet18(nn.Module):
 
         # 获取特征维度
         # 根据数据集创建对应的 dummy input
-        extractor = nn.Sequential(
+        self.extractor = nn.Sequential(
             self.resnet.conv1,
             self.resnet.bn1,
             self.resnet.relu,
@@ -52,25 +52,25 @@ class ResNet18(nn.Module):
         elif dataset_name in ["cifar10", "cifar100", "svhn"]:
             dummy_input = torch.randn(1, 3, 32, 32)
         else:
-            # Default large image
+            # 默认大图模式
             dummy_input = torch.randn(1, 3, 224, 224)
 
-        dim = extractor(dummy_input).shape[1]
+        dim = self.extractor(dummy_input).shape[1]
 
-        # 特征提取器
-        # 我们按照 ResNet 的标准顺序重新组织 layer
-        self.extractor = nn.Sequential(
-            extractor,
+        # 投影层
+        self.projection = nn.Sequential(
             nn.Linear(dim, feature_dim),
+            nn.ReLU(inplace=True),
         )
 
         # 分类头
         self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, x):
-        feature = self.extractor(x)
+        embedding = self.extractor(x)
+        feature = self.projection(embedding)
         logits = self.classifier(feature)
-        return logits, feature
+        return logits, feature, embedding
 
 
 class ResNet50(nn.Module):
@@ -121,7 +121,7 @@ class ResNet50(nn.Module):
         elif dataset_name in ["cifar10", "cifar100", "svhn"]:
             dummy_input = torch.randn(1, 3, 32, 32)
         else:
-            # Default large image
+            # 默认大图模式
             dummy_input = torch.randn(1, 3, 224, 224)
 
         dim = extractor(dummy_input).shape[1]

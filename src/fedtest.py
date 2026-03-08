@@ -1,18 +1,15 @@
 import argparse
-import time
 import os
+import time
+from collections import defaultdict
 
 import numpy as np
 import torch
-from collections import defaultdict
 
 from .utils import (
     BaseServer,
     ce_loss,
-    evaluate_model,
-    evaluate_prototype,
     get_model,
-    run_parallel_clients,
     mse_loss,
 )
 
@@ -134,7 +131,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, feature = model(x)
+            logits, feature, _ = model(x)
 
             loss_ce = ce_loss(logits, y)
 
@@ -161,7 +158,7 @@ def client_worker(params):
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            _, features = model(x)
+            _, features, _ = model(x)
             proto_sum.index_add_(0, y, features)
             ones = torch.ones_like(y, dtype=torch.float)
             proto_count.index_add_(0, y, ones)
@@ -218,13 +215,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
             selected_states = []

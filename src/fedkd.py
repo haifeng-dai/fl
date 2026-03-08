@@ -11,7 +11,6 @@ from .utils import (
     get_model,
     kl_loss,
     mse_loss,
-    run_parallel_clients,
 )
 
 
@@ -187,8 +186,8 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, rep = model(x)
-            output_g, rep_g = model_g(x)
+            output, rep, _ = model(x)
+            output_g, rep_g, _ = model_g(x)
 
             # 基础任务预测损失 (Cross Entropy)
             loss_ce = ce_loss(output, y)
@@ -281,13 +280,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             # 汇集各客户端回传结果并更新服务器端存储的客户端本地状态
             total_loss = 0.0

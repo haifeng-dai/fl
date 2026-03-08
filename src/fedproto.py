@@ -1,18 +1,15 @@
 import argparse
-import time
 import os
+import time
+from collections import defaultdict
 
 import numpy as np
 import torch
-from collections import defaultdict
 
 from .utils import (
     BaseServer,
     ce_loss,
-    evaluate_model,
-    evaluate_prototype,
     get_model,
-    run_parallel_clients,
     mse_loss,
 )
 
@@ -31,21 +28,6 @@ def add_args(parser: argparse.ArgumentParser):
 def get_path(args):
     args.file_name = f"{args.name_pre}_{args.mu}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
-
-
-def proto_cluster(protos_list):
-    """按类别汇总聚合来自多个客户端的原型向量。"""
-    proto_clusters = defaultdict(list)
-    for protos in protos_list:
-        for k, v in protos.items():
-            proto_clusters[k].append(v)
-
-    avg_protos = {}
-    for k, v in proto_clusters.items():
-        protos = torch.stack(v)
-        avg_protos[k] = torch.mean(protos, dim=0).detach()
-
-    return avg_protos
 
 
 def client_worker(params):
@@ -85,7 +67,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, feature = model(x)
+            logits, feature, _ = model(x)
 
             loss_ce = ce_loss(logits, y)
 
@@ -112,7 +94,7 @@ def client_worker(params):
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            _, features = model(x)
+            _, features, _ = model(x)
             proto_sum.index_add_(0, y, features)
             ones = torch.ones_like(y, dtype=torch.float)
             proto_count.index_add_(0, y, ones)
@@ -168,13 +150,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
             selected_protos = []
@@ -185,13 +161,33 @@ class Server(BaseServer):
                 selected_protos.append(client_proto)
             self.loss.append(total_loss / num_join_clients)
 
-            self.global_protos = proto_cluster(selected_protos)
+            self.global_protos = self.aggregate_protos(selected_protos)
             self.evaluate(protos=self.global_protos)
 
             print(
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Proto Accuracy: {self.acc_proto[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+
+    def aggregate_protos(self, all_local_protos):
+        """按类别汇总聚合各个客户端上传的本地原型，与 Server 对象进行强绑定。"""
+        proto_clusters = defaultdict(list)
+        for protos in all_local_protos:
+            for k, v in protos.items():
+                proto_clusters[k].append(v)
+
+        avg_protos = {}
+        # 计算本轮参与了更新的类别的对应平均原型
+        for k, v in proto_clusters.items():
+            protos = torch.stack(v)
+            avg_protos[k] = torch.mean(protos, dim=0).detach()
+
+        # 对于本轮没有任何客户端上传的新类别原型，保留老旧历史状态以防遗失 (和 FedProc 逻辑对齐)
+        for k, v in self.global_protos.items():
+            if k not in avg_protos:
+                avg_protos[k] = v
+
+        return avg_protos
 
     def save(self):
         f = {

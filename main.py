@@ -63,10 +63,10 @@ def get_args():
     )
     args, _ = parser.parse_known_args()
 
-    # 2. Build Full Parser
+    # 2. 构建完整的解析器
     full_parser = argparse.ArgumentParser(parents=[parser])
 
-    # Data Args
+    # 数据相关参数
     data_group = full_parser.add_argument_group("Data & Partitioning Arguments")
     data_group.add_argument(
         "--dataset",
@@ -98,7 +98,7 @@ def get_args():
         "--test_ratio", type=float, default=0.2, help="Ratio of test data"
     )
 
-    # Training Args
+    # 训练相关参数
     train_group = full_parser.add_argument_group("Training Arguments")
     train_group.add_argument(
         "--join_ratio",
@@ -133,7 +133,7 @@ def get_args():
         "--times", type=int, default=1, help="Number of times to run the experiment"
     )
 
-    # Algorithm Specific Args
+    # 算法专属参数
     try:
         algo_module = importlib.import_module(f"src.{args.algo}")
     except ModuleNotFoundError:

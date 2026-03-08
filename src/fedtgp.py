@@ -1,4 +1,5 @@
-import argparse, os
+import argparse
+import os
 import time
 from collections import defaultdict
 
@@ -8,11 +9,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from .utils import BaseServer, get_model, run_parallel_clients, mse_loss, ce_loss
+from .utils import BaseServer, ce_loss, get_model, mse_loss
 
 
 def add_args(parser: argparse.ArgumentParser):
-    """Add FedTGP specific arguments"""
+    """添加 FedTGP 相关的特定参数"""
     group = parser.add_argument_group("FedTGP Specific Arguments")
     group.add_argument(
         "--lamda_",
@@ -60,8 +61,8 @@ class TGP(nn.Module):
 
     def forward(self, class_ids):
         """
-        Args:
-            class_ids: tensor of class indices or list of class indices
+        参数:
+            class_ids: 类别索引的张量 (Tensor) 或列表 (List)
         """
         if isinstance(class_ids, list):
             class_ids = torch.tensor(class_ids, device=self.device)
@@ -137,7 +138,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, features = model(x)
+            output, features, _ = model(x)
 
             l_ce = ce_loss(output, y)
             l_proto = torch.tensor(0.0, device=device)
@@ -167,7 +168,7 @@ def client_worker(params):
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            _, features = model(x)
+            _, features, _ = model(x)
             proto_sum.index_add_(0, y, features)
             ones = torch.ones_like(y, dtype=torch.float)
             proto_count.index_add_(0, y, ones)
@@ -238,13 +239,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             total_loss_ce = 0.0
             total_loss_proto = 0.0
@@ -301,7 +296,9 @@ class Server(BaseServer):
         optimizer = torch.optim.SGD(self.tgp.parameters(), lr=self.args.server_lr)
 
         for _ in range(self.args.server_epochs):
-            proto_loader = DataLoader(uploaded_protos, batch_size=self.args.batch_size, shuffle=True)
+            proto_loader = DataLoader(
+                uploaded_protos, batch_size=self.args.batch_size, shuffle=True
+            )
             for proto_batch, labels_batch in proto_loader:
                 proto_batch = proto_batch.to(self.device)
                 labels_batch = labels_batch.to(self.device, dtype=torch.long)

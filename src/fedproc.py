@@ -1,11 +1,12 @@
 import argparse
-import time
 import os
+import time
+
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
 
-from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
+from .utils import BaseServer, ce_loss, get_model
 
 
 def get_path(args):
@@ -47,7 +48,7 @@ def client_worker(params):
         for data, target in loader:
             data, target = data.to(device), target.to(device)
             optimizer.zero_grad()
-            output, features = model(data)
+            output, features, _ = model(data)
 
             # 标准交叉熵分类损失
             loss_ce = ce_loss(output, target)
@@ -77,7 +78,7 @@ def client_worker(params):
     with torch.no_grad():
         for data, target in loader:
             data, target = data.to(device), target.to(device)
-            _, features = model(data)
+            _, features, _ = model(data)
 
             sum_features.index_add_(0, target, features)
             sum_counts.index_add_(
@@ -115,7 +116,6 @@ class Server(BaseServer):
 
             # 计算动态权重系数 alpha = 1 - r/rounds
             alpha = 1.0 - (r / self.rounds)
-
             p = [
                 [
                     i,
@@ -134,29 +134,20 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
             selected_states = []
             all_local_protos = []
-
-            for idx, i in enumerate(selected_clients):
-                loss, state, local_protos = results[idx]
+            for i in selected_clients:
+                loss, state, local_protos = results[i]
                 total_loss += loss
                 selected_states.append(state)
                 all_local_protos.append(local_protos)
-
             self.loss.append(total_loss / num_join_clients)
 
             # 聚合模型参数
             self.aggregate(selected_states)
-
             # 聚合原型向量
             self.global_protos = self.aggregate_protos(all_local_protos)
 
@@ -165,17 +156,6 @@ class Server(BaseServer):
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
-
-    def save(self):
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "global": self.model.state_dict(),
-                "proto": self.global_protos,
-            },
-        }
-        self.deal_save(f)
 
     def aggregate_protos(self, all_local_protos):
         new_protos = torch.zeros_like(self.global_protos)
@@ -188,7 +168,17 @@ class Server(BaseServer):
 
         mask = counts > 0
         new_protos[mask] /= counts[mask].unsqueeze(1)
-        # 此处亦可使用动量更新，但在基础实现中简单平均是标准做法
         new_protos[~mask] = self.global_protos[~mask]
 
         return new_protos
+
+    def save(self):
+        f = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "state_dict": {
+                "global": self.model.state_dict(),
+                "proto": self.global_protos,
+            },
+        }
+        self.deal_save(f)

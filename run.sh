@@ -14,7 +14,7 @@
 # # personalized algorithms
 # export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
-export ALGOS="feddyn,fedfm,fedlsa"
+export ALGOS="fedproto,local,fedsa"
 # export ALGOS="fedala"
 
 # =============

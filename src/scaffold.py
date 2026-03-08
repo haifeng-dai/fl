@@ -1,12 +1,17 @@
 import argparse
-import copy
-import time
 import os
+import time
+
+import numpy as np
 import torch
 import torch.optim as optim
-import numpy as np
 
-from .utils import BaseServer, ce_loss, get_model, run_parallel_clients, param_aggregate
+from .utils import (
+    BaseServer,
+    ce_loss,
+    get_model,
+    param_aggregate,
+)
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -81,7 +86,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, _ = model(x)
+            logits, _, _ = model(x)
             loss = ce_loss(logits, y)
 
             optimizer.zero_grad()
@@ -164,13 +169,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             # 汇集并处理各客户端结果
             total_loss = 0.0
@@ -222,7 +221,6 @@ class Server(BaseServer):
             "loss": self.loss,
             "state_dict": {
                 "global": self.model.state_dict(),
-                "aux": {"server_c": self.c_global, "clients_c": self.c_local},
             },
         }
         self.deal_save(f)

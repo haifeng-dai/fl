@@ -10,7 +10,6 @@ from .utils import (
     ce_loss,
     get_model,
     param_aggregate,
-    run_parallel_clients,
 )
 
 
@@ -47,7 +46,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, _ = model(x)
+            output, _, _ = model(x)
             loss = ce_loss(output, y)
             optimizer.zero_grad()
             loss.backward()
@@ -98,8 +97,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(client_worker, p, self.gpu_pools, self.mp)
+            results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
             new_bodies = []

@@ -26,7 +26,7 @@ def process(output_dir="./datasets/raw"):
     all_x_list = []
     all_y_list = []
 
-    print("-> 正在下载/处理 Flowers102 (这可能需要一些时间)...")
+    print("-> Downloading/Processing Flowers102 (this may take a while)...")
 
     for split in splits:
         dataset = datasets.Flowers102(
@@ -52,7 +52,7 @@ def process(output_dir="./datasets/raw"):
     # 保存
     save_path = os.path.join(output_dir, "flowers102_raw.pt")
     torch.save(processed_data, save_path)
-    print(f"-> Flowers102 原始数据已保存至 {save_path}")
-    print(f"   数据形状: {all_x.shape}, 标签形状: {all_y.shape}")
+    print(f"-> Flowers102 raw data saved to {save_path}")
+    print(f"   Data shape: {all_x.shape}, Labels shape: {all_y.shape}")
 
     return processed_data

@@ -11,7 +11,6 @@ from .utils import (
     BaseServer,
     ce_loss,
     get_model,
-    run_parallel_clients,
 )
 
 
@@ -57,7 +56,7 @@ def get_path(args):
 
 def separation_loss(anchors, tau=0.1):
     """
-    计算分离损失 (L_SEP)，公式如下：
+    计算分离损失 (L_SEP)，公式 (4)：
     L_SEP = log( sum_{j!=i} exp(a_i * a_j^T / tau) / (C-1) )
     """
     C = anchors.shape[0]
@@ -78,15 +77,46 @@ def separation_loss(anchors, tau=0.1):
     return torch.log(sum_exp + 1e-20).mean()
 
 
-class AnchorMapping(nn.Module):
+class FedLSAModelWrapper(nn.Module):
     """
-    两层 MLP 映射函数 Theta(.) 用于将随机向量 R 映射到语义锚点 A。
+    FedLSA 模型包装器：在基础模型的 projection 和 classifier 之间插入 L2 归一化层。
+
+    论文架构: Φ_m = ψ_m ∘ φ_m ∘ ϕ_m
+      - ψ_m (extractor):  x → z (embedding ∈ R^I)
+      - φ_m (projection): z → φ(z) (feature ∈ R^L)
+      - nor():             φ(z) → h = nor(φ(z)) (超球面嵌入 ∈ R^L)
+      - ϕ_m (classifier):  h → q = ϕ(h) (logits ∈ R^C)
+
+    forward 返回: (logits, h, embedding)
+      - logits = ϕ(nor(φ(ψ(x))))
+      - h = nor(φ(ψ(x))) ∈ R^L
+      - embedding = ψ(x) ∈ R^I
     """
 
-    def __init__(self, feature_dim):
+    def __init__(self, base_model: nn.Module):
+        super().__init__()
+        self.extractor = base_model.extractor
+        self.projection = base_model.projection
+        self.classifier = base_model.classifier
+
+    def forward(self, x):
+        embedding = self.extractor(x)  # z = ψ(x) ∈ R^I
+        feature = self.projection(embedding)  # φ(z) ∈ R^L
+        h = F.normalize(feature, p=2, dim=1)  # h = nor(φ(z)) ∈ R^L
+        logits = self.classifier(h)  # q = ϕ(h) ∈ R^C
+        return logits, h, embedding
+
+
+class AnchorMapping(nn.Module):
+    """
+    两层 MLP 映射函数 Theta(.) 用于将随机向量 R (embedding 空间) 映射到语义锚点 A (feature 空间)。
+    论文定义: Theta: R^{C x I} -> R^{C x L}
+    """
+
+    def __init__(self, embedding_dim: int, feature_dim: int):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim),
+            nn.Linear(embedding_dim, feature_dim),
             nn.ReLU(),
             nn.Linear(feature_dim, feature_dim),
         )
@@ -97,7 +127,13 @@ class AnchorMapping(nn.Module):
 
 def client_worker(params):
     """
-    FedLSA 基于位置感知语义锚点 (Location-aware Semantic Anchors) 的本地训练流程 (计算紧凑度损失 Compactness Loss)。
+    FedLSA 客户端训练流程。
+
+    严格对齐伪代码 Algorithm 1 (Client Side, Lines 1-13):
+      L4:  h_i = nor(φ_m(ψ_m(x_i)))
+      L6:  L_CE ← (softmax(ϕ_m(h_i)), y_i)     [公式 (9), 不带 τ]
+      L8:  L_COM ← ({a_j}, h_i)                  [公式 (8), 带 τ]
+      L9:  L_HC = L_CE + λ * L_COM               [公式 (10)]
     """
     (
         _,
@@ -115,8 +151,10 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    # 1. 初始化模型（使用 FedLSA 包装器注入归一化）
+    base_model = get_model(model_name, dataset_name, feature_dim)
+    base_model.load_state_dict(model_state)
+    model = FedLSAModelWrapper(base_model).to(device)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
@@ -129,24 +167,22 @@ def client_worker(params):
     global_anchors = global_anchors.to(device).detach()
     anchors_norm = F.normalize(global_anchors, p=2, dim=1)
 
+    # 2. 训练循环 (伪代码 L3-L11)
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            _, features = model(x)
 
-            # 伪代码第 4 行: h_i = nor(phi(psi(x_i)))
-            # 必须先归一化特征，再送入分类器，保证与服务端 L_ACE 的输入分布一致
-            features_norm = F.normalize(features, p=2, dim=1)
+            # L4: h = nor(φ(ψ(x)))，模型内部已完成归一化
+            logits, h, _ = model(x)
 
-            # L_CE: 使用归一化特征通过分类器计算交叉熵损失
-            logits = model.classifier(features_norm)
+            # 公式 (9): L_CE = -1_{y_i} log(softmax(q_i))，不带 τ
             loss_ce = ce_loss(logits, y)
 
-            # L_COM: 带有温度系数 (Temperature) 的紧凑度损失
-            logits_com = torch.matmul(features_norm, anchors_norm.T) / tau
+            # 公式 (8): L_COM = -log(exp(a_{y_i}^T h_i / τ) / Σ_j exp(a_j^T h_i / τ))
+            logits_com = torch.matmul(h, anchors_norm.T) / tau
             loss_com = ce_loss(logits_com, y)
 
-            # 整体损失: L_HC = L_CE + lambda * L_COM
+            # 公式 (10): L_HC = L_CE + λ * L_COM
             loss = loss_ce + lambda_com * loss_com
 
             optimizer.zero_grad()
@@ -165,12 +201,21 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
 
-        # 1. 初始化随机向量 R (可学习)
-        # R 的形状与语义锚点保持一致: [C, d]
-        self.R = torch.randn(self.num_class, self.args.feature_dim, device=self.device)
+        # 从模型的 projection 层推断 embedding 维度 I
+        # projection 的第一个 Linear 层: nn.Linear(I, L)
+        embedding_dim = self.model.projection[0].in_features
 
-        # 2. 初始化映射函数 Theta (即 MLP)
-        self.anchor_mapping = AnchorMapping(self.args.feature_dim).to(self.device)
+        # 将基础模型包装为 FedLSA 模型（注入归一化层）
+        self.model = FedLSAModelWrapper(self.model)
+
+        # 1. 初始化随机向量 R (可学习)
+        # 论文定义: R ∈ R^{C × I}，在 embedding 空间中
+        self.R = torch.randn(self.num_class, embedding_dim, device=self.device)
+
+        # 2. 初始化映射函数 Theta: R^I -> R^L (从 embedding 空间映射到 feature 空间)
+        self.anchor_mapping = AnchorMapping(embedding_dim, self.args.feature_dim).to(
+            self.device
+        )
 
         self.labels = torch.arange(self.num_class, device=self.device)
 
@@ -217,13 +262,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
             selected_states = []
@@ -248,9 +287,12 @@ class Server(BaseServer):
 
     def server_optimization(self):
         """
-        使用 L_LSA = L_ACE + alpha * L_SEP 损失优化潜在向量集 R 和锚点映射函数 Theta。
-
-        注意：全局模型 Phi_glo 在此阶段是冻结的，仅仅用于正向评估。
+        伪代码 Algorithm 1 (Server Side, Lines 14-27):
+          L17: A = Θ(R)
+          L19: L_ACE ← (softmax(ϕ_glo(a^i)), y_i)  [公式 (3), 不带 τ]
+          L21: L_SEP ← ({a_j})                       [公式 (4), 带 τ]
+          L22: L_LSA = L_ACE + α * L_SEP              [公式 (5)]
+          L23-24: 更新 R 和 Θ
         """
         self.model.eval()  # 设置模型为评估模式 (即冻结处理)
         self.model.to(self.device)
@@ -274,21 +316,18 @@ class Server(BaseServer):
         print(f"-> Server Optimization for {self.args.server_epochs} epochs...")
 
         for e in range(self.args.server_epochs):
-            # 1. 生成语义锚点 A = Theta(R)
+            # L17: 生成语义锚点 A = Theta(R)
             anchors = self.get_anchors()
 
-            # 为计算损失将锚点特征归一化
-            anchors_norm = F.normalize(anchors, p=2, dim=1)
-
-            # 2. 计算自适应类别能量损失 L_ACE (Adaptive Class Energy Loss)
-            # 使用冻结的全局分类器对锚点进行计算分类
-            logits = self.model.classifier(anchors_norm)
+            # 公式 (3): L_ACE = -1_{y_i} log(softmax(ρ_i))
+            # 其中 ρ_i = ϕ_glo(a_i)，直接将锚点喂入冻结分类器，不带 τ
+            logits = self.model.classifier(anchors)
             loss_ace = ce_loss(logits, self.labels)
 
-            # 3. 计算分离损失 L_SEP (Separation Loss)
+            # 公式 (4): L_SEP，带 τ
             loss_sep = separation_loss(anchors, tau=self.args.tau)
 
-            # 整体服务端优化损失
+            # 公式 (5): L_LSA = L_ACE + α * L_SEP
             loss_lsa = loss_ace + self.args.alpha_sep * loss_sep
 
             optimizer.zero_grad()
@@ -304,42 +343,13 @@ class Server(BaseServer):
         for param in self.model.parameters():
             param.requires_grad = True
 
-    def evaluate(self, **kwargs):
-        """
-        FedLSA 专用评估：必须对特征归一化后再通过分类器，
-        与训练时的流程保持一致（训练时分类器接收的是归一化后的特征）。
-        """
-        loader = torch.utils.data.DataLoader(
-            self.test_set, batch_size=128, shuffle=False
-        )
-        self.model.to(self.device)
-        self.model.eval()
-        correct = 0.0
-        count = 0.0
-        with torch.no_grad():
-            for data, target in loader:
-                data, target = data.to(self.device), target.to(self.device)
-                _, features = self.model(data)
-                features_norm = F.normalize(features, p=2, dim=1)
-                logits = self.model.classifier(features_norm)
-                pred = logits.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
-                count += target.size(0)
-        self.model.cpu()
-        self.acc.append(100.0 * correct / count)
-
     def save(self):
         f = {
             "acc": self.acc,
             "loss": self.loss,
             "state_dict": {
                 "global": self.model.state_dict(),
-                "client": self.clients_state,
                 "proto": self.get_anchors().detach().cpu(),
-                "aux": {
-                    "R": self.R.cpu(),
-                    "anchor_mapping": self.anchor_mapping.state_dict(),
-                },
             },
         }
-        super().deal_save(f)
+        self.deal_save(f)

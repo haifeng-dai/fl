@@ -6,22 +6,27 @@ class HARMLP(nn.Module):
     def __init__(self, input_dim=561, num_classes=6, feature_dim=512):
         super(HARMLP, self).__init__()
 
-        # Feature extractor (Body)
+        # 特征提取器 (主体)
         self.extractor = nn.Sequential(
             nn.Linear(input_dim, 256),
             nn.ReLU(inplace=True),
+        )
+
+        # 投影层
+        self.projection = nn.Sequential(
             nn.Linear(256, feature_dim),
             nn.ReLU(inplace=True),
         )
 
-        # Classifier head
+        # 分类头
         self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, x):
-        # Input shape: (Batch, 561)
+        # 输入形状: (Batch, 561)
         if x.dim() > 2:
             x = x.view(x.size(0), -1)
 
-        feature = self.extractor(x)
+        embedding = self.extractor(x)
+        feature = self.projection(embedding)
         logits = self.classifier(feature)
-        return logits, feature
+        return logits, feature, embedding

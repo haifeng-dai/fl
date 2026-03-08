@@ -1,6 +1,6 @@
 import argparse
-import copy
-import time, os
+import os
+import time
 
 import numpy as np
 import torch
@@ -12,7 +12,6 @@ from .utils import (
     get_model,
     kl_loss,
     param_aggregate,
-    run_parallel_clients,
 )
 
 
@@ -83,20 +82,13 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-
-            # 模型前向传播
-            out_p, _ = proxy_model(x)
-            out_l, _ = local_model(x)
-
-            # 标准交叉熵损失
+            out_p, _, _ = proxy_model(x)
+            out_l, _, _ = local_model(x)
             ce_p = ce_loss(out_p, y)
             ce_l = ce_loss(out_l, y)
 
             # 相互知识蒸馏 (Mutual Distillation, 基于 KL 散度)
-            # KL(Local || Proxy) -> Proxy 模型从 Local 模型学习并聚合知识信息
             loss_kl_p = kl_loss(out_p, out_l.detach())
-
-            # KL(Proxy || Local) -> Local 模型从 Proxy 模型学习并获取全局特征信息
             loss_kl_l = kl_loss(out_l, out_p.detach())
 
             loss_p = ce_p + mu * loss_kl_p
@@ -134,6 +126,7 @@ class Server(BaseServer):
         ]
 
         self.loss_p = []
+        self.acc_p = []
         self.adj_matrix = self.generate_adj_matrix()
 
     def generate_adj_matrix(self):
@@ -194,14 +187,8 @@ class Server(BaseServer):
                 ]
 
             p = [get_client_param(i) for i in selected_clients]
-
             # 2. 启动客户端多进程并行训练
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             # 3. 收集更新客户端状态数据与评估并计算平均损失
             total_loss = 0.0
@@ -217,18 +204,29 @@ class Server(BaseServer):
 
             # 4. 执行预测评估 (基于最新状态的本地个性化模型)
             self.evaluate()
+
+            # 5. 执行代理模型预测评估
+            accs_p = []
+            self.model.to(self.device)
+            for i in range(self.num_clients):
+                self.model.load_state_dict(self.client_states_p[i])
+                accs_p.append(evaluate_model(self.model, self.test_set[i], self.device))
+            self.model.cpu()
+            self.acc_p.append(sum(accs_p) / len(accs_p) if accs_p else 0.0)
+
             print(
-                f"Avg Local Accuracy: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}"
+                f"Avg Local Acc: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}\n"
+                f"Avg Proxy Acc: {self.acc_p[-1]:.2f}%, Avg Proxy Loss: {self.loss_p[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
         f = {
-            "acc": self.acc,
+            "acc": {"model": self.acc, "proxy": self.acc_p},
             "loss": {"model": self.loss, "proxy": self.loss_p},
             "state_dict": {
                 "client": self.clients_state,
                 "proxy": self.client_states_p,
             },
         }
-        super().deal_save(f)
+        self.deal_save(f)

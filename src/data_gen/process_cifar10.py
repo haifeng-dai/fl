@@ -50,6 +50,6 @@ def process(output_dir="./datasets/raw"):
     # 保存处理后的数据到指定目录
     save_path = os.path.join(output_dir, "cifar10_raw.pt")
     torch.save(processed_data, save_path)
-    print(f"-> CIFAR10 原始数据已保存至 {save_path}")
+    print(f"-> CIFAR10 raw data saved to {save_path}")
 
     return processed_data

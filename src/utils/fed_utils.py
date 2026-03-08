@@ -71,7 +71,7 @@ class BaseServer:
                 f"cuda:{gpu_ids[0]}" if torch.cuda.is_available() else "cpu"
             )
             self.client_gpu = {i: first_gpu for i in range(self.num_clients)}
-            print(f"-> 未启用多进程训练，将使用顺序训练 (设备: {self.client_gpu[0]})")
+            print(f"-> Multiprocessing not enabled, using sequential training (Device: {self.client_gpu[0]})")
 
         self.device = gpu_ids[-1]
 
@@ -161,6 +161,18 @@ class BaseServer:
 
         self.model.cpu()
 
+    def run_clients(self, client_worker, parameters):
+        """运行并行或顺序客户端训练。"""
+        if not self.mp:
+            res = {p[0]: client_worker(p) for p in parameters}
+        else:
+            async_results = {
+                p[0]: self.gpu_pools[p[1]].apply_async(client_worker, (p,))
+                for p in parameters
+            }
+            res = {i: r.get() for i, r in async_results.items()}
+        return res
+
     def fit(self, *args, **kwargs):
         raise NotImplementedError
 
@@ -168,7 +180,7 @@ class BaseServer:
         """显式关闭并行池，释放 GPU 资源"""
         if hasattr(self, "gpu_pools"):
             for device, pool in self.gpu_pools.items():
-                print(f"-> 正在关闭设备 {device} 的并行池...")
+                print(f"-> Closing parallel pool on device {device}...")
                 pool.terminate()
                 pool.join()
             # 防止重复关闭

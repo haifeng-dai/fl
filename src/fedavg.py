@@ -5,7 +5,7 @@ import time
 import numpy as np
 import torch
 
-from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
+from .utils import BaseServer, ce_loss, get_model
 
 
 def get_path(args):
@@ -44,7 +44,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, _ = model(x)
+            logits, _, _ = model(x)
             loss = ce_loss(logits, y)
             optimizer.zero_grad()
             loss.backward()
@@ -93,13 +93,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             # 汇集各客户端的回传结果，计算总损失与聚合权重分布
             total_loss = 0.0

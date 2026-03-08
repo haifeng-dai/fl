@@ -1,6 +1,6 @@
 import argparse
-import copy
-import time, os
+import os
+import time
 
 import numpy as np
 import torch
@@ -10,7 +10,6 @@ from .utils import (
     ce_loss,
     get_model,
     param_aggregate,
-    run_parallel_clients,
 )
 
 
@@ -55,7 +54,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, _ = model(x)
+            output, _, _ = model(x)
             loss = ce_loss(output, y)
             optimizer.zero_grad()
             loss.backward()
@@ -85,17 +84,30 @@ class Server(BaseServer):
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- LG-FedAvg Round {r + 1}/{self.rounds} ---")
-            selected_clients = np.random.choice(self.num_clients, num_join_clients, replace=False)
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
 
             # 获取当前的全局共享分类头 (Head)
             global_head_state = self.model.classifier.state_dict()
 
-            p = [[i, self.client_gpu[i], self.clients_state[i], global_head_state,
-                  self.train_sets[i], self.args.model, self.args.dataset, self.args.lr,
-                  self.args.batch_size, self.args.epochs, self.args.feature_dim]
-                 for i in selected_clients]
-
-            results = run_parallel_clients(client_worker, p, self.gpu_pools, self.mp)
+            p = [
+                [
+                    i,
+                    self.client_gpu[i],
+                    self.clients_state[i],
+                    global_head_state,
+                    self.train_sets[i],
+                    self.args.model,
+                    self.args.dataset,
+                    self.args.lr,
+                    self.args.batch_size,
+                    self.args.epochs,
+                    self.args.feature_dim,
+                ]
+                for i in selected_clients
+            ]
+            results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
             new_heads = []
@@ -112,7 +124,9 @@ class Server(BaseServer):
             norm_weights = [w / sum(current_weights) for w in current_weights]
 
             # 仅聚合分类头模块的过程
-            self.model.classifier.load_state_dict(param_aggregate(new_heads, norm_weights))
+            self.model.classifier.load_state_dict(
+                param_aggregate(new_heads, norm_weights)
+            )
 
             self.evaluate()
             print(f"Accuracy: {self.acc[-1]:.2f}%, Loss: {self.loss[-1]:.4f}")
@@ -125,11 +139,15 @@ class Server(BaseServer):
         """
         full_states = []
         # 获取最新的全局分类器并为其加载键前缀
-        global_head_kv = {f"classifier.{k}": v for k, v in self.model.classifier.state_dict().items()}
+        global_head_kv = {
+            f"classifier.{k}": v for k, v in self.model.classifier.state_dict().items()
+        }
 
         for i in range(self.num_clients):
             # 获取当前客户端的本地提取器并添加字典键前缀
-            local_body_kv = {f"extractor.{k}": v for k, v in self.clients_state[i].items()}
+            local_body_kv = {
+                f"extractor.{k}": v for k, v in self.clients_state[i].items()
+            }
             # 合并形成完整的状态字典
             full_state = local_body_kv
             full_state.update(global_head_kv)
@@ -141,7 +159,9 @@ class Server(BaseServer):
     def save(self):
         # 准备用于保存或分析的完整模型 state_dicts
         client_states_full = []
-        global_head_kv = {f"classifier.{k}": v for k, v in self.model.classifier.state_dict().items()}
+        global_head_kv = {
+            f"classifier.{k}": v for k, v in self.model.classifier.state_dict().items()
+        }
         for i in range(self.num_clients):
             full_state = {f"extractor.{k}": v for k, v in self.clients_state[i].items()}
             full_state.update(global_head_kv)
@@ -151,8 +171,8 @@ class Server(BaseServer):
             "acc": self.acc,
             "loss": self.loss,
             "state_dict": {
-                "global": self.model.classifier.state_dict(), # 全局部分 (分享层)
-                "client": client_states_full,                 # 完整的个性化模型聚合
+                "global": self.model.classifier.state_dict(),  # 全局部分 (分享层)
+                "client": client_states_full,  # 完整的个性化模型聚合
             },
         }
         self.deal_save(f)

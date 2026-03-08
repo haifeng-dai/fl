@@ -140,7 +140,7 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     raw_path = os.path.join(raw_dir, f"{dataset_name}_raw.pt")
 
     if not os.path.exists(raw_path):
-        print(f"-> 未找到 {dataset_name} 的原始数据。正在处理...")
+        print(f"-> Raw data for {dataset_name} not found. Processing...")
         module = importlib.import_module(f"src.data_gen.process_{dataset_name}")
         module.process(raw_dir)
 
@@ -159,10 +159,10 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     output_dir = os.path.join("./datasets", dataset_name, part_str)
 
     if os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients:
-        print(f"-> {dataset_name} 的 {part_str} 分区已存在。跳过处理。")
+        print(f"-> {part_str} partition for {dataset_name} already exists. Skipping.")
         return
 
-    print(f"-> 正在划分数据 ({part_str})...")
+    print(f"-> Partitioning data ({part_str})...")
     data = torch.load(raw_path, weights_only=False)
     X, Y = data["x"], data["y"]
 

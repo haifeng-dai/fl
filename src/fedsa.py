@@ -1,4 +1,5 @@
-import argparse, os
+import argparse
+import os
 import time
 
 import numpy as np
@@ -8,10 +9,9 @@ import torch.nn.functional as F
 from .utils import (
     BaseServer,
     ce_loss,
+    mse_loss,
     get_model,
     param_aggregate,
-    run_parallel_clients,
-    evaluate_model,
 )
 
 
@@ -125,7 +125,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, features = model(x)
+            logits, features, _ = model(x)
 
             # 公式 (8): 使用语义锚点作为输入进行分类器校准 (Classifier Calibration)
             output_cc = model.classifier(global_anchors)
@@ -133,9 +133,9 @@ def client_worker(params):
             # 监督分类损失
             loss_ce = ce_loss(logits, y)
 
-            # 公式 (5): 基于锚点的正则化（欧几里得距离）
+            # 公式 (5): 基于锚点的正则化（平滑后的 MSE_loss）
             # 在批处理训练期间，我们使用当前特征作为本地原型的代理
-            loss_r = F.pairwise_distance(features, global_anchors[y], p=2).mean()
+            loss_r = mse_loss(features, global_anchors[y])
 
             # 公式 (7): 边界增强对比损失 (Margin-enhanced Contrastive Loss)
             loss_mcl = mcl_loss(features, global_anchors, num_classes, y, d_star)
@@ -164,14 +164,16 @@ def client_worker(params):
 
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            _, features = model(x)
+            _, features, _ = model(x)
             anchor_sums.index_add_(0, y, features)
             anchor_counts.index_add_(0, y, torch.ones_like(y, dtype=torch.float32))
 
         local_anchors_dict = {}
         for c in torch.where(anchor_counts > 0)[0]:
             c_item = int(c.item())
-            local_anchors_dict[c_item] = (anchor_sums[c_item] / anchor_counts[c_item]).cpu()
+            local_anchors_dict[c_item] = (
+                anchor_sums[c_item] / anchor_counts[c_item]
+            ).cpu()
 
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     return [total_loss / num_batches, model_state, local_anchors_dict]
@@ -226,13 +228,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
             selected_states = []
@@ -268,7 +264,6 @@ class Server(BaseServer):
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-
     def update_global_anchors(self, local_anchors_list, norm_weights):
         """对本地原型进行加权聚合，并对语义锚点执行 EMA（指数移动平均）更新。"""
         new_p_bar = torch.zeros_like(self.anchors, device=self.device)
@@ -286,7 +281,9 @@ class Server(BaseServer):
         # 公式 (10): A_t+1 = alpha * A_t + (1 - alpha) * P_bar_t
         alpha = self.args.alpha_sa
         mask_cpu = mask.cpu()
-        self.anchors[mask_cpu] = alpha * self.anchors[mask_cpu] + (1 - alpha) * new_p_bar[mask].cpu()
+        self.anchors[mask_cpu] = (
+            alpha * self.anchors[mask_cpu] + (1 - alpha) * new_p_bar[mask].cpu()
+        )
 
     def save(self):
         f = {
@@ -294,9 +291,7 @@ class Server(BaseServer):
             "loss": self.loss,
             "state_dict": {
                 "global": self.model.state_dict(),
-                "client": self.clients_state,
                 "proto": self.anchors.data,
-                "aux": self.clients_anchors,
             },
         }
-        super().deal_save(f)
+        self.deal_save(f)

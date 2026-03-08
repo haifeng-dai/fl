@@ -5,7 +5,7 @@ import time
 import numpy as np
 import torch
 
-from .utils import BaseServer, ce_loss, get_model, mse_loss, run_parallel_clients
+from .utils import BaseServer, ce_loss, get_model, mse_loss
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -61,7 +61,7 @@ def client_worker(params):
             for data, target in loader:
                 data, target = data.to(device), target.to(device)
                 optimizer.zero_grad()
-                output, features = model(data)
+                output, features, _ = model(data)
                 loss_ce = ce_loss(output, target)
 
                 # 特征与对应类别锚点之间的 MSE 损失
@@ -93,7 +93,7 @@ def client_worker(params):
         with torch.no_grad():
             for data, target in loader:
                 data, target = data.to(device), target.to(device)
-                _, features = model(data)
+                _, features, _ = model(data)
                 sum_features.index_add_(0, target, features)
                 sum_counts.index_add_(
                     0, target, torch.ones_like(target, dtype=torch.float32)
@@ -149,13 +149,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results_train = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p_train,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results_train = self.run_clients(client_worker, p_train)
 
             # 收集训练结果并聚合全局模型
             total_loss = 0.0
@@ -188,13 +182,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results_extract = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p_extract,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results_extract = self.run_clients(client_worker, p_extract)
 
             # 收集本地锚点并按样本数量加权聚合为全局锚点
             all_local_anchors = []

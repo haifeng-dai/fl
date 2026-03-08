@@ -1,6 +1,6 @@
 import argparse
-import copy
-import time, os
+import os
+import time
 
 import numpy as np
 import torch
@@ -9,7 +9,6 @@ from .utils import (
     BaseServer,
     ce_loss,
     get_model,
-    run_parallel_clients,
 )
 
 
@@ -78,10 +77,10 @@ def client_worker(params):
             optimizer.zero_grad()
 
             # 前向传播：获取输出和表达特征 (z)
-            output, z = model(x)
+            output, z, _ = model(x)
             with torch.no_grad():
-                _, z_glob = global_model(x)
-                _, z_prev = prev_model(x)
+                _, z_glob, _ = global_model(x)
+                _, z_prev, _ = prev_model(x)
 
             # 标准交叉熵分类损失
             loss_ce = ce_loss(output, y)
@@ -111,7 +110,6 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
         # 使用最初始的全局模型来初始化所有客户端作为其“上一轮状态”
-
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -144,13 +142,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             # 汇集各客户端回传结果，增量计算加权平均损失
             total_loss = 0.0
@@ -174,5 +166,9 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
-        f = {"acc": self.acc, "loss": self.loss, "state_dict": {"global": self.model.state_dict()}}
-        super().deal_save(f)
+        f = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "state_dict": {"global": self.model.state_dict()},
+        }
+        self.deal_save(f)

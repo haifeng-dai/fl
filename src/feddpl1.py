@@ -14,7 +14,6 @@ from .utils import (
     get_model,
     mse_loss,
     param_aggregate,
-    run_parallel_clients,
 )
 
 
@@ -174,7 +173,7 @@ def client_worker(params):
         for _ in range(epochs):
             for x, y in loader:
                 x, y = x.to(device), y.to(device)
-                output, feature = model(x)
+                output, feature, _ = model(x)
                 loss_ce = ce_loss(output, y)
 
                 # PLN 损失：促使特征向其对应类别的原型靠拢
@@ -213,7 +212,7 @@ def client_worker(params):
                 protos = pln(all_classes)
 
                 with torch.no_grad():
-                    _, feature = model(x)
+                    _, feature, _ = model(x)
 
                 # 更新原型，使其更贴近所在类的实例特征
                 loss = mse_loss(feature, protos[y])
@@ -289,13 +288,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             # 汇集各客户端回传结果，以增量方式计算加权平均损失
             total_loss_model = 0.0

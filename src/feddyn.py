@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
-from .utils import BaseServer, ce_loss, get_model, run_parallel_clients
+from .utils import BaseServer, ce_loss, get_model
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -61,7 +61,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, _ = model(x)
+            logits, _, _ = model(x)
 
             # 基本任务预测损失
             task_loss = ce_loss(logits, y)
@@ -148,13 +148,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
             sum_model_params = torch.zeros_like(global_model_vector)

@@ -1,5 +1,6 @@
 import argparse
-import time, os
+import os
+import time
 
 import numpy as np
 import torch
@@ -7,11 +8,8 @@ import torch
 from .utils import (
     BaseServer,
     ce_loss,
-    evaluate_model,
-    evaluate_prototype,
     get_model,
     param_aggregate,
-    run_parallel_clients,
 )
 
 
@@ -146,9 +144,8 @@ def client_worker(params):
     # 1. 初始化模型与 PLN 网络
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
-    pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
-        device
-    )
+    pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb)
+    pln.to(device)
     pln.load_state_dict(pln_state)
     all_classes = torch.arange(0, num_classes).to(device)
 
@@ -167,7 +164,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, feature = model(x)
+            output, feature, _ = model(x)
             loss_ce = ce_loss(output, y)
 
             dist = torch.cdist(feature, protos, p=2) ** 2
@@ -204,7 +201,7 @@ def client_worker(params):
             protos = pln(all_classes)
 
             with torch.no_grad():
-                _, feature = model(x)
+                _, feature, _ = model(x)
 
             # 损失计算：基于样本到原型距离的交差熵分类损失
             dist = torch.cdist(feature, protos, p=2) ** 2
@@ -278,13 +275,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             # 汇集各客户端的回传结果，计算模型与 PLN 的加权整体损失
             total_loss_model = 0.0
@@ -293,11 +284,9 @@ class Server(BaseServer):
             selected_plns = []
             current_weights = []
             for i in selected_clients:
-                client_loss_model, client_loss_pln, client_state, client_pln = results[
-                    i
-                ]
-                total_loss_model += client_loss_model
-                total_loss_pln += client_loss_pln
+                client_loss_m, client_loss_p, client_state, client_pln = results[i]
+                total_loss_model += client_loss_m
+                total_loss_pln += client_loss_p
                 selected_states.append(client_state)
                 selected_plns.append(client_pln)
                 current_weights.append(self.weights[i])

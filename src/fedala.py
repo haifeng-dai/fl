@@ -11,7 +11,6 @@ from .utils import (
     BaseServer,
     ce_loss,
     get_model,
-    run_parallel_clients,
 )
 
 
@@ -163,7 +162,7 @@ class ALA:
             for x, y in rand_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 optimizer.zero_grad()
-                output, _ = model_t(x)
+                output, _, _ = model_t(x)
                 loss = ce_loss(output, y)
                 loss.backward()
 
@@ -268,7 +267,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, _ = local_model(x)
+            output, _, _ = local_model(x)
             loss = ce_loss(output, y)
             optimizer.zero_grad()
             loss.backward()
@@ -335,14 +334,8 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-
             # 运行并行客户端训练任务
-            results = run_parallel_clients(
-                client_worker=client_worker,
-                parameters=p,
-                gpu_pools=self.gpu_pools,
-                mp=self.mp,
-            )
+            results = self.run_clients(client_worker, p)
 
             # 处理结果：计算总损失，获取所选客户端的状态和权重信息清单。
             total_loss = 0.0

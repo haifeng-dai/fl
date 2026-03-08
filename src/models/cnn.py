@@ -12,7 +12,7 @@ class CNN(nn.Module):
             # CIFAR10 (32x32)
             dim = 64 * 8 * 8
 
-        # Feature extractor
+        # 特征提取器 (Feature extractor)
         self.extractor = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
@@ -21,14 +21,19 @@ class CNN(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
             nn.Flatten(),
+        )
+
+        # 投影层
+        self.projection = nn.Sequential(
             nn.Linear(dim, feature_dim),
             nn.ReLU(inplace=True),
         )
 
-        # Classification head
+        # 分类头 (Classification head)
         self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, x):
-        feature = self.extractor(x)
+        embedding = self.extractor(x)
+        feature = self.projection(embedding)
         logits = self.classifier(feature)
-        return logits, feature
+        return logits, feature, embedding

@@ -11,7 +11,7 @@ def evaluate_model(model, test_set, device) -> float:
     with torch.no_grad():
         for data, target in loader:
             data, target = data.to(device), target.to(device)
-            output, _ = model(data)
+            output, _, _ = model(data)
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
             count += target.size(0)
@@ -32,7 +32,7 @@ def evaluate_prototype(model, prototypes, test_set, device) -> float:
     with torch.no_grad():
         for data, target in loader:
             data, target = data.to(device), target.to(device)
-            _, features = model(data)
+            _, features, _ = model(data)
 
             dist = torch.cdist(features, prototypes, p=2)
             pred = dist.argmin(dim=1, keepdim=True)
