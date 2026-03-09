@@ -12,6 +12,7 @@ from .utils import (
     mse_loss,
     get_model,
     param_aggregate,
+    extract_prototypes,
 )
 
 
@@ -125,7 +126,8 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, features, _ = model(x)
+            features = model.extractor(x)
+            logits = model.classifier(features)
 
             # 公式 (8): 使用语义锚点作为输入进行分类器校准 (Classifier Calibration)
             output_cc = model.classifier(global_anchors)
@@ -157,23 +159,9 @@ def client_worker(params):
             num_batches += 1
 
     # 3. 计算最新的本地原型（按类别平均特征向量）
-    model.eval()
-    with torch.no_grad():
-        anchor_sums = torch.zeros((num_classes, feature_dim), device=device)
-        anchor_counts = torch.zeros(num_classes, device=device)
-
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            _, features, _ = model(x)
-            anchor_sums.index_add_(0, y, features)
-            anchor_counts.index_add_(0, y, torch.ones_like(y, dtype=torch.float32))
-
-        local_anchors_dict = {}
-        for c in torch.where(anchor_counts > 0)[0]:
-            c_item = int(c.item())
-            local_anchors_dict[c_item] = (
-                anchor_sums[c_item] / anchor_counts[c_item]
-            ).cpu()
+    local_anchors_dict = extract_prototypes(
+        model, loader, num_classes, feature_dim, device
+    )
 
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     return [total_loss / num_batches, model_state, local_anchors_dict]

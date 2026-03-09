@@ -60,10 +60,8 @@ def separation_loss(anchors, tau=0.1):
     L_SEP = log( sum_{j!=i} exp(a_i * a_j^T / tau) / (C-1) )
     """
     C = anchors.shape[0]
-    # 归一化锚点到单位球面上
-    anchors_norm = F.normalize(anchors, p=2, dim=1)
-    # 计算成对余弦相似度: sim_matrix[i, j] = dot(a_i, a_j)
-    sim_matrix = torch.matmul(anchors_norm, anchors_norm.T)
+    # 计算成对点积 (Dot Product): sim_matrix[i, j] = a_i * a_j^T
+    sim_matrix = torch.matmul(anchors, anchors.T)
     # 指数化
     exp_sim = torch.exp(sim_matrix / tau)
 
@@ -79,32 +77,28 @@ def separation_loss(anchors, tau=0.1):
 
 class FedLSAModelWrapper(nn.Module):
     """
-    FedLSA 模型包装器：在基础模型的 projection 和 classifier 之间插入 L2 归一化层。
-
-    论文架构: Φ_m = ψ_m ∘ φ_m ∘ ϕ_m
-      - ψ_m (extractor):  x → z (embedding ∈ R^I)
-      - φ_m (projection): z → φ(z) (feature ∈ R^L)
-      - nor():             φ(z) → h = nor(φ(z)) (超球面嵌入 ∈ R^L)
-      - ϕ_m (classifier):  h → q = ϕ(h) (logits ∈ R^C)
-
-    forward 返回: (logits, h, embedding)
-      - logits = ϕ(nor(φ(ψ(x))))
-      - h = nor(φ(ψ(x))) ∈ R^L
-      - embedding = ψ(x) ∈ R^I
+    FedLSA 模型包装器：通过 Hook 在 extractor 后挂载 L2 归一化。
+    这样保证外部使用 `model.extractor(x)`（如 evaluate_prototype 中）时，不仅无需额外代码，
+    且天然获取到归一化后的语义锚点特征空间。
     """
 
     def __init__(self, base_model: nn.Module):
         super().__init__()
         self.extractor = base_model.extractor
-        self.projection = base_model.projection
         self.classifier = base_model.classifier
 
+        # 使用 PyTorch 原生 Hook 拦截输出并归一化，绝对不会污染 state_dict 或网络结构键值
+        self.extractor.register_forward_hook(self._normalize_hook)
+
+    @staticmethod
+    def _normalize_hook(module, input, output):
+        return F.normalize(output, p=2, dim=1)
+
     def forward(self, x):
-        embedding = self.extractor(x)  # z = ψ(x) ∈ R^I
-        feature = self.projection(embedding)  # φ(z) ∈ R^L
-        h = F.normalize(feature, p=2, dim=1)  # h = nor(φ(z)) ∈ R^L
-        logits = self.classifier(h)  # q = ϕ(h) ∈ R^C
-        return logits, h, embedding
+        # 此时 self.extractor() 的返回值已经被 hook 处理过了
+        h = self.extractor(x)
+        logits = self.classifier(h)
+        return logits
 
 
 class AnchorMapping(nn.Module):
@@ -162,24 +156,22 @@ def client_worker(params):
     model.train()
     total_loss = 0.0
     num_batches = 0
-
-    # 确保锚点在正确的设备上并分离计算图 (在客户端训练期间保持固定)
-    global_anchors = global_anchors.to(device).detach()
-    anchors_norm = F.normalize(global_anchors, p=2, dim=1)
+    global_anchors = global_anchors.to(device)
 
     # 2. 训练循环 (伪代码 L3-L11)
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
 
-            # L4: h = nor(φ(ψ(x)))，模型内部已完成归一化
-            logits, h, _ = model(x)
+            # L4: h = nor(φ(ψ(x)))，extractor 的 hook 已自动完成 L2 归一化
+            h = model.extractor(x)
+            logits = model.classifier(h)
 
             # 公式 (9): L_CE = -1_{y_i} log(softmax(q_i))，不带 τ
             loss_ce = ce_loss(logits, y)
 
             # 公式 (8): L_COM = -log(exp(a_{y_i}^T h_i / τ) / Σ_j exp(a_j^T h_i / τ))
-            logits_com = torch.matmul(h, anchors_norm.T) / tau
+            logits_com = torch.matmul(h, global_anchors.T) / tau
             loss_com = ce_loss(logits_com, y)
 
             # 公式 (10): L_HC = L_CE + λ * L_COM
@@ -201,9 +193,9 @@ class Server(BaseServer):
     def __init__(self, args: argparse.Namespace):
         super().__init__(False, args)
 
-        # 从模型的 projection 层推断 embedding 维度 I
-        # projection 的第一个 Linear 层: nn.Linear(I, L)
-        embedding_dim = self.model.projection[0].in_features
+        # 从模型的 extractor 层推断 embedding 维度 I
+        # 你的模型合并后，extractor 的倒数第二层统一为 nn.Linear(I, L)
+        embedding_dim = self.model.extractor[-2].in_features
 
         # 将基础模型包装为 FedLSA 模型（注入归一化层）
         self.model = FedLSAModelWrapper(self.model)
@@ -213,10 +205,8 @@ class Server(BaseServer):
         self.R = torch.randn(self.num_class, embedding_dim, device=self.device)
 
         # 2. 初始化映射函数 Theta: R^I -> R^L (从 embedding 空间映射到 feature 空间)
-        self.anchor_mapping = AnchorMapping(embedding_dim, self.args.feature_dim).to(
-            self.device
-        )
-
+        self.anchor_mapping = AnchorMapping(embedding_dim, self.args.feature_dim)
+        self.anchor_mapping.to(self.device)
         self.labels = torch.arange(self.num_class, device=self.device)
 
     def get_anchors(self):

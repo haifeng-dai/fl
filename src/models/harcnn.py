@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 
@@ -12,10 +11,6 @@ class HARCNN(nn.Module):
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool1d(1),
             nn.Flatten(),
-        )
-
-        # 投影层
-        self.projection = nn.Sequential(
             nn.Linear(32, feature_dim),
             nn.ReLU(inplace=True),
         )
@@ -28,7 +23,6 @@ class HARCNN(nn.Module):
 
     def forward(self, x):
         # 输入形状: (Batch, 9, 128)
-        embedding = self.extractor(x)
-        feature = self.projection(embedding)
+        feature = self.extractor(x)
         logits = self.classifier(feature)
-        return logits, feature, embedding
+        return logits

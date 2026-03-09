@@ -164,7 +164,8 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, feature, _ = model(x)
+            feature = model.extractor(x)
+            output = model.classifier(feature)
             loss_ce = ce_loss(output, y)
 
             dist = torch.cdist(feature, protos, p=2) ** 2
@@ -201,7 +202,7 @@ def client_worker(params):
             protos = pln(all_classes)
 
             with torch.no_grad():
-                _, feature, _ = model(x)
+                feature = model.extractor(x)
 
             # 损失计算：基于样本到原型距离的交差熵分类损失
             dist = torch.cdist(feature, protos, p=2) ** 2

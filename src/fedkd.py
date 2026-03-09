@@ -186,8 +186,10 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, rep, _ = model(x)
-            output_g, rep_g, _ = model_g(x)
+            rep = model.extractor(x)
+            output = model.classifier(rep)
+            rep_g = model_g.extractor(x)
+            output_g = model_g.classifier(rep_g)
 
             # 基础任务预测损失 (Cross Entropy)
             loss_ce = ce_loss(output, y)

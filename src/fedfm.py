@@ -5,7 +5,13 @@ import time
 import numpy as np
 import torch
 
-from .utils import BaseServer, ce_loss, get_model, mse_loss
+from .utils import (
+    BaseServer,
+    ce_loss,
+    extract_prototypes,
+    get_model,
+    mse_loss,
+)
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -61,7 +67,8 @@ def client_worker(params):
             for data, target in loader:
                 data, target = data.to(device), target.to(device)
                 optimizer.zero_grad()
-                output, features, _ = model(data)
+                features = model.extractor(data)
+                output = model.classifier(features)
                 loss_ce = ce_loss(output, target)
 
                 # 特征与对应类别锚点之间的 MSE 损失
@@ -86,27 +93,9 @@ def client_worker(params):
 
     # ==================== 阶段二：锚点提取（冻结模型） ====================
     elif mode == "extract":
-        model.eval()
-        sum_features = torch.zeros((num_classes, feature_dim), device=device)
-        sum_counts = torch.zeros(num_classes, device=device)
-
-        with torch.no_grad():
-            for data, target in loader:
-                data, target = data.to(device), target.to(device)
-                _, features, _ = model(data)
-                sum_features.index_add_(0, target, features)
-                sum_counts.index_add_(
-                    0, target, torch.ones_like(target, dtype=torch.float32)
-                )
-
-        # 按类别求平均，返回本地锚点及对应的样本计数
-        local_anchors = {}
-        local_counts = {}
-        active_classes = torch.where(sum_counts > 0)[0]
-        for c in active_classes:
-            c_item = int(c.item())
-            local_anchors[c_item] = (sum_features[c_item] / sum_counts[c_item]).cpu()
-            local_counts[c_item] = int(sum_counts[c_item].item())
+        local_anchors, local_counts = extract_prototypes(
+            model, loader, num_classes, feature_dim, device, return_counts=True
+        )
 
         return [local_anchors, local_counts]
 

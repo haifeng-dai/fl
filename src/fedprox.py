@@ -5,7 +5,11 @@ import time
 import numpy as np
 import torch
 
-from .utils import BaseServer, ce_loss, get_model
+from .utils import (
+    BaseServer,
+    ce_loss,
+    get_model,
+)
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -53,11 +57,8 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, _, _ = model(x)
-
-            # 标准交叉熵分类损失
+            logits = model(x)
             loss = ce_loss(logits, y)
-
             optimizer.zero_grad()
             loss.backward()
 

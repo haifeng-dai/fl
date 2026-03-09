@@ -6,7 +6,11 @@ import numpy as np
 import torch
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
-from .utils import BaseServer, ce_loss, get_model
+from .utils import (
+    BaseServer,
+    ce_loss,
+    get_model,
+)
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -61,9 +65,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, _, _ = model(x)
-
-            # 基本任务预测损失
+            logits = model(x)
             task_loss = ce_loss(logits, y)
 
             # FedDyn 动态正则化项

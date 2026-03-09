@@ -11,6 +11,7 @@ from .utils import (
     ce_loss,
     get_model,
     mse_loss,
+    extract_prototypes,
 )
 
 
@@ -67,8 +68,8 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            logits, feature, _ = model(x)
-
+            feature = model.extractor(x)
+            logits = model.classifier(feature)
             loss_ce = ce_loss(logits, y)
 
             if global_protos_tensor is not None:
@@ -87,23 +88,9 @@ def client_worker(params):
 
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-    model.eval()
-    proto_sum = torch.zeros(num_classes, feature_dim, device=device)
-    proto_count = torch.zeros(num_classes, device=device)
-
-    with torch.no_grad():
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            _, features, _ = model(x)
-            proto_sum.index_add_(0, y, features)
-            ones = torch.ones_like(y, dtype=torch.float)
-            proto_count.index_add_(0, y, ones)
-
-    local_protos = {}
-    present_classes = torch.nonzero(proto_count).squeeze(1)
-    for cls_idx in present_classes:
-        avg = proto_sum[cls_idx] / proto_count[cls_idx]
-        local_protos[cls_idx.item()] = avg.cpu()
+    local_protos = extract_prototypes(
+        model, loader, num_classes, feature_dim, device
+    )
 
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     return [avg_loss, model_state, local_protos]

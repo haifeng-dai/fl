@@ -1,7 +1,10 @@
-from .fed_utils import BaseServer, get_model
+import os
+
+import torch
+
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
-import torch, os
+from .fed_utils import BaseServer, get_model
 
 
 def compare_model_parameters(params1: dict, params2: dict) -> bool:
@@ -94,6 +97,44 @@ def kl_loss(student_logits, teacher_logits, temperature=1.0):
     return loss
 
 
+def extract_prototypes(
+    model, loader, num_classes, feature_dim, device, return_counts=False
+):
+    """
+    统一提取本地数据集的类别表征原型/锚点。
+    默认返回 {class_id: prototype_tensor (CPU)} 的字典。
+    """
+    model.eval()
+    proto_sum = torch.zeros((num_classes, feature_dim), device=device)
+    proto_count = torch.zeros(num_classes, device=device)
+
+    with torch.no_grad():
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            features = model.extractor(x)
+            proto_sum.index_add_(0, y, features)
+            proto_count += torch.bincount(y, minlength=num_classes)
+
+    local_protos = {}
+    local_counts = {}
+    active_classes = torch.where(proto_count > 0)[0]
+
+    if len(active_classes) > 0:
+        avg_protos = (
+            proto_sum[active_classes] / proto_count[active_classes].unsqueeze(1)
+        ).cpu()
+        active_classes_cpu = active_classes.cpu().tolist()
+        local_protos = dict(zip(active_classes_cpu, avg_protos))
+
+        if return_counts:
+            counts_cpu = proto_count[active_classes].cpu().int().tolist()
+            local_counts = dict(zip(active_classes_cpu, counts_cpu))
+
+    if return_counts:
+        return local_protos, local_counts
+    return local_protos
+
+
 def get_pre_name(args):
     fold_path = os.path.join(
         f"{args.algo}",
@@ -108,3 +149,7 @@ def get_pre_name(args):
     os.makedirs(args.save_path, exist_ok=True)
     os.makedirs(args.log_path, exist_ok=True)
     args.name_pre = f"{args.epochs}_{args.batch_size}_{args.lr}"
+
+
+def split_model(model: nn.Module):
+    return model.extractor, model.projection, model.classifier

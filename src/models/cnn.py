@@ -21,10 +21,6 @@ class CNN(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
             nn.Flatten(),
-        )
-
-        # 投影层
-        self.projection = nn.Sequential(
             nn.Linear(dim, feature_dim),
             nn.ReLU(inplace=True),
         )
@@ -33,7 +29,6 @@ class CNN(nn.Module):
         self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, x):
-        embedding = self.extractor(x)
-        feature = self.projection(embedding)
+        feature = self.extractor(x)
         logits = self.classifier(feature)
-        return logits, feature, embedding
+        return logits

@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 
@@ -10,10 +9,6 @@ class HARMLP(nn.Module):
         self.extractor = nn.Sequential(
             nn.Linear(input_dim, 256),
             nn.ReLU(inplace=True),
-        )
-
-        # 投影层
-        self.projection = nn.Sequential(
             nn.Linear(256, feature_dim),
             nn.ReLU(inplace=True),
         )
@@ -26,7 +21,6 @@ class HARMLP(nn.Module):
         if x.dim() > 2:
             x = x.view(x.size(0), -1)
 
-        embedding = self.extractor(x)
-        feature = self.projection(embedding)
+        feature = self.extractor(x)
         logits = self.classifier(feature)
-        return logits, feature, embedding
+        return logits

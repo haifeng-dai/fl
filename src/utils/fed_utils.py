@@ -1,9 +1,10 @@
 import argparse
 import os
+
 import torch
 import torch.multiprocessing as mp
 
-from ..models import CNN, ResNet18, ResNet50, HARCNN, HARMLP
+from ..models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 from .load_data import load_data
@@ -71,7 +72,9 @@ class BaseServer:
                 f"cuda:{gpu_ids[0]}" if torch.cuda.is_available() else "cpu"
             )
             self.client_gpu = {i: first_gpu for i in range(self.num_clients)}
-            print(f"-> Multiprocessing not enabled, using sequential training (Device: {self.client_gpu[0]})")
+            print(
+                f"-> Multiprocessing not enabled, using sequential training (Device: {self.client_gpu[0]})"
+            )
 
         self.device = gpu_ids[-1]
 
@@ -114,9 +117,9 @@ class BaseServer:
                 model_states if model_states is not None else self.clients_state
             )
 
-            assert (
-                target_states
-            ), "Personalized algorithms (pfl=True) must provide model_states or maintain self.clients_state."
+            assert target_states, (
+                "Personalized algorithms (pfl=True) must provide model_states or maintain self.clients_state."
+            )
 
             for i in range(self.num_clients):
                 self.model.load_state_dict(target_states[i])
@@ -187,7 +190,9 @@ class BaseServer:
             self.gpu_pools = {}
 
     def deal_save(self, params):
-        path = os.path.join(self.args.save_path, f"{self.args.file_name}_{self.args.times}.pt")
+        path = os.path.join(
+            self.args.save_path, f"{self.args.file_name}_{self.args.times}.pt"
+        )
         if self.args.test:
             print(f"\nnot save to {path}\n")
         else:

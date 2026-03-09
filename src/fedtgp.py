@@ -9,7 +9,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from .utils import BaseServer, ce_loss, get_model, mse_loss
+from .utils import (
+    BaseServer,
+    ce_loss,
+    extract_prototypes,
+    get_model,
+    mse_loss,
+)
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -138,8 +144,8 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, features, _ = model(x)
-
+            features = model.extractor(x)
+            output = model.classifier(features)
             l_ce = ce_loss(output, y)
             l_proto = torch.tensor(0.0, device=device)
 
@@ -161,23 +167,9 @@ def client_worker(params):
     avg_loss_proto = total_loss_proto / num_batches if num_batches > 0 else 0.0
 
     # 收集最新的本地原型 (按类别平均特征向量)
-    model.eval()
-    proto_sum = torch.zeros(num_classes, feature_dim, device=device)
-    proto_count = torch.zeros(num_classes, device=device)
-
-    with torch.no_grad():
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            _, features, _ = model(x)
-            proto_sum.index_add_(0, y, features)
-            ones = torch.ones_like(y, dtype=torch.float)
-            proto_count.index_add_(0, y, ones)
-
-    local_protos_avg = {}
-    present_classes = torch.nonzero(proto_count).squeeze(1)
-    for cls_idx in present_classes:
-        avg = proto_sum[cls_idx] / proto_count[cls_idx]
-        local_protos_avg[cls_idx.item()] = avg.cpu()
+    local_protos_avg = extract_prototypes(
+        model, loader, num_classes, feature_dim, device
+    )
 
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     return [avg_loss_ce, avg_loss_proto, model_state, local_protos_avg]

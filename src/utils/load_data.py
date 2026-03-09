@@ -1,6 +1,7 @@
-import torch
 import os
-from torch.utils.data import TensorDataset, ConcatDataset
+
+import torch
+from torch.utils.data import ConcatDataset, TensorDataset
 
 
 def get_partition_path(dataset_name, partition, num_clients, alpha=0.5, n_classes=2):

@@ -183,7 +183,8 @@ def client_worker(params):
         for _ in range(epochs):
             for x, y in loader:
                 x, y = x.to(device), y.to(device)
-                output, feature, _ = model(x)
+                feature = model.extractor(x)
+                output = model.classifier(feature)
                 loss_ce = ce_loss(output, y)
 
                 # PLN 损失：鼓励实例特征向其所属类的原型靠拢
@@ -218,7 +219,7 @@ def client_worker(params):
                 protos = pln(all_classes)
 
                 with torch.no_grad():
-                    _, feature, _ = model(x)
+                    feature = model.extractor(x)
 
                 # 更新原型，使其更贴近各类的实例特征
                 # dist = torch.cdist(feature, protos, p=2) ** 2

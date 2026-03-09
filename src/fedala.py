@@ -162,7 +162,7 @@ class ALA:
             for x, y in rand_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 optimizer.zero_grad()
-                output, _, _ = model_t(x)
+                output = model_t(x)
                 loss = ce_loss(output, y)
                 loss.backward()
 
@@ -267,7 +267,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, _, _ = local_model(x)
+            output = local_model(x)
             loss = ce_loss(output, y)
             optimizer.zero_grad()
             loss.backward()

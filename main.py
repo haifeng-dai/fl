@@ -1,14 +1,14 @@
 import argparse
 import datetime
 import importlib
-import time
-import sys
 import random
+import sys
+import time
 
 import numpy as np
 import torch
 
-from src import prepare_data, get_pre_name
+from src import get_pre_name, prepare_data
 
 
 def set_seed(seed):

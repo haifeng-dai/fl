@@ -1,16 +1,13 @@
 import argparse
-import time
 import os
+import time
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
     ce_loss,
-    evaluate_model,
-    evaluate_prototype,
     get_model,
     mse_loss,
     param_aggregate,
@@ -173,7 +170,8 @@ def client_worker(params):
         for _ in range(epochs):
             for x, y in loader:
                 x, y = x.to(device), y.to(device)
-                output, feature, _ = model(x)
+                feature = model.extractor(x)
+                output = model.classifier(feature)
                 loss_ce = ce_loss(output, y)
 
                 # PLN 损失：促使特征向其对应类别的原型靠拢
@@ -212,7 +210,7 @@ def client_worker(params):
                 protos = pln(all_classes)
 
                 with torch.no_grad():
-                    _, feature, _ = model(x)
+                    feature = model.extractor(x)
 
                 # 更新原型，使其更贴近所在类的实例特征
                 loss = mse_loss(feature, protos[y])
@@ -296,18 +294,29 @@ class Server(BaseServer):
             total_loss_model_p = 0.0
             total_loss_pln = 0.0
             plns_states = []
+            current_weights = []
             for i in selected_clients:
-                client_loss_m_m, client_loss_m_p, client_loss_pln, client_state, client_pln = results[i]
+                (
+                    client_loss_m_m,
+                    client_loss_m_p,
+                    client_loss_pln,
+                    client_state,
+                    client_pln,
+                ) = results[i]
                 total_loss_model += client_loss_m_m + client_loss_m_p
                 total_loss_model_m += client_loss_m_m
                 total_loss_model_p += client_loss_m_p
                 total_loss_pln += client_loss_pln
                 self.clients_state[i] = client_state
                 plns_states.append(client_pln)
+                current_weights.append(self.weights[i])
             self.loss.append(total_loss_model / num_join_clients)
             self.loss_m_m.append(total_loss_model_m / num_join_clients)
             self.loss_m_p.append(total_loss_model_p / num_join_clients)
             self.loss_p.append(total_loss_pln / num_join_clients)
+
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
 
             # 聚合各客户端学习到的 PLN 参数
             self.aggregate(plns_states, weights=norm_weights)

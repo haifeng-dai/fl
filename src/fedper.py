@@ -46,7 +46,7 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            output, _, _ = model(x)
+            output = model(x)
             loss = ce_loss(output, y)
             optimizer.zero_grad()
             loss.backward()

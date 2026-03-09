@@ -81,8 +81,8 @@ def client_worker(params):
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            out_g, _, _ = global_model(x)
-            out_l, _, _ = local_model(x)
+            out_g = global_model(x)
+            out_l = local_model(x)
             ce_g = ce_loss(out_g, y)
             ce_l = ce_loss(out_l, y)
 

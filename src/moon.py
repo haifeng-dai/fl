@@ -77,10 +77,11 @@ def client_worker(params):
             optimizer.zero_grad()
 
             # 前向传播：获取输出和表达特征 (z)
-            output, z, _ = model(x)
+            z = model.extractor(x)
+            output = model.classifier(z)
             with torch.no_grad():
-                _, z_glob, _ = global_model(x)
-                _, z_prev, _ = prev_model(x)
+                z_glob = global_model.extractor(x)
+                z_prev = prev_model.extractor(x)
 
             # 标准交叉熵分类损失
             loss_ce = ce_loss(output, y)

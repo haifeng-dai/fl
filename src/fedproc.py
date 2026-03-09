@@ -6,7 +6,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .utils import BaseServer, ce_loss, get_model
+from .utils import (
+    BaseServer,
+    ce_loss,
+    extract_prototypes,
+    get_model,
+)
 
 
 def get_path(args):
@@ -48,9 +53,8 @@ def client_worker(params):
         for data, target in loader:
             data, target = data.to(device), target.to(device)
             optimizer.zero_grad()
-            output, features, _ = model(data)
-
-            # 标准交叉熵分类损失
+            features = model.extractor(data)
+            output = model.classifier(features)
             loss_ce = ce_loss(output, target)
 
             # 基于原型的对比损失 (Prototypical Contrastive Loss)
@@ -70,25 +74,7 @@ def client_worker(params):
             num_batches += 1
 
     # 3. 计算最新的本地原型（按类别平均特征向量）
-    model.eval()
-    local_protos = {}
-    sum_features = torch.zeros((num_classes, feature_dim), device=device)
-    sum_counts = torch.zeros(num_classes, device=device)
-
-    with torch.no_grad():
-        for data, target in loader:
-            data, target = data.to(device), target.to(device)
-            _, features, _ = model(data)
-
-            sum_features.index_add_(0, target, features)
-            sum_counts.index_add_(
-                0, target, torch.ones_like(target, dtype=torch.float32)
-            )
-
-    active_classes = torch.where(sum_counts > 0)[0]
-    for c in active_classes:
-        c_item = int(c.item())
-        local_protos[c_item] = (sum_features[c_item] / sum_counts[c_item]).cpu()
+    local_protos = extract_prototypes(model, loader, num_classes, feature_dim, device)
 
     avg_loss = total_loss / num_batches
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
