@@ -3,10 +3,7 @@
 # =============
 # Global Config
 # =============
-# fedala,fedavg,feddpl,feddyn,fedfm,fedkd,fedlsa,fedper,fedpln,fedproc,fedproto,fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl,scaffold
 # export ALGOS="fedala,fedavg,feddpl,feddyn,fedfm,fedkd,fedlsa,fedper,fedpln,fedproc,fedproto,fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl,scaffold"
-# export ALGOS="fedala,fedavg,feddpl,feddyn,fedfm,fedkd,fedlsa,fedper,fedpln"
-# export ALGOS="fedproc,fedproto,fedprox,fedrep,fedsa,fedtgp,fml,lgfedavg,moon,proxyfl,scaffold"
 
 # # traditional algorithms
 # export ALGOS="fedavg,feddyn,fedfm,fedlsa,fedpln,fedproc,fedprox,moon,scaffold"
@@ -14,8 +11,7 @@
 # # personalized algorithms
 # export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
-export ALGOS="fedproto,local,fedsa"
-# export ALGOS="fedala"
+export ALGOS="fedtgp1"
 
 # =============
 # Data
@@ -59,6 +55,10 @@ export MAX_WORKERS_PER_GPU=10
 # =============
 export TEST=0
 
+if [ "${TEST}" -eq 1 ]; then
+    export ROUNDS="10"
+fi
+
 # =============
 # Algorithm Specific
 # =============
@@ -71,7 +71,9 @@ export ALA_THRESHOLDS_ALA="0.1"
 export NUM_PRE_LOSSES_ALA="10"
 
 # FedDPL
+# export LAMBDAS_DPL="0.01,0.1,1.0,10.0,20.0,30.0"
 export LAMBDAS_DPL="10.0"
+# export EPOCH_PLNS_DPL="2,4,6,8,10,12,14,16,18,20"
 export EPOCH_PLNS_DPL="10"
 export LRS_DPL="0.01"
 export BATCH_SIZE_PLNS_DPL="64"
@@ -81,6 +83,7 @@ export MODES_DPL="normal"
 export FIXED_PROTOS_DPL=0
 export INIT_EMBS_DPL="0"
 export HARS_DPL="0"
+export MUS_DPL="1.0"
 
 # FedKD
 export LR_GS_KD="0.01"
@@ -125,6 +128,16 @@ export LAMDAS_TGP="10.0"
 export SERVER_EPOCHS_TGP="10"
 export SERVER_LRS_TGP="0.01"
 export MARGIN_THRESHOLDS_TGP="1.0"
+
+# FedTGP1 (FedTGP-Dec)
+export LAMDAS_TGP1="10.0"
+export HEAD_EPOCHS_TGP1="3"
+export BODY_EPOCHS_TGP1="3"
+export LR_HEAD_TGP1="0.01"
+export LR_BODY_TGP1="0.01"
+export SERVER_EPOCHS_TGP1="10"
+export SERVER_LRS_TGP1="0.01"
+export MARGIN_THRESHOLDS_TGP1="1.0"
 
 # FML
 export ALPHAS_FML="1.0"

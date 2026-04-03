@@ -34,6 +34,9 @@ def get_args():
             "fedpln",
             "feddpl",
             "feddpl1",
+            "feddpl2",
+            "feddpl3",
+            "feddpl4",
             "fedproto",
             "fedkd",
             "fml",
@@ -46,6 +49,7 @@ def get_args():
             "fedrep",
             "fedala",
             "fedtgp",
+            "fedtgp1",
             "fedtest",
             "feddyn",
             "scaffold",
@@ -163,15 +167,18 @@ def main():
 
         set_seed(args.seed)
 
-        # 获取日志路径 (文件名包含 args.times)
+        # 获取日志路径
         log_path = algo_module.get_path(args)
 
-        # 打开日志文件并将 stdout/stderr 重定向
-        log_f = open(log_path, "w", encoding="utf-8", buffering=1)
         original_stdout = sys.stdout
         original_stderr = sys.stderr
-        sys.stdout = log_f
-        sys.stderr = log_f
+        log_f = None
+
+        if not args.test:
+            # 打开日志文件并将 stdout/stderr 重定向
+            log_f = open(log_path, "w", encoding="utf-8", buffering=1)
+            sys.stdout = log_f
+            sys.stderr = log_f
 
         try:
             print(f"=== Experiment {t + 1}/{total_times} (Seed: {args.seed}) ===")
@@ -200,9 +207,11 @@ def main():
             print(f"\nTotal time: {delta}")
         finally:
             # 恢复 stdout/stderr 并关闭日志文件
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
-            log_f.close()
+            if not args.test:
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+                if log_f:
+                    log_f.close()
 
 
 if __name__ == "__main__":

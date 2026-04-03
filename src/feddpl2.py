@@ -4,12 +4,12 @@ import time
 
 import numpy as np
 import torch
-from torch.nn.functional import normalize
 
 from .utils import (
     BaseServer,
     ce_loss,
     get_model,
+    mse_loss,
     param_aggregate,
 )
 
@@ -109,32 +109,13 @@ class PLN(torch.nn.Module):
         emb = self.embedings(class_id)
         mid = self.middle(emb)
         out = self.fc(mid)
+
         return out
-
-
-class DCL(torch.nn.Module):
-    def __init__(self, temperature: float = 0.1):
-        super().__init__()
-        self.temperature = temperature
-
-    def forward(
-        self, feature: torch.Tensor, protos: torch.Tensor, y: torch.Tensor
-    ) -> torch.Tensor:
-        feature_norm = normalize(feature, dim=1)
-        protos_norm = normalize(protos, dim=1)
-        sim = torch.mm(feature_norm, protos_norm.t()) / self.temperature
-        batch_indices = torch.arange(feature.size(0), device=feature.device)
-        pos_sim = sim[batch_indices, y]
-        mask = torch.ones_like(sim, dtype=torch.bool)
-        mask[batch_indices, y] = False
-        neg_sim = sim[mask].view(feature.size(0), -1)
-        loss = -pos_sim + torch.logsumexp(neg_sim, dim=1)
-        return loss.mean()
 
 
 def client_worker(params):
     """
-    带有双重原型学习 (Dual Prototype Learning) 的 FedDPL 本地训练流程。
+    FedDPL local training with Dual Prototype Learning.
     """
     (
         _,
@@ -164,22 +145,27 @@ def client_worker(params):
     # 1. 初始化核心模型与 PLN（原型网络）
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
-    pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb)
-    pln.to(device)
+
+    pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb).to(
+        device
+    )
     pln.load_state_dict(pln_state)
 
     all_classes = torch.arange(0, num_classes).to(device)
-    dcl_loss_fn = DCL(temperature=0.1)
 
     # 2. 训练核心模型（特征提取器）
-    avg_loss_m = 0.0
+    avg_loss_m_m = 0.0
+    avg_loss_m_p = 0.0
     if mode in ["model", "normal", "all"]:
         model.train()
         pln.eval()
         opt = torch.optim.SGD(model.parameters(), lr=lr)
         total_loss_m = 0.0
+        total_loss_p = 0.0
         num_batches_m = 0
-        loader = torch.utils.data.DataLoader(train_set, batch_size, True)
+        loader = torch.utils.data.DataLoader(
+            train_set, batch_size=batch_size, shuffle=True
+        )
 
         for _ in range(epochs):
             for x, y in loader:
@@ -188,20 +174,22 @@ def client_worker(params):
                 output = model.classifier(feature)
                 loss_ce = ce_loss(output, y)
 
-                # PLN 损失：鼓励实例特征向其所属类的原型靠拢
+                # PLN 损失：促使特征向其对应类别的原型靠拢
                 with torch.no_grad():
                     protos = pln(all_classes)
-                # dist = torch.cdist(feature, protos, p=2) ** 2
-                # loss_proto = ce_loss(-torch.sqrt(dist), y)
-                loss_proto = dcl_loss_fn(feature, protos, y)
+                loss_proto = mse_loss(feature, protos[y])
 
                 loss = loss_ce + lambda_ * loss_proto
+
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
-                total_loss_m += loss.item()
+                total_loss_m += loss_ce.item()
+                total_loss_p += loss_proto.item()
                 num_batches_m += 1
-        avg_loss_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
+
+        avg_loss_m_m = total_loss_m / num_batches_m if num_batches_m > 0 else 0.0
+        avg_loss_m_p = total_loss_p / num_batches_m if num_batches_m > 0 else 0.0
 
     # 3. 训练 PLN 网络（优化类原型）
     avg_loss_p = 0.0
@@ -212,7 +200,9 @@ def client_worker(params):
         total_loss_p = 0.0
         num_batches_p = 0
 
-        loader_pln = torch.utils.data.DataLoader(train_set, batch_size_pln, True)
+        loader_pln = torch.utils.data.DataLoader(
+            train_set, batch_size=batch_size_pln, shuffle=True
+        )
 
         for _ in range(epoch_pln):
             for x, y in loader_pln:
@@ -222,10 +212,8 @@ def client_worker(params):
                 with torch.no_grad():
                     feature = model.extractor(x)
 
-                # 更新原型，使其更贴近各类的实例特征
-                # dist = torch.cdist(feature, protos, p=2) ** 2
-                # loss = ce_loss(-torch.sqrt(dist), y)
-                loss = dcl_loss_fn(feature, protos, y)
+                # 更新原型，使其更贴近所在类的实例特征
+                loss = mse_loss(feature, protos[y])
 
                 opt_pln.zero_grad()
                 loss.backward()
@@ -237,7 +225,7 @@ def client_worker(params):
 
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
     pln_state = {k: v.cpu() for k, v in pln.state_dict().items()}
-    return [avg_loss_m, avg_loss_p, model_state, pln_state]
+    return [avg_loss_m_m, avg_loss_m_p, avg_loss_p, model_state, pln_state]
 
 
 class Server(BaseServer):
@@ -255,6 +243,8 @@ class Server(BaseServer):
 
         self.all_classes = torch.arange(0, self.num_class)
         self.loss_p: list[float] = []
+        self.loss_m_m: list[float] = []
+        self.loss_m_p: list[float] = []
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -298,40 +288,75 @@ class Server(BaseServer):
             ]
             results = self.run_clients(client_worker, p)
 
-            # 汇集各客户端的回传结果，以增量方式计算整体特征提取模型与 PLN 的加权平均损失
+            # 汇集各客户端回传结果，以增量方式计算加权平均损失
             total_loss_model = 0.0
+            total_loss_model_m = 0.0
+            total_loss_model_p = 0.0
             total_loss_pln = 0.0
             plns_states = []
+            models_states = []
             current_weights = []
             for i in selected_clients:
-                client_loss_m, client_loss_p, client_state, client_pln = results[i]
-                total_loss_model += client_loss_m
-                total_loss_pln += client_loss_p
+                (
+                    client_loss_m_m,
+                    client_loss_m_p,
+                    client_loss_pln,
+                    client_state,
+                    client_pln,
+                ) = results[i]
+                total_loss_model += client_loss_m_m + client_loss_m_p
+                total_loss_model_m += client_loss_m_m
+                total_loss_model_p += client_loss_m_p
+                total_loss_pln += client_loss_pln
                 self.clients_state[i] = client_state
                 plns_states.append(client_pln)
+                models_states.append(client_state)
                 current_weights.append(self.weights[i])
             self.loss.append(total_loss_model / num_join_clients)
+            self.loss_m_m.append(total_loss_model_m / num_join_clients)
+            self.loss_m_p.append(total_loss_model_p / num_join_clients)
             self.loss_p.append(total_loss_pln / num_join_clients)
+
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
-            # 聚合各客户端学习到的 PLN 参数
-            self.aggregate(plns_states, weights=norm_weights)
+            # 聚合各客户端学习到的 PLN 参数与特征提取器
+            self.aggregate(models_states, plns_states, weights=norm_weights)
 
-            # 直接使用最新聚合后的 PLN 模块输出作为当前全局原型进行效果评估
+            # 使用统一接口进行全量客户端测试验证
             protos_tensor = self.pln(self.all_classes)
             self.evaluate(protos=protos_tensor)
 
+            print(
+                f"Loss: {self.loss[-1]:.4f} (M: {self.loss_m_m[-1]:.4f}, P: {self.loss_m_p[-1]:.4f}), PLN Loss: {self.loss_p[-1]:.4f}"
+            )
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_proto[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def aggregate(self, pln_params, weights):
+    def aggregate(self, model_params, pln_params, weights):
+        # 1. 聚合 PLN 原型网络
         self.pln.load_state_dict(param_aggregate(pln_params, weights))
+
+        # 2. 提取并聚合特征提取器 (extractor)
+        extractor_params = [
+            {k: v for k, v in state.items() if k.startswith("extractor")}
+            for state in model_params
+        ]
+        global_extractor = param_aggregate(extractor_params, weights)
+
+        # 3. 将聚合后的全局特征提取器同步给所有客户端，保留各客户端个性化的分类头 (classifier)
+        for i in range(self.num_clients):
+            for k, v in global_extractor.items():
+                self.clients_state[i][k] = v.clone()
 
     def save(self):
         f = {
             "acc": {"model": self.acc, "proto": self.acc_proto},
-            "loss": {"model": self.loss, "proto": self.loss_p},
+            "loss": {
+                "model": self.loss,
+                "proto": self.loss_p,
+                "aux": {"model_m": self.loss_m_m, "model_p": self.loss_m_p},
+            },
             "state_dict": {
                 "client": self.clients_state,
                 "proto": self.pln.state_dict(),

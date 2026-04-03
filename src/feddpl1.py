@@ -325,7 +325,9 @@ class Server(BaseServer):
             protos_tensor = self.pln(self.all_classes)
             self.evaluate(protos=protos_tensor)
 
-            print(f"Loss: {self.loss[-1]:.4f}, PLN Loss: {self.loss_p[-1]:.4f}")
+            print(
+                f"Loss: {self.loss[-1]:.4f} (M: {self.loss_m_m[-1]:.4f}, P: {self.loss_m_p[-1]:.4f}), PLN Loss: {self.loss_p[-1]:.4f}"
+            )
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_proto[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 

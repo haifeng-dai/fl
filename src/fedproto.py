@@ -170,9 +170,10 @@ class Server(BaseServer):
             avg_protos[k] = torch.mean(protos, dim=0).detach()
 
         # 对于本轮没有任何客户端上传的新类别原型，保留老旧历史状态以防遗失 (和 FedProc 逻辑对齐)
-        for k, v in self.global_protos.items():
-            if k not in avg_protos:
-                avg_protos[k] = v
+        if self.global_protos is not None:
+            for k, v in self.global_protos.items():
+                if k not in avg_protos:
+                    avg_protos[k] = v
 
         return avg_protos
 
