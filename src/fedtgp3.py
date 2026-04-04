@@ -125,8 +125,8 @@ def proto_cluster(protos_list):
 def client_worker(params):
     """
     FedTGP-Dec 客户端训练流程：解耦的交替优化。
-    Phase 1: 冻结特征提取器，仅优化分类头。
-    Phase 2: 冻结分类头，仅微调特征提取器并对齐全局原型。
+    Phase 1: 冻结分类头，仅微调特征提取器并对齐全局原型。
+    Phase 2: 冻结特征提取器，仅优化分类头。
     """
     (
         _,
@@ -156,43 +156,20 @@ def client_worker(params):
         global_protos.to(device) if global_protos is not None else None
     )
 
-    # === Phase 1: Local Head Optimization ===
-    # 冻结 extractor，仅更新 classifier
-    for param in model.extractor.parameters():
-        param.requires_grad = False
-    for param in model.classifier.parameters():
-        param.requires_grad = True
-
-    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=lr_head)
-    model.train()
-
-    total_loss_ce = 0.0
-    num_batches_head = 0
-    for _ in range(head_epochs):
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            out = model(x)
-            loss = ce_loss(out, y)
-            optimizer_head.zero_grad()
-            loss.backward()
-            optimizer_head.step()
-            total_loss_ce += loss.item()
-            num_batches_head += 1
-
-    avg_loss_ce = total_loss_ce / num_batches_head if num_batches_head > 0 else 0.0
-
-    # === Phase 2: Local Body Alignment ===
+    # === Phase 1: Local Body Alignment ===
     # 冻结 classifier，激活 extractor
     for param in model.classifier.parameters():
         param.requires_grad = False
     for param in model.extractor.parameters():
         param.requires_grad = True
 
+    avg_loss_proto = 0.0
     if global_protos_tensor is not None:
         optimizer_body = torch.optim.SGD(model.extractor.parameters(), lr=lr_body)
 
         total_loss_proto = 0.0
         num_batches_body = 0
+        model.train()
         for _ in range(body_epochs):
             for x, y in loader:
                 x, y = x.to(device), y.to(device)
@@ -216,8 +193,31 @@ def client_worker(params):
                 num_batches_body += 1
 
         avg_loss_proto = total_loss_proto / num_batches_body if num_batches_body > 0 else 0.0
-    else:
-        avg_loss_proto = 0.0
+
+    # === Phase 2: Local Head Optimization ===
+    # 冻结 extractor，仅更新 classifier
+    for param in model.extractor.parameters():
+        param.requires_grad = False
+    for param in model.classifier.parameters():
+        param.requires_grad = True
+
+    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=lr_head)
+    model.train()
+
+    total_loss_ce = 0.0
+    num_batches_head = 0
+    for _ in range(head_epochs):
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            out = model(x)
+            loss = ce_loss(out, y)
+            optimizer_head.zero_grad()
+            loss.backward()
+            optimizer_head.step()
+            total_loss_ce += loss.item()
+            num_batches_head += 1
+
+    avg_loss_ce = total_loss_ce / num_batches_head if num_batches_head > 0 else 0.0
 
     # === Phase 3: Recalculate Precise Prototypes ===
     model.eval()
@@ -359,7 +359,23 @@ class Server(BaseServer):
         dist_matrix = torch.cdist(all_protos, all_protos, p=2.0)
 
         # 将对角线(自距离)设为无穷大，防止被误选为最小间距
-        dist_matrix.fill_diagonal_(float('inf'))
+        dist_matrix.fill_diagonal_(float("inf"))
+
+        # 如果某些类别在当前 Round 缺失，它们在 dist_matrix 中为全 0 行/列
+        # 这会导致其最小距离为 0 (与另一个全 0 行的距离)，这是误导性的。
+        # 我们应该排除这些类别，或者给它们一个较大的默认值。
+        present_labels = list(avg_protos_dict.keys())
+        if len(present_labels) < self.num_class:
+            # 创建掩码，仅保留存在的类别
+            mask = torch.ones(self.num_class, dtype=torch.bool, device=self.device)
+            all_labels = torch.arange(self.num_class, device=self.device)
+            mask[
+                ~torch.isin(all_labels, torch.tensor(present_labels, device=self.device))
+            ] = False
+
+            # 对于不存在的类别，将其整行和整列设为 inf，避免被最小间距选中
+            dist_matrix[~mask, :] = float("inf")
+            dist_matrix[:, ~mask] = float("inf")
 
         # 获取每个类别的最小间距 [C]
         self.gap = torch.min(dist_matrix, dim=1)[0]

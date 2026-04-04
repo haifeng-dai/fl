@@ -8,7 +8,7 @@
 # # traditional algorithms
 # export ALGOS="fedavg,feddyn,fedfm,fedlsa,fedpln,fedproc,fedprox,moon,scaffold"
 
-# # personalized algorithms
+# personalized algorithms
 # export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
 export ALGOS="fedtgp1"
@@ -36,7 +36,7 @@ export N_CLASSES="2"
 # =============
 export EPOCHS="10"
 export LRS="0.01"
-export ROUNDS="200"
+export ROUNDS="100"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
 export TIMES=1
@@ -59,6 +59,16 @@ if [ "${TEST}" -eq 1 ]; then
     export ROUNDS="10"
 fi
 
+# FedTGP1 (FedTGP-Dec)
+export LAMDAS_TGP1="100.0"
+export HEAD_EPOCHS_TGP1="3"
+export BODY_EPOCHS_TGP1="3"
+export LR_HEAD_TGP1="0.01"
+export LR_BODY_TGP1="0.01"
+export SERVER_EPOCHS_TGP1="100"
+export SERVER_LRS_TGP1="0.01"
+export MARGIN_THRESHOLDS_TGP1="100.0"
+
 # =============
 # Algorithm Specific
 # =============
@@ -71,9 +81,7 @@ export ALA_THRESHOLDS_ALA="0.1"
 export NUM_PRE_LOSSES_ALA="10"
 
 # FedDPL
-# export LAMBDAS_DPL="0.01,0.1,1.0,10.0,20.0,30.0"
 export LAMBDAS_DPL="10.0"
-# export EPOCH_PLNS_DPL="2,4,6,8,10,12,14,16,18,20"
 export EPOCH_PLNS_DPL="10"
 export LRS_DPL="0.01"
 export BATCH_SIZE_PLNS_DPL="64"
@@ -128,16 +136,6 @@ export LAMDAS_TGP="10.0"
 export SERVER_EPOCHS_TGP="10"
 export SERVER_LRS_TGP="0.01"
 export MARGIN_THRESHOLDS_TGP="1.0"
-
-# FedTGP1 (FedTGP-Dec)
-export LAMDAS_TGP1="10.0"
-export HEAD_EPOCHS_TGP1="3"
-export BODY_EPOCHS_TGP1="3"
-export LR_HEAD_TGP1="0.01"
-export LR_BODY_TGP1="0.01"
-export SERVER_EPOCHS_TGP1="10"
-export SERVER_LRS_TGP1="0.01"
-export MARGIN_THRESHOLDS_TGP1="1.0"
 
 # FML
 export ALPHAS_FML="1.0"

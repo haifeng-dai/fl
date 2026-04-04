@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 import torch
+import wandb
 
 from src import get_pre_name, prepare_data
 
@@ -28,35 +29,37 @@ def get_args():
         "--algo",
         type=str,
         default="fedavg",
-        choices=[
-            "fedavg",
-            "moon",
-            "fedpln",
-            "feddpl",
-            "feddpl1",
-            "feddpl2",
-            "feddpl3",
-            "feddpl4",
-            "fedproto",
-            "fedkd",
-            "fml",
-            "proxyfl",
-            "fedper",
-            "fedprox",
-            "fedsa",
-            "fedlsa",
-            "lgfedavg",
-            "fedrep",
-            "fedala",
-            "fedtgp",
-            "fedtgp1",
-            "fedtest",
-            "feddyn",
-            "scaffold",
-            "fedfm",
-            "fedproc",
-            "local",
-        ],
+        # choices=[
+        #     "fedavg",
+        #     "moon",
+        #     "fedpln",
+        #     "feddpl",
+        #     "feddpl1",
+        #     "feddpl2",
+        #     "feddpl3",
+        #     "feddpl4",
+        #     "fedproto",
+        #     "fedkd",
+        #     "fml",
+        #     "proxyfl",
+        #     "fedper",
+        #     "fedprox",
+        #     "fedsa",
+        #     "fedlsa",
+        #     "lgfedavg",
+        #     "fedrep",
+        #     "fedala",
+        #     "fedtgp",
+        #     "fedtgp1",
+        #     "fedtgp2",
+        #     "fedtgp3",
+        #     "fedtest",
+        #     "feddyn",
+        #     "scaffold",
+        #     "fedfm",
+        #     "fedproc",
+        #     "local",
+        # ],
     )
     parser.add_argument("--test", type=int, default=0, help="Test or train")
     parser.add_argument(
@@ -195,9 +198,33 @@ def main():
                 test_ratio=args.test_ratio,
             )
 
+            run = wandb.init(
+                entity="haifeng_dai-southeast-university",
+                project="my-awesome-project",
+                config={
+                    "algo": args.algo,
+                    "dataset": args.dataset,
+                    "model": args.model,
+                    "feature_dim": args.feature_dim,
+                    "num_clients": args.num_clients,
+                    "partition": args.partition,
+                    "alpha": args.alpha,
+                    "n_classes": args.n_class,
+                    "epochs": args.epochs,
+                    "lr": args.lr,
+                    "rounds": args.rounds,
+                    "batch_size": args.batch_size,
+                    "join_ratio": args.join_ratio,
+                    "seed": args.seed,
+                    "times": 0,
+                },
+            )
+
             server = algo_module.Server(args=args)
             server.fit()
             server.save()
+
+            run.finish()
 
             b = time.time()
             print(

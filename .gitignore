@@ -11,5 +11,7 @@ test/
 results/
 logs/
 figures/
+wandb/
+idea/
 
 uv.lock

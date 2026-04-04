@@ -28,30 +28,6 @@ def add_args(parser: argparse.ArgumentParser):
         help="Weight for prototype matching loss (default: 10.0)",
     )
     group.add_argument(
-        "--head_epochs",
-        type=int,
-        default=4,
-        help="Number of local head-only epochs (default: 4)",
-    )
-    group.add_argument(
-        "--body_epochs",
-        type=int,
-        default=1,
-        help="Number of local body-only epochs (default: 1)",
-    )
-    group.add_argument(
-        "--lr_head",
-        type=float,
-        default=0.01,
-        help="Learning rate for local head-only training (default: 0.01)",
-    )
-    group.add_argument(
-        "--lr_body",
-        type=float,
-        default=0.001,
-        help="Learning rate for local body-only training (default: 0.001)",
-    )
-    group.add_argument(
         "--server_epochs",
         type=int,
         default=10,
@@ -66,14 +42,14 @@ def add_args(parser: argparse.ArgumentParser):
     group.add_argument(
         "--margin_threshold",
         type=float,
-        default=5.0,
-        help="Margin threshold for TGP training (default: 5.0)",
+        default=1.0,
+        help="Margin threshold for TGP training (default: 1.0)",
     )
     return parser
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.lamda_}_{args.head_epochs}_{args.body_epochs}_{args.lr_head}_{args.lr_body}_{args.server_epochs}_{args.server_lr}_{args.margin_threshold}"
+    args.file_name = f"{args.name_pre}_{args.lamda_}_{args.server_epochs}_{args.server_lr}_{args.margin_threshold}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
 
 
@@ -124,9 +100,9 @@ def proto_cluster(protos_list):
 
 def client_worker(params):
     """
-    FedTGP-Dec 客户端训练流程：解耦的交替优化。
-    Phase 1: 冻结特征提取器，仅优化分类头。
-    Phase 2: 冻结分类头，仅微调特征提取器并对齐全局原型。
+    FedTGP2 客户端训练流程：解耦的两阶段更新。
+    Phase 1: 仅优化分类头。
+    Phase 2: 仅优化特征提取器并对齐全局原型。
     """
     (
         _,
@@ -135,26 +111,28 @@ def client_worker(params):
         train_set,
         model_name,
         dataset_name,
+        lr,
         batch_size,
-        head_epochs,
-        body_epochs,
-        lr_head,
-        lr_body,
+        epochs,
         lamda_,
         global_protos,
-        num_class,
+        num_classes,
         feature_dim,
     ) = params
 
-    # 初始化模型并加载本地持久化状态
+    # 初始化模型并加载全局状态
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # 预处理全局原型：从单一 Tensor 快速搬运到 GPU
-    global_protos_tensor = (
-        global_protos.to(device) if global_protos is not None else None
-    )
+    # 预处理全局原型以便在 GPU 上高效访问和计算
+    global_protos_tensor = None
+    if global_protos is not None:
+        first_proto = next(iter(global_protos.values()))
+        feat_dim = first_proto.shape[0]
+        global_protos_tensor = torch.zeros(num_classes, feat_dim, device=device)
+        for label, proto in global_protos.items():
+            global_protos_tensor[label] = proto.to(device)
 
     # === Phase 1: Local Head Optimization ===
     # 冻结 extractor，仅更新 classifier
@@ -163,12 +141,12 @@ def client_worker(params):
     for param in model.classifier.parameters():
         param.requires_grad = True
 
-    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=lr_head)
+    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=lr)
     model.train()
 
     total_loss_ce = 0.0
     num_batches_head = 0
-    for _ in range(head_epochs):
+    for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             out = model(x)
@@ -188,24 +166,22 @@ def client_worker(params):
     for param in model.extractor.parameters():
         param.requires_grad = True
 
+    avg_loss_proto = 0.0
     if global_protos_tensor is not None:
-        optimizer_body = torch.optim.SGD(model.extractor.parameters(), lr=lr_body)
-
+        optimizer_body = torch.optim.SGD(model.extractor.parameters(), lr=lr)
         total_loss_proto = 0.0
         num_batches_body = 0
-        for _ in range(body_epochs):
+        for _ in range(epochs):
             for x, y in loader:
                 x, y = x.to(device), y.to(device)
                 features = model.extractor(x)
-
-                # 恢复语义锚定：计算分类损失以维持特征的判别力
+                # 计算分类损失以维持特征的判别力
                 out = model.classifier(features)
                 l_ce = ce_loss(out, y)
 
                 target_protos = global_protos_tensor[y]
                 l_proto = mse_loss(features, target_protos)
 
-                # 双重约束：本地决策稳定性 + 全局流形靠拢
                 loss = l_ce + lamda_ * l_proto
 
                 optimizer_body.zero_grad()
@@ -214,15 +190,13 @@ def client_worker(params):
 
                 total_loss_proto += l_proto.item()
                 num_batches_body += 1
+        avg_loss_proto = (
+            total_loss_proto / num_batches_body if num_batches_body > 0 else 0.0
+        )
 
-        avg_loss_proto = total_loss_proto / num_batches_body if num_batches_body > 0 else 0.0
-    else:
-        avg_loss_proto = 0.0
-
-    # === Phase 3: Recalculate Precise Prototypes ===
-    model.eval()
+    # 收集最新的本地原型 (按类别平均特征向量)
     local_protos_avg = extract_prototypes(
-        model, loader, num_class, feature_dim, device
+        model, loader, num_classes, feature_dim, device
     )
 
     model_state = {k: v.cpu() for k, v in model.state_dict().items()}
@@ -249,9 +223,6 @@ class Server(BaseServer):
 
         # 初始化指标记录列表
         self.loss_proto = []
-        self.loss_tgp = []
-        self.loss_tgp_ce = []
-        self.loss_tgp_mse = []
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -268,29 +239,7 @@ class Server(BaseServer):
 
             global_protos_cpu = None
             if self.global_protos is not None:
-                global_protos_cpu = self.global_protos.cpu()
-
-            # --- Fine-tuning Strategies: Lambda Warm-up & LR Decay ---
-            # 1. Lambda Warm-up: 0-5 rounds: 0, 5-30 rounds: linear ramp
-            if r < 5:
-                current_lamda = 0.0
-            elif r < 30:
-                current_lamda = self.args.lamda_ * ((r - 5) / 25.0)
-            else:
-                current_lamda = self.args.lamda_
-
-            # 2. LR Decay (Commented out by default)
-            current_lr_head = self.args.lr_head
-            current_lr_body = self.args.lr_body
-            # if r >= int(self.rounds * 0.5):
-            #     current_lr_head *= 0.5
-            #     current_lr_body *= 0.5
-            # if r >= int(self.rounds * 0.75):
-            #     current_lr_head *= 0.5
-            #     current_lr_body *= 0.5
-
-            print(f"Current Lamda: {current_lamda:.4f}")
-            # print(f"Current LR Head: {current_lr_head:.4f}, Body: {current_lr_body:.4f}")
+                global_protos_cpu = {k: v.cpu() for k, v in self.global_protos.items()}
 
             p = [
                 [
@@ -300,12 +249,10 @@ class Server(BaseServer):
                     self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
+                    self.args.lr,
                     self.args.batch_size,
-                    self.args.head_epochs,
-                    self.args.body_epochs,
-                    current_lr_head,
-                    current_lr_body,
-                    current_lamda,
+                    self.args.epochs,
+                    self.args.lamda_,
                     global_protos_cpu,
                     self.num_class,
                     self.args.feature_dim,
@@ -322,8 +269,8 @@ class Server(BaseServer):
                 l_ce, l_p, client_state, client_proto = results[i]
                 total_loss_ce += l_ce
                 total_loss_proto += l_p
-                # 仅更新本地状态映射，不进行任何全局聚合
                 self.clients_state[i] = client_state
+                selected_states.append(client_state)
                 selected_protos.append(client_proto)
 
             self.loss.append(total_loss_ce / num_join_clients)
@@ -340,118 +287,71 @@ class Server(BaseServer):
 
             print(
                 f"Model Acc: {self.acc[-1]:.2f}%, Proto Acc: {self.acc_proto[-1]:.2f}%, "
-                f"Loss CE: {self.loss[-1]:.4f}, Loss Proto: {self.loss_proto[-1]:.4f}, "
-                f"TGP Loss: {self.loss_tgp[-1]:.4f}"
+                f"Loss CE: {self.loss[-1]:.4f}, Loss Proto: {self.loss_proto[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def calculate_gap(self, protos_per_client):
-        """向量化计算类别间的最小间距 (GPU 加速)"""
-        avg_protos_dict = proto_cluster(protos_per_client)
+        self.gap = torch.ones(self.num_class, device=self.device) * 1e9
+        avg_protos = proto_cluster(protos_per_client)
 
-        # 将各类别原型聚合成单一 Tensor [C, d]
-        # 注意：此处需处理本地数据中可能缺失的类别
-        all_protos = torch.zeros(self.num_class, self.feature_dim, device=self.device)
-        for label, proto in avg_protos_dict.items():
-            all_protos[label] = proto.to(self.device)
-
-        # 计算两两之间的欧氏距离
-        dist_matrix = torch.cdist(all_protos, all_protos, p=2.0)
-
-        # 将对角线(自距离)设为无穷大，防止被误选为最小间距
-        dist_matrix.fill_diagonal_(float('inf'))
-
-        # 获取每个类别的最小间距 [C]
-        self.gap = torch.min(dist_matrix, dim=1)[0]
+        for k1 in avg_protos.keys():
+            for k2 in avg_protos.keys():
+                if k1 > k2:
+                    dis = torch.norm(
+                        avg_protos[k1].to(self.device) - avg_protos[k2].to(self.device),
+                        p=2,
+                    )
+                    self.gap[k1] = torch.min(self.gap[k1], dis)
+                    self.gap[k2] = torch.min(self.gap[k2], dis)
 
         min_gap = torch.min(self.gap)
+        for i in range(len(self.gap)):
+            if self.gap[i] > 1e8:
+                self.gap[i] = min_gap
         print(f"Min gap: {min_gap:.4f}, Max gap: {torch.max(self.gap):.4f}")
 
     def update_tgp(self, uploaded_protos):
         self.tgp.train()
         optimizer = torch.optim.SGD(self.tgp.parameters(), lr=self.args.server_lr)
 
-        # 预先生成类别索引张量，避免循环中重复转换
-        all_class_ids = torch.arange(self.num_class, device=self.device)
-        margin = min(torch.max(self.gap).item(), self.args.margin_threshold)
-
-        for epoch in range(self.args.server_epochs):
+        for _ in range(self.args.server_epochs):
             proto_loader = DataLoader(
                 uploaded_protos, batch_size=self.args.batch_size, shuffle=True
             )
-            epoch_loss = 0.0
-            epoch_loss_ce = 0.0
-            epoch_loss_mse = 0.0
             for proto_batch, labels_batch in proto_loader:
                 proto_batch = proto_batch.to(self.device)
                 labels_batch = labels_batch.to(self.device, dtype=torch.long)
+                proto_gen = self.tgp(list(range(self.num_class)))
+                # dist = torch.cdist(proto_batch, proto_gen, p=2.0)
+                # one_hot = F.one_hot(labels_batch, self.num_class).to(self.device)
+                # margin = min(torch.max(self.gap).item(), self.args.margin_threshold)
+                # dist = dist + one_hot * margin
+                # loss = ce_loss(-dist, labels_batch)
 
-                # 一次性生成所有类别的原型 logits，避免多次 TGP 前向计算
-                proto_gen = self.tgp(all_class_ids)
-                dist = torch.cdist(proto_batch, proto_gen, p=2.0)
-                one_hot = F.one_hot(labels_batch, self.num_class).to(self.device)
-                dist = dist + one_hot * margin
-
-                loss_ce = ce_loss(-dist, labels_batch)
-                loss_mse = mse_loss(proto_batch, proto_gen[labels_batch])
-                loss = loss_ce + loss_mse
-
-                # # 标准的基于余弦相似度的对比学习 Loss (InfoNCE style)
-                # # 对 Batch 特征和生成的全局原型进行 L2 归一化
-                # p_batch_norm = F.normalize(proto_batch, p=2, dim=1)
-                # p_gen_norm = F.normalize(proto_gen, p=2, dim=1)
-                # # 计算相似度矩阵并除以温度系数 (默认 0.1)
-                # logits = torch.matmul(p_batch_norm, p_gen_norm.T) / 0.1
-                # loss = ce_loss(logits, labels_batch)
-
+                # 使用 MSE Loss
+                loss = mse_loss(proto_batch, proto_gen[labels_batch])
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                epoch_loss += loss.item()
-                epoch_loss_ce += loss_ce.item()
-                epoch_loss_mse += loss_mse.item()
-
-            avg_loss = epoch_loss / len(proto_loader)
-            avg_loss_ce = epoch_loss_ce / len(proto_loader)
-            avg_loss_mse = epoch_loss_mse / len(proto_loader)
-
-            if (epoch + 1) % 5 == 0 or epoch == 0:
-                print(
-                    f"  TGP Epoch {epoch+1}/{self.args.server_epochs}, "
-                    f"Loss: {avg_loss:.4f} (CE: {avg_loss_ce:.4f}, MSE: {avg_loss_mse:.4f})"
-                )
-
-        # 记录每轮最后一轮 TGP 优化的损失均值
-        self.loss_tgp.append(avg_loss)
-        self.loss_tgp_ce.append(avg_loss_ce)
-        self.loss_tgp_mse.append(avg_loss_mse)
 
         self.tgp.eval()
+        self.global_protos = {}
         with torch.no_grad():
-            # 彻底转向 Tensor 型原型：[C, d]
-            self.global_protos = self.tgp(all_class_ids).detach()
+            for class_id in range(self.num_class):
+                self.global_protos[class_id] = self.tgp(
+                    torch.tensor(class_id, device=self.device)
+                ).data.clone()
 
     def save(self):
         f = {
-            "acc": {
-                "model": self.acc,
-                "proto": self.acc_proto,
-            },
-            "loss": {
-                "model_ce": self.loss,
-                "client_proto": self.loss_proto,
-                "server_tgp": self.loss_tgp,
-                "server_tgp_ce": self.loss_tgp_ce,
-                "server_tgp_mse": self.loss_tgp_mse,
-            },
+            "acc": {"model": self.acc, "proto": self.acc_proto},
+            "loss": {"model": self.loss, "proto": self.loss_proto},
             "state_dict": {
-                "global_model_init": self.model.state_dict(),
-                "client_states": self.clients_state,
-                "global_prototypes": self.global_protos,
-                "aux": {
-                    "tgp_net": self.tgp.state_dict(),
-                    "gap": self.gap.cpu(),
-                },
+                "global": self.model.state_dict(),
+                "client": self.clients_state,
+                "proto": self.global_protos,
+                "aux": {"tgp": self.tgp.state_dict(), "gap": self.gap.cpu()},
             },
         }
         self.deal_save(f)

@@ -24,7 +24,9 @@ class ResultLoader:
             "fedsa": lambda args: f"_{args['alpha_sa']}_{args['lambda_r']}_{args['lambda_mcl']}_{args['lambda_cc']}",
             "scaffold": lambda args: f"_glr{args['global_lr']}",
             "fedtgp": lambda args: f"_{args['lamda_']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
-            "fedtgp1": lambda args: f"_{args['lamda_']}_{args['head_epochs']}_{args['body_epochs']}_{args['lr_head']}_{args['lr_body']}",
+            "fedtgp1": lambda args: f"_{args['lamda_']}_{args['head_epochs']}_{args['body_epochs']}_{args['lr_head']}_{args['lr_body']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
+            "fedtgp2": lambda args: f"_{args['lamda_']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
+            "fedtgp3": lambda args: f"_{args['lamda_']}_{args['head_epochs']}_{args['body_epochs']}_{args['lr_head']}_{args['lr_body']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
             "fml": lambda args: f"_{args['alpha_fml']}_{args['beta_fml']}",
             "lgfedavg": lambda args: "",
             "moon": lambda args: f"_{args['mu']}_{args['tau']}",
@@ -94,22 +96,34 @@ class ResultLoader:
                 avg_result[key] = self._average_recursive([d[key] for d in loaded_data if key in d])
         return avg_result
 
-def plot_results(results_dict, metric="acc", title=None, xlabel="Rounds", ylabel="Accuracy"):
+def plot_results(results_dict, x_lim, metric="acc", title=None, xlabel="Rounds", ylabel="Accuracy"):
     plt.figure(figsize=(12, 7))
+    summary = []
+
     for label, data in results_dict.items():
         if data is None: continue
         metric_data = data.get(metric)
         if metric_data is None: continue
+
         if isinstance(metric_data, list):
-            y = metric_data
-            plt.plot(y, label=f"{label} (Max: {max(y):.2f})")
+            y = metric_data[0:x_lim]
+            max_val = max(y)
+            last_10_avg = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
+            plt.plot(y, label=f"{label} (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
+            summary.append({"Algorithm": label, "Max": max_val, "Last10": last_10_avg})
         elif isinstance(metric_data, dict):
             if "model" in metric_data:
-                y = metric_data["model"]
-                plt.plot(y, label=f"{label}-Model (Max: {max(y):.2f})")
+                y = metric_data["model"][0:x_lim]
+                max_val = max(y)
+                last_10_avg = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
+                plt.plot(y, label=f"{label}-Model (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
+                summary.append({"Algorithm": f"{label}-Model", "Max": max_val, "Last10": last_10_avg})
             if "proto" in metric_data:
-                y = metric_data["proto"]
-                plt.plot(y, linestyle="--", alpha=0.8, label=f"{label}-Proto (Max: {max(y):.2f})")
+                y = metric_data["proto"][0:x_lim]
+                max_val = max(y)
+                last_10_avg = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
+                plt.plot(y, linestyle="--", alpha=0.8, label=f"{label}-Proto (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
+                summary.append({"Algorithm": f"{label}-Proto", "Max": max_val, "Last10": last_10_avg})
 
     plt.title(title or f"Comparison of {metric.upper()}")
     plt.xlabel(xlabel)
@@ -122,6 +136,17 @@ def plot_results(results_dict, metric="acc", title=None, xlabel="Rounds", ylabel
     save_name = (title or "comparison").lower().replace(" ", "_").replace("(", "").replace(")", "") + ".png"
     plt.savefig(os.path.join("figures", save_name), dpi=300)
     print(f"Figure saved to figures/{save_name}")
+
+    # Print summary table
+    print(f"\nSummary of {metric.upper()}:")
+    print("-" * 65)
+    print(f"{'Algorithm':<20} | {'Max Acc':>15} | {'Last 10 Avg':>15}")
+    print("-" * 65)
+    for entry in summary:
+        print(f"{entry['Algorithm']:<20} | {entry['Max']:>15.4f} | {entry['Last10']:>15.4f}")
+    print("-" * 65)
+    plt.xlim(0, x_lim)
+
     plt.show()
 
 def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
