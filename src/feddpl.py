@@ -323,6 +323,7 @@ class Server(BaseServer):
             self.evaluate(protos=protos_tensor)
 
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_proto[-1]:.4f}")
+            self.log_dict(r, {"train/loss_proto": self.loss_p[-1]})
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def aggregate(self, pln_params, weights):

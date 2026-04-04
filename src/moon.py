@@ -164,6 +164,7 @@ class Server(BaseServer):
             print(
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
+            self.log_dict(r)
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):

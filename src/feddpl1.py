@@ -329,6 +329,14 @@ class Server(BaseServer):
                 f"Loss: {self.loss[-1]:.4f} (M: {self.loss_m_m[-1]:.4f}, P: {self.loss_m_p[-1]:.4f}), PLN Loss: {self.loss_p[-1]:.4f}"
             )
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_proto[-1]:.4f}")
+            self.log_dict(
+                r,
+                {
+                    "train/loss_proto": self.loss_p[-1],
+                    "train/loss_m_m": self.loss_m_m[-1],
+                    "train/loss_m_p": self.loss_m_p[-1],
+                },
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def aggregate(self, pln_params, weights):

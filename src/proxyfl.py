@@ -218,6 +218,9 @@ class Server(BaseServer):
                 f"Avg Local Acc: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}\n"
                 f"Avg Proxy Acc: {self.acc_p[-1]:.2f}%, Avg Proxy Loss: {self.loss_p[-1]:.4f}"
             )
+            self.log_dict(
+                r, {"test/acc_proxy": self.acc_p[-1], "train/loss_proxy": self.loss_p[-1]}
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):

@@ -343,6 +343,15 @@ class Server(BaseServer):
                 f"Loss CE: {self.loss[-1]:.4f}, Loss Proto: {self.loss_proto[-1]:.4f}, "
                 f"TGP Loss: {self.loss_tgp[-1]:.4f}"
             )
+            self.log_dict(
+                r,
+                {
+                    "train/loss_proto": self.loss_proto[-1],
+                    "server/tgp_loss_total": self.loss_tgp[-1],
+                    "server/tgp_loss_ce": self.loss_tgp_ce[-1],
+                    "server/tgp_loss_mse": self.loss_tgp_mse[-1],
+                },
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def calculate_gap(self, protos_per_client):
@@ -388,21 +397,21 @@ class Server(BaseServer):
 
                 # 一次性生成所有类别的原型 logits，避免多次 TGP 前向计算
                 proto_gen = self.tgp(all_class_ids)
-                dist = torch.cdist(proto_batch, proto_gen, p=2.0)
-                one_hot = F.one_hot(labels_batch, self.num_class).to(self.device)
-                dist = dist + one_hot * margin
+                # dist = torch.cdist(proto_batch, proto_gen, p=2.0)
+                # one_hot = F.one_hot(labels_batch, self.num_class).to(self.device)
+                # dist = dist + one_hot * margin
 
-                loss_ce = ce_loss(-dist, labels_batch)
+                # loss_ce = ce_loss(-dist, labels_batch)
                 loss_mse = mse_loss(proto_batch, proto_gen[labels_batch])
-                loss = loss_ce + loss_mse
 
-                # # 标准的基于余弦相似度的对比学习 Loss (InfoNCE style)
-                # # 对 Batch 特征和生成的全局原型进行 L2 归一化
-                # p_batch_norm = F.normalize(proto_batch, p=2, dim=1)
-                # p_gen_norm = F.normalize(proto_gen, p=2, dim=1)
-                # # 计算相似度矩阵并除以温度系数 (默认 0.1)
-                # logits = torch.matmul(p_batch_norm, p_gen_norm.T) / 0.1
-                # loss = ce_loss(logits, labels_batch)
+                # 标准的基于余弦相似度的对比学习 Loss (InfoNCE style)
+                # 对 Batch 特征和生成的全局原型进行 L2 归一化
+                p_batch_norm = F.normalize(proto_batch, p=2, dim=1)
+                p_gen_norm = F.normalize(proto_gen, p=2, dim=1)
+                # 计算相似度矩阵并除以温度系数 (默认 0.1)
+                logits = torch.matmul(p_batch_norm, p_gen_norm.T) / 0.1
+                loss_ce = ce_loss(logits, labels_batch)
+                loss = loss_mse
 
                 optimizer.zero_grad()
                 loss.backward()

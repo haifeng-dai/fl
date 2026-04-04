@@ -189,6 +189,9 @@ class Server(BaseServer):
                 f"Acc Global: {acc_g:.2f}%, Acc Local: {self.acc[-1]:.2f}%, "
                 f"Loss Global: {self.loss_g[-1]:.4f}, Loss Local: {self.loss[-1]:.4f}"
             )
+            self.log_dict(
+                r, {"test/acc_global": acc_g, "train/loss_global": self.loss_g[-1]}
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):

@@ -198,9 +198,11 @@ def main():
                 test_ratio=args.test_ratio,
             )
 
+            run_name = f"{args.algo}_{args.dataset}_{args.model}_{args.partition}_{args.alpha}_seed{args.seed}_time{args.times}"
             run = wandb.init(
                 entity="haifeng_dai-southeast-university",
-                project="my-awesome-project",
+                project="FL",
+                name=run_name,
                 config={
                     "algo": args.algo,
                     "dataset": args.dataset,
@@ -216,13 +218,24 @@ def main():
                     "batch_size": args.batch_size,
                     "join_ratio": args.join_ratio,
                     "seed": args.seed,
-                    "times": 0,
+                    "times": args.times,
                 },
             )
 
             server = algo_module.Server(args=args)
             server.fit()
             server.save()
+
+            # 汇总指标记录 (Summary Metrics)
+            if hasattr(server, "acc") and len(server.acc) > 0:
+                wandb.run.summary["summary/max_acc"] = max(server.acc)
+                wandb.run.summary["summary/last_10_acc_mean"] = (
+                    np.mean(server.acc[-10:])
+                    if len(server.acc) >= 10
+                    else np.mean(server.acc)
+                )
+            if hasattr(server, "acc_proto") and len(server.acc_proto) > 0:
+                wandb.run.summary["summary/max_proto_acc"] = max(server.acc_proto)
 
             run.finish()
 

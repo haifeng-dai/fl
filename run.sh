@@ -9,9 +9,9 @@
 # export ALGOS="fedavg,feddyn,fedfm,fedlsa,fedpln,fedproc,fedprox,moon,scaffold"
 
 # personalized algorithms
-# export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
+export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
-export ALGOS="fedtgp1"
+# export ALGOS="fedtgp3"
 
 # =============
 # Data
@@ -34,7 +34,7 @@ export N_CLASSES="2"
 # =============
 # Training
 # =============
-export EPOCHS="10"
+export EPOCHS="5,7,8,9"
 export LRS="0.01"
 export ROUNDS="100"
 export BATCH_SIZES="64"

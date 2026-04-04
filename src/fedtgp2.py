@@ -289,6 +289,7 @@ class Server(BaseServer):
                 f"Model Acc: {self.acc[-1]:.2f}%, Proto Acc: {self.acc_proto[-1]:.2f}%, "
                 f"Loss CE: {self.loss[-1]:.4f}, Loss Proto: {self.loss_proto[-1]:.4f}"
             )
+            self.log_dict(r, {"train/loss_proto": self.loss_proto[-1]})
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def calculate_gap(self, protos_per_client):
