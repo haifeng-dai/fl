@@ -151,5 +151,5 @@ def get_pre_name(args):
     args.name_pre = f"{args.epochs}_{args.batch_size}_{args.lr}"
 
 
-def split_model(model: nn.Module):
+def split_model(model: torch.nn.Module):
     return model.extractor, model.projection, model.classifier

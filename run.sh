@@ -9,9 +9,19 @@
 # export ALGOS="fedavg,feddyn,fedfm,fedlsa,fedpln,fedproc,fedprox,moon,scaffold"
 
 # personalized algorithms
-export ALGOS="fedala,feddpl,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
+# export ALGOS="fedala,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
-# export ALGOS="fedtgp3"
+# export ALGOS="fedala,fedkd,fedper"
+
+# export ALGOS="fedproto,fedrep,fedsa"
+
+# export ALGOS="fedtgp,fml,lgfedavg"
+
+# export ALGOS="local,proxyfl"
+
+# export ALGOS="fedtgp1,fedtgp2,fedtgp3,fedtgp4"
+
+export ALGOS="feddpc"
 
 # =============
 # Data
@@ -34,7 +44,7 @@ export N_CLASSES="2"
 # =============
 # Training
 # =============
-export EPOCHS="5,7,8,9"
+export EPOCHS="10"
 export LRS="0.01"
 export ROUNDS="100"
 export BATCH_SIZES="64"
@@ -46,28 +56,29 @@ export TIMES=1
 # =============
 # 3,2,1,0  0,1,2,3
 # export GPUS="0,1,2,3"
-export GPUS="2,3,0,1"
+# export GPUS="2,3,0,1"
+export GPUS="3,0,1,2"
 export MP=1
 export MAX_WORKERS_PER_GPU=10
 
 # =============
 # Test
 # =============
-export TEST=0
+export TEST=1
 
 if [ "${TEST}" -eq 1 ]; then
-    export ROUNDS="10"
+    export ROUNDS="2"
 fi
 
-# FedTGP1 (FedTGP-Dec)
-export LAMDAS_TGP1="100.0"
-export HEAD_EPOCHS_TGP1="3"
-export BODY_EPOCHS_TGP1="3"
-export LR_HEAD_TGP1="0.01"
-export LR_BODY_TGP1="0.01"
-export SERVER_EPOCHS_TGP1="100"
-export SERVER_LRS_TGP1="0.01"
-export MARGIN_THRESHOLDS_TGP1="100.0"
+# FedDPC
+export LAMDAS_DPC="100.0"
+export HEAD_EPOCHS_DPC="10"
+export BODY_EPOCHS_DPC="2"
+export LR_HEAD_DPC="0.01"
+export LR_BODY_DPC="0.01"
+export SERVER_EPOCHS_DPC="100"
+export SERVER_LRS_DPC="0.01"
+export MARGIN_THRESHOLDS_DPC="100.0"
 
 # =============
 # Algorithm Specific

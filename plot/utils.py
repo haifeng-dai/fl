@@ -2,6 +2,34 @@ import os
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
+import re
+
+PARAM_MAP = {
+    "lamda_": r"$\lambda$",
+    "lambda_": r"$\lambda$",
+    "mu": r"$\mu$",
+    "eta": r"$\eta$",
+    "alpha": r"$\alpha$",
+    "tau": r"$\tau$",
+    "rho": r"$\rho$",
+    "lr": "LR",
+}
+
+def beautify_label(name):
+    """Converts code-style parameter names to LaTeX symbols or cleaner names."""
+    if not name:
+        return name
+
+    # Check for exact matches in map
+    if name in PARAM_MAP:
+        return PARAM_MAP[name]
+
+    # Check for param=value pattern
+    for k, v in PARAM_MAP.items():
+        if name.startswith(f"{k}="):
+            return name.replace(f"{k}=", f"{v}=")
+
+    return name
 
 class ResultLoader:
     def __init__(self, base_dir="results"):
@@ -10,8 +38,6 @@ class ResultLoader:
             "fedala": lambda args: f"_{args['eta']}_{args['rand_percent']}_{args['layer_idx']}_{args['ala_threshold']}_{args['num_pre_loss']}",
             "fedavg": lambda args: "",
             "feddyn": lambda args: f"_alpha{args['alpha_coef']}",
-            "feddpl": lambda args: f"_{args['lambda_']}_{args['epoch_pln']}_{args['lr_pln']}_{args['batch_size_pln']}_{args['depth_pln']}_{args['width_pln']}_{args['mode']}_{args['fixed_proto']}_{args['init_emb']}_{args['har']}",
-            "feddpl1": lambda args: f"_{args['lambda_']}_{args['epoch_pln']}_{args['lr_pln']}_{args['batch_size_pln']}_{args['depth_pln']}_{args['width_pln']}_{args['mode']}_{args['fixed_proto']}_{args['init_emb']}_{args['har']}",
             "fedfm": lambda args: f"_{args['mu']}",
             "fedkd": lambda args: f"_{args['lr_g']}_{args['energy']}",
             "fedlsa": lambda args: f"_{args['lambda_com']}_{args['alpha_sep']}_{args['server_epochs']}_{args['server_lr']}_{args['tau']}",
@@ -24,9 +50,6 @@ class ResultLoader:
             "fedsa": lambda args: f"_{args['alpha_sa']}_{args['lambda_r']}_{args['lambda_mcl']}_{args['lambda_cc']}",
             "scaffold": lambda args: f"_glr{args['global_lr']}",
             "fedtgp": lambda args: f"_{args['lamda_']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
-            "fedtgp1": lambda args: f"_{args['lamda_']}_{args['head_epochs']}_{args['body_epochs']}_{args['lr_head']}_{args['lr_body']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
-            "fedtgp2": lambda args: f"_{args['lamda_']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
-            "fedtgp3": lambda args: f"_{args['lamda_']}_{args['head_epochs']}_{args['body_epochs']}_{args['lr_head']}_{args['lr_body']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
             "fml": lambda args: f"_{args['alpha_fml']}_{args['beta_fml']}",
             "lgfedavg": lambda args: "",
             "moon": lambda args: f"_{args['mu']}_{args['tau']}",
@@ -116,14 +139,16 @@ def plot_results(results_dict, x_lim, metric="acc", title=None, xlabel="Rounds",
                 y = metric_data["model"][0:x_lim]
                 max_val = max(y)
                 last_10_avg = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
-                plt.plot(y, label=f"{label}-Model (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
-                summary.append({"Algorithm": f"{label}-Model", "Max": max_val, "Last10": last_10_avg})
+                display_label = beautify_label(label)
+                plt.plot(y, label=f"{display_label}-Model (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
+                summary.append({"Algorithm": f"{display_label}-Model", "Max": max_val, "Last10": last_10_avg})
             if "proto" in metric_data:
                 y = metric_data["proto"][0:x_lim]
                 max_val = max(y)
                 last_10_avg = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
-                plt.plot(y, linestyle="--", alpha=0.8, label=f"{label}-Proto (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
-                summary.append({"Algorithm": f"{label}-Proto", "Max": max_val, "Last10": last_10_avg})
+                display_label = beautify_label(label)
+                plt.plot(y, linestyle="--", alpha=0.8, label=f"{display_label}-Proto (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
+                summary.append({"Algorithm": f"{display_label}-Proto", "Max": max_val, "Last10": last_10_avg})
 
     plt.title(title or f"Comparison of {metric.upper()}")
     plt.xlabel(xlabel)
@@ -149,6 +174,97 @@ def plot_results(results_dict, x_lim, metric="acc", title=None, xlabel="Rounds",
 
     plt.show()
 
+
+def print_summary_table(results_dict, x_lim, metric="acc", label_name="Algorithm"):
+    """Prints a consolidated summary table for model and prototype metrics."""
+    print(f"\nSummary of {metric.upper()}:")
+
+    display_label_name = beautify_label(label_name)
+    header = f"{display_label_name:<20} | {'Model Max':>12} | {'Model Last10':>12} | {'Proto Max':>12} | {'Proto Last10':>12}"
+    divider = "-" * len(header)
+    print(divider)
+    print(header)
+    print(divider)
+
+    for label, data in results_dict.items():
+        if data is None or metric not in data: continue
+        metric_data = data[metric]
+        if not isinstance(metric_data, dict): continue
+
+        m_max, m_last10 = 0.0, 0.0
+        p_max, p_last10 = 0.0, 0.0
+
+        if "model" in metric_data:
+            y = np.array(metric_data["model"][0:x_lim])
+            m_max = np.max(y)
+            m_last10 = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
+
+        pk = "proto" if "proto" in metric_data else "prototype" if "prototype" in metric_data else None
+        if pk:
+            y = np.array(metric_data[pk][0:x_lim])
+            p_max = np.max(y)
+            p_last10 = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
+
+        # Clean up row label: if it's "param=value" and param matches label_name, just show "value"
+        clean_row_label = label
+        if "=" in label:
+            param, val = label.split("=", 1)
+            if param == label_name:
+                clean_row_label = val
+
+        print(f"{clean_row_label:<20} | {m_max:>12.4f} | {m_last10:>12.4f} | {p_max:>12.4f} | {p_last10:>12.4f}")
+
+    print(divider)
+
+def plot_results_split(results_dict, x_lim, metric="acc", title=None, xlabel="Rounds", ylabel="Accuracy", label_name="Algorithm"):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+
+    for label, data in results_dict.items():
+        if data is None: continue
+        metric_data = data.get(metric)
+        if metric_data is None: continue
+
+        if isinstance(metric_data, dict):
+            display_label = beautify_label(label)
+            # Model Acc on Ax1 (Left)
+            if "model" in metric_data:
+                y = metric_data["model"][0:x_lim]
+                max_val = max(y)
+                ax1.plot(y, label=f"{display_label} (Max: {max_val:.4f})")
+
+            # Proto Acc on Ax2 (Right)
+            if "proto" in metric_data:
+                y = metric_data["proto"][0:x_lim]
+                max_val = max(y)
+                ax2.plot(y, label=f"{display_label} (Max: {max_val:.4f})")
+
+    ax1.set_title(f"Model {metric.upper()}: {title or ''}")
+    ax1.set_xlabel(xlabel)
+    ax1.set_ylabel(ylabel)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(0, x_lim)
+
+    ax2.set_title(f"Prototype {metric.upper()}: {title or ''}")
+    ax2.set_xlabel(xlabel)
+    ax2.set_ylabel(ylabel)
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xlim(0, x_lim)
+
+    plt.tight_layout()
+
+    if not os.path.exists("figures"): os.makedirs("figures")
+    save_base = (title or "comparison").lower().replace(" ", "_").replace("(", "").replace(")", "").replace("__", "_")
+    save_name = f"split_{save_base}.png"
+    plt.savefig(os.path.join("figures", save_name), dpi=300)
+    print(f"Figure saved to figures/{save_name}")
+
+    # Use the extracted summary function
+    print_summary_table(results_dict, x_lim, metric, label_name)
+
+    plt.show()
+
 def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
     plt.figure(figsize=(12, 7))
     for label, data in results_dict.items():
@@ -156,24 +272,34 @@ def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
         loss_data = data.get("loss")
         if loss_data is None: continue
 
+        display_label = beautify_label(label)
         if isinstance(loss_data, list):
             y = loss_data
-            plt.plot(y, label=f"{label} Loss")
+            plt.plot(y, label=f"{display_label} Loss")
         elif isinstance(loss_data, dict):
             if "model" in loss_data:
                 y = loss_data["model"]
-                plt.plot(y, label=f"{label}-Model Loss")
+                plt.plot(y, label=f"{display_label}-Model Loss")
             if "proto" in loss_data:
                 y = loss_data["proto"]
-                plt.plot(y, linestyle="--", alpha=0.8, label=f"{label}-Proto Loss")
+                plt.plot(y, linestyle="--", alpha=0.8, label=f"{display_label}-Proto Loss")
             if "aux" in loss_data:
                 aux = loss_data["aux"]
                 if "model_m" in aux:
                     y = aux["model_m"]
-                    plt.plot(y, linestyle=":", alpha=0.6, label=f"{label}-CE Loss")
+                    plt.plot(y, linestyle=":", alpha=0.6, label=f"{display_label}-CE Loss")
                 if "model_p" in aux:
                     y = aux["model_p"]
-                    plt.plot(y, linestyle=":", alpha=0.6, label=f"{label}-Align Loss")
+                    plt.plot(y, linestyle=":", alpha=0.6, label=f"{display_label}-Align Loss")
+            if "server_tgp" in loss_data:
+                y = loss_data["server_tgp"]
+                plt.plot(y, linestyle="--", alpha=0.9, label=f"{display_label}-TGP Total")
+            if "server_tgp_ce" in loss_data:
+                y = loss_data["server_tgp_ce"]
+                plt.plot(y, linestyle=":", alpha=0.7, label=f"{display_label}-TGP CE")
+            if "server_tgp_mse" in loss_data:
+                y = loss_data["server_tgp_mse"]
+                plt.plot(y, linestyle=":", alpha=0.7, label=f"{display_label}-TGP MSE")
 
     plt.title(title or "Comparison of Loss")
     plt.xlabel(xlabel)

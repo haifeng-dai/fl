@@ -252,7 +252,6 @@ class Server(BaseServer):
         self.loss_tgp = []
         self.loss_tgp_ce = []
         self.loss_tgp_mse = []
-        self.loss_tgp_ortho = []
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -343,7 +342,7 @@ class Server(BaseServer):
             print(
                 f"Model Acc: {self.acc[-1]:.2f}%, Proto Acc: {self.acc_proto[-1]:.2f}%, "
                 f"Loss CE: {self.loss[-1]:.4f}, Loss Proto: {self.loss_proto[-1]:.4f}, "
-                f"TGP Loss: {self.loss_tgp[-1]:.4f} (Ortho: {self.loss_tgp_ortho[-1]:.4f})"
+                f"TGP Loss: {self.loss_tgp[-1]:.4f}"
             )
             self.log_dict(
                 r,
@@ -352,7 +351,6 @@ class Server(BaseServer):
                     "server/tgp_loss_total": self.loss_tgp[-1],
                     "server/tgp_loss_ce": self.loss_tgp_ce[-1],
                     "server/tgp_loss_mse": self.loss_tgp_mse[-1],
-                    "server/tgp_loss_ortho": self.loss_tgp_ortho[-1],
                 },
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
@@ -410,33 +408,20 @@ class Server(BaseServer):
             epoch_loss = 0.0
             epoch_loss_ce = 0.0
             epoch_loss_mse = 0.0
-            epoch_loss_ortho = 0.0
             for proto_batch, labels_batch in proto_loader:
                 proto_batch = proto_batch.to(self.device)
                 labels_batch = labels_batch.to(self.device, dtype=torch.long)
 
                 # 一次性生成所有类别的原型 logits，避免多次 TGP 前向计算
                 proto_gen = self.tgp(all_class_ids)
-                # dist = torch.cdist(proto_batch, proto_gen, p=2.0)
-                # one_hot = F.one_hot(labels_batch, self.num_class).to(self.device)
-                # dist = dist + one_hot * margin
-                # loss_ce = ce_loss(-dist, labels_batch)
-
-                logits_ortho = torch.matmul(proto_gen, proto_gen.T) / 0.1
+                p_gen_norm = proto_gen
+                logits_ortho = torch.matmul(p_gen_norm, p_gen_norm.T) / 0.1
                 labels_ortho = torch.arange(self.num_class, device=self.device)
-                loss_ortho = ce_loss(logits_ortho, labels_ortho)
 
+                loss_ce = ce_loss(logits_ortho, labels_ortho)
                 loss_mse = mse_loss(proto_batch, proto_gen[labels_batch])
 
-                # 标准的基于余弦相似度的对比学习 Loss (InfoNCE style)
-                # 对 Batch 特征和生成的全局原型进行 L2 归一化
-                p_batch_norm = F.normalize(proto_batch, p=2, dim=1)
-                p_gen_norm = F.normalize(proto_gen, p=2, dim=1)
-                # 计算相似度矩阵并除以温度系数 (默认 0.1)
-                logits = torch.matmul(p_batch_norm, p_gen_norm.T) / 0.1
-                loss_ce = ce_loss(logits, labels_batch)
-
-                loss = loss_mse + 0.01 * loss_ce + loss_ortho
+                loss = loss_mse + loss_ce
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -444,24 +429,21 @@ class Server(BaseServer):
                 epoch_loss += loss.item()
                 epoch_loss_ce += loss_ce.item()
                 epoch_loss_mse += loss_mse.item()
-                epoch_loss_ortho += loss_ortho.item()
 
             avg_loss = epoch_loss / len(proto_loader)
             avg_loss_ce = epoch_loss_ce / len(proto_loader)
             avg_loss_mse = epoch_loss_mse / len(proto_loader)
-            avg_loss_ortho = epoch_loss_ortho / len(proto_loader)
 
             if (epoch + 1) % 10 == 0 or epoch == 0:
                 print(
                     f"  TGP Epoch {epoch+1}/{self.args.server_epochs}, "
-                    f"Loss: {avg_loss:.4f} (CE: {avg_loss_ce:.4f}, MSE: {avg_loss_mse:.4f}, Ortho: {avg_loss_ortho:.4f})"
+                    f"Loss: {avg_loss:.4f} (CE: {avg_loss_ce:.4f}, MSE: {avg_loss_mse:.4f})"
                 )
 
         # 记录每轮最后一轮 TGP 优化的损失均值
         self.loss_tgp.append(avg_loss)
         self.loss_tgp_ce.append(avg_loss_ce)
         self.loss_tgp_mse.append(avg_loss_mse)
-        self.loss_tgp_ortho.append(avg_loss_ortho)
 
         self.tgp.eval()
         with torch.no_grad():
@@ -480,7 +462,6 @@ class Server(BaseServer):
                 "server_tgp": self.loss_tgp,
                 "server_tgp_ce": self.loss_tgp_ce,
                 "server_tgp_mse": self.loss_tgp_mse,
-                "server_tgp_ortho": self.loss_tgp_ortho,
             },
             "state_dict": {
                 "global_model_init": self.model.state_dict(),

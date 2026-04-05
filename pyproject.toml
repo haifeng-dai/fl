@@ -3,7 +3,7 @@ name = "fl"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
   "numpy",
   "pandas>=3.0.0",
@@ -13,6 +13,7 @@ dependencies = [
   "torchvision",
   "wandb>=0.25.1",
   "matplotlib>=3.10.8",
+  "ray>=2.54.1",
 ]
 
 [project.optional-dependencies]
@@ -23,7 +24,7 @@ dev = [
 ]
 
 [[tool.uv.index]]
-url="https://pypi.tuna.tsinghua.edu.cn/simple"
+url="https://mirrors.seu.edu.cn/pypi/index"
 default=true
 
 [tool.basedpyright]

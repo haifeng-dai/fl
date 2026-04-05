@@ -206,18 +206,41 @@ def client_worker(params):
 
     total_loss_ce = 0.0
     num_batches_head = 0
+
+    # 提前准备原型标签 (用于在 Phase 2 中锚定分类器)
+    proto_labels = (
+        torch.arange(num_class, device=device)
+        if global_protos_tensor is not None
+        else None
+    )
+
     for _ in range(head_epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
+
+            # 1. 本地数据交叉熵损失
             out = model(x)
-            loss = ce_loss(out, y)
+            loss_ce_local = ce_loss(out, y)
+
+            # 2. 全局原型锚定损失：将全局原型输入分类器并计算 CE
+            loss_ce_proto = 0.0
+            if global_protos_tensor is not None:
+                p_out = model.classifier(global_protos_tensor)
+                loss_ce_proto = ce_loss(p_out, proto_labels)
+
+            # 合并损失：在拟合本地数据的同时，保持对全局原型的判别力
+            loss = loss_ce_local + loss_ce_proto
+
             optimizer_head.zero_grad()
             loss.backward()
             optimizer_head.step()
+
             total_loss_ce += loss.item()
             num_batches_head += 1
 
-    avg_loss_ce = total_loss_ce / num_batches_head if num_batches_head > 0 else 0.0
+    avg_loss_ce = (
+        total_loss_ce / num_batches_head if num_batches_head > 0 else 0.0
+    )
 
     # === Phase 3: Recalculate Precise Prototypes ===
     model.eval()
@@ -451,7 +474,7 @@ class Server(BaseServer):
             avg_loss_mse = epoch_loss_mse / len(proto_loader)
             avg_loss_ortho = epoch_loss_ortho / len(proto_loader)
 
-            if (epoch + 1) % 10 == 0 or epoch == 0:
+            if (epoch + 1) % 5 == 0 or epoch == 0:
                 print(
                     f"  TGP Epoch {epoch+1}/{self.args.server_epochs}, "
                     f"Loss: {avg_loss:.4f} (CE: {avg_loss_ce:.4f}, MSE: {avg_loss_mse:.4f}, Ortho: {avg_loss_ortho:.4f})"
