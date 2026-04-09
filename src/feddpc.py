@@ -69,11 +69,23 @@ def add_args(parser: argparse.ArgumentParser):
         default=5.0,
         help="Margin threshold for PLN training (default: 5.0)",
     )
+    group.add_argument(
+        "--lambda_p",
+        type=float,
+        default=1.0,
+        help="Weight for prototype matching loss in local training (default: 1.0)",
+    )
+    group.add_argument(
+        "--lambda_acl",
+        type=float,
+        default=0.01,
+        help="Weight for contrastive loss in PLN training (default: 0.01)",
+    )
     return parser
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.lamda_}_{args.head_epochs}_{args.body_epochs}_{args.lr_head}_{args.lr_body}_{args.server_epochs}_{args.server_lr}_{args.margin_threshold}"
+    args.file_name = f"{args.name_pre}_{args.lamda_}_{args.head_epochs}_{args.body_epochs}_{args.lr_head}_{args.lr_body}_{args.server_epochs}_{args.server_lr}_{args.margin_threshold}_{args.lambda_p}_{args.lambda_acl}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
 
 
@@ -144,6 +156,7 @@ def client_worker(params):
         global_protos,
         num_class,
         feature_dim,
+        lambda_p,
     ) = params
 
     # 初始化模型并加载本地持久化状态
@@ -190,7 +203,7 @@ def client_worker(params):
                 loss_ce_proto = ce_loss(p_out, proto_labels)
 
             # 合并损失：在拟合本地数据的同时，保持对全局原型的判别力
-            loss = loss_ce_local + loss_ce_proto
+            loss = loss_ce_local + lambda_p * loss_ce_proto
 
             optimizer_head.zero_grad()
             loss.backward()
@@ -331,6 +344,7 @@ class Server(BaseServer):
                     global_protos_cpu,
                     self.num_class,
                     self.args.feature_dim,
+                    self.args.lambda_p,
                 ]
                 for i in selected_clients
             ]
@@ -426,7 +440,7 @@ class Server(BaseServer):
                 dist = dist + one_hot * margin
                 loss_ce = ce_loss(-dist, labels_batch)
 
-                logits_ortho = torch.matmul(proto_gen, proto_gen.T) / 0.1
+                logits_ortho = torch.matmul(proto_gen, proto_gen.T)
                 labels_ortho = torch.arange(self.num_class, device=self.device)
                 loss_ortho = ce_loss(logits_ortho, labels_ortho)
 
@@ -440,7 +454,7 @@ class Server(BaseServer):
                 # logits = torch.matmul(p_batch_norm, p_gen_norm.T) / 0.1
                 # loss_ce = ce_loss(logits, labels_batch)
 
-                loss = loss_mse + 0.01 * loss_ce
+                loss = loss_mse + self.args.lambda_acl * loss_ortho
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -455,7 +469,7 @@ class Server(BaseServer):
             avg_loss_mse = epoch_loss_mse / len(proto_loader)
             avg_loss_ortho = epoch_loss_ortho / len(proto_loader)
 
-            if (epoch + 1) % 5 == 0 or epoch == 0:
+            if (epoch + 1) % 20 == 0 or epoch == 0:
                 print(
                     f"  PLN Epoch {epoch+1}/{self.args.server_epochs}, "
                     f"Loss: {avg_loss:.4f} (CE: {avg_loss_ce:.4f}, MSE: {avg_loss_mse:.4f}, Ortho: {avg_loss_ortho:.4f})"

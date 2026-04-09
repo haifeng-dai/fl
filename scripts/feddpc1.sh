@@ -20,7 +20,7 @@ for DATASET in ${DATASETS//,/ }; do
                                                                     for LAMBDA_P in ${LAMBDA_PS_DPC//,/ }; do
                                                                         for LAMBDA_ACL in ${LAMBDA_ACLS_DPC//,/ }; do
                                                                             uv run main.py \
-                                                                                --algo feddpc \
+                                                                                --algo feddpc1 \
                                                                                 --dataset $DATASET \
                                                                                 --model $MODEL \
                                                                                 --feature_dim $FEATURE_DIM \

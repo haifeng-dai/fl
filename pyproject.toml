@@ -14,6 +14,8 @@ dependencies = [
   "wandb>=0.25.1",
   "matplotlib>=3.10.8",
   "ray>=2.54.1",
+  "kagglehub>=1.0.0",
+  "scipy>=1.17.0",
 ]
 
 [project.optional-dependencies]
@@ -24,7 +26,7 @@ dev = [
 ]
 
 [[tool.uv.index]]
-url="https://mirrors.seu.edu.cn/pypi/index"
+url="https://mirror.nju.edu.cn/pypi/web/simple/"
 default=true
 
 [tool.basedpyright]

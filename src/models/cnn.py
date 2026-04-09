@@ -2,14 +2,20 @@ import torch.nn as nn
 
 
 class CNN(nn.Module):
-    def __init__(self, input_channels=1, num_classes=10, feature_dim=512):
+    def __init__(self, input_channels=1, num_classes=10, feature_dim=512, dataset_name="mnist"):
         super(CNN, self).__init__()
         # 计算展平后的特征维度
-        if input_channels == 1:
-            # MNIST (28x28)
+        if dataset_name in ["mnist", "fashionmnist", "femnist"]:
+            # 28x28 -> MaxPool(2x2) -> 14x14 -> MaxPool(2x2) -> 7x7
             dim = 64 * 7 * 7
+        elif dataset_name == "tiny_imagenet":
+            # 64x64 -> MaxPool(2x2) -> 32x32 -> MaxPool(2x2) -> 16x16
+            dim = 64 * 16 * 16
+        elif dataset_name in ["cars", "flowers102"]:
+            # 224x224 -> MaxPool(2x2) -> 112x112 -> MaxPool(2x2) -> 56x56
+            dim = 64 * 56 * 56
         else:
-            # CIFAR10 (32x32)
+            # CIFAR10/100, GTSRB (32x32) -> MaxPool(2x2) -> 16x16 -> MaxPool(2x2) -> 8x8
             dim = 64 * 8 * 8
 
         # 特征提取器 (Feature extractor)

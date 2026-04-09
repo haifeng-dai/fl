@@ -50,6 +50,7 @@ class ResultLoader:
             "fedsa": lambda args: f"_{args['alpha_sa']}_{args['lambda_r']}_{args['lambda_mcl']}_{args['lambda_cc']}",
             "scaffold": lambda args: f"_glr{args['global_lr']}",
             "fedtgp": lambda args: f"_{args['lamda_']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
+            "feddpc": lambda args: f"_{args['lamda_']}_{args['head_epochs']}_{args['body_epochs']}_{args['lr_head']}_{args['lr_body']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}_{args['lambda_p']}_{args['lambda_acl']}",
             "fml": lambda args: f"_{args['alpha_fml']}_{args['beta_fml']}",
             "lgfedavg": lambda args: "",
             "moon": lambda args: f"_{args['mu']}_{args['tau']}",
@@ -82,7 +83,9 @@ class ResultLoader:
             print(f"  [Warning] Folder not found: {folder_path}")
             return None
 
+        # 支持将 times 也作为基础文件名的一部分
         base_name = f"{kwargs.get('epochs', 10)}_{kwargs.get('batch_size', 64)}_{kwargs.get('lr', 0.01)}"
+        
         suffix_gen = self.algo_patterns.get(algo)
         if suffix_gen:
             try: base_name += suffix_gen(kwargs)
@@ -90,7 +93,12 @@ class ResultLoader:
                 print(f"  [Error] Missing parameter {e} for algo {algo}")
                 return None
 
-        if specific_run is not None: run_indices = [specific_run]
+        if specific_run is not None: 
+            # 如果指定了 specific_run，先检查文件是否存在，避免 torch.load 报错
+            file_path = os.path.join(folder_path, f"{base_name}_{specific_run}.pt")
+            if not os.path.exists(file_path):
+                return None
+            run_indices = [specific_run]
         else:
             run_indices = []
             idx = 0
@@ -99,7 +107,6 @@ class ResultLoader:
                 idx += 1
 
         if not run_indices:
-            print(f"  [Warning] No files found for: {base_name}_*.pt in {folder_path}")
             return None
 
         loaded_data = []
@@ -108,6 +115,7 @@ class ResultLoader:
             try:
                 loaded_data.append(torch.load(file_path, map_location="cpu"))
             except Exception as e:
+                # 真正的加载错误（如文件损坏）才报错
                 print(f"  [Error] Failed to load {file_path}: {e}")
 
         if not loaded_data: return None
@@ -135,20 +143,24 @@ def plot_results(results_dict, x_lim, metric="acc", title=None, xlabel="Rounds",
             plt.plot(y, label=f"{label} (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
             summary.append({"Algorithm": label, "Max": max_val, "Last10": last_10_avg})
         elif isinstance(metric_data, dict):
-            if "model" in metric_data:
-                y = metric_data["model"][0:x_lim]
+            if "model" in metric_data or "local" in metric_data:
+                k = "model" if "model" in metric_data else "local"
+                y = metric_data[k][0:x_lim]
                 max_val = max(y)
                 last_10_avg = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
                 display_label = beautify_label(label)
                 plt.plot(y, label=f"{display_label}-Model (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
                 summary.append({"Algorithm": f"{display_label}-Model", "Max": max_val, "Last10": last_10_avg})
-            if "proto" in metric_data:
-                y = metric_data["proto"][0:x_lim]
+            
+            pk = "proto" if "proto" in metric_data else "global" if "global" in metric_data else None
+            if pk:
+                y = metric_data[pk][0:x_lim]
                 max_val = max(y)
                 last_10_avg = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
                 display_label = beautify_label(label)
-                plt.plot(y, linestyle="--", alpha=0.8, label=f"{display_label}-Proto (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
-                summary.append({"Algorithm": f"{display_label}-Proto", "Max": max_val, "Last10": last_10_avg})
+                suffix = "Proto" if pk == "proto" else "Global"
+                plt.plot(y, linestyle="--", alpha=0.8, label=f"{display_label}-{suffix} (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
+                summary.append({"Algorithm": f"{display_label}-{suffix}", "Max": max_val, "Last10": last_10_avg})
 
     plt.title(title or f"Comparison of {metric.upper()}")
     plt.xlabel(xlabel)
@@ -194,12 +206,13 @@ def print_summary_table(results_dict, x_lim, metric="acc", label_name="Algorithm
         m_max, m_last10 = 0.0, 0.0
         p_max, p_last10 = 0.0, 0.0
 
-        if "model" in metric_data:
-            y = np.array(metric_data["model"][0:x_lim])
+        if "model" in metric_data or "local" in metric_data:
+            mk = "model" if "model" in metric_data else "local"
+            y = np.array(metric_data[mk][0:x_lim])
             m_max = np.max(y)
             m_last10 = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
 
-        pk = "proto" if "proto" in metric_data else "prototype" if "prototype" in metric_data else None
+        pk = "proto" if "proto" in metric_data else "prototype" if "prototype" in metric_data else "global" if "global" in metric_data else None
         if pk:
             y = np.array(metric_data[pk][0:x_lim])
             p_max = np.max(y)
@@ -227,14 +240,16 @@ def plot_results_split(results_dict, x_lim, metric="acc", title=None, xlabel="Ro
         if isinstance(metric_data, dict):
             display_label = beautify_label(label)
             # Model Acc on Ax1 (Left)
-            if "model" in metric_data:
-                y = metric_data["model"][0:x_lim]
+            mk = "model" if "model" in metric_data else "local" if "local" in metric_data else None
+            if mk:
+                y = metric_data[mk][0:x_lim]
                 max_val = max(y)
                 ax1.plot(y, label=f"{display_label} (Max: {max_val:.4f})")
 
             # Proto Acc on Ax2 (Right)
-            if "proto" in metric_data:
-                y = metric_data["proto"][0:x_lim]
+            pk = "proto" if "proto" in metric_data else "global" if "global" in metric_data else None
+            if pk:
+                y = metric_data[pk][0:x_lim]
                 max_val = max(y)
                 ax2.plot(y, label=f"{display_label} (Max: {max_val:.4f})")
 

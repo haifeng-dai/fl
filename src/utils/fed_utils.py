@@ -224,6 +224,14 @@ def get_model(model_name, dataset, feature_dim):
         num_classes = 100
     elif dataset == "flowers102":
         num_classes = 102
+    elif dataset == "cars":
+        num_classes = 196
+    elif dataset == "gtsrb":
+        num_classes = 43
+    elif dataset == "tiny_imagenet":
+        num_classes = 200
+    elif dataset in ["har", "har_feat"]:
+        num_classes = 6
     else:
         num_classes = 10
     if model_name == "resnet18":
@@ -245,6 +253,7 @@ def get_model(model_name, dataset, feature_dim):
             input_channels=input_channels,
             num_classes=num_classes,
             feature_dim=feature_dim,
+            dataset_name=dataset,
         )
     else:
         raise ValueError(f"Unsupported model name: {model_name}")

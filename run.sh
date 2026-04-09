@@ -11,23 +11,13 @@
 # personalized algorithms
 # export ALGOS="fedala,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
-# export ALGOS="fedala,fedkd,fedper"
-
-# export ALGOS="fedproto,fedrep,fedsa"
-
-# export ALGOS="fedtgp,fml,lgfedavg"
-
-# export ALGOS="local,proxyfl"
-
-# export ALGOS="fedtgp1,fedtgp2,fedtgp3,fedtgp4"
-
-export ALGOS="feddpc"
+export ALGOS="local"
 
 # =============
 # Data
 # =============
-# mnist,cifar10,cifar100,har,har_feat
-export DATASETS="cifar10"
+# mnist,cifar10,cifar100,har,har_feat,tiny_imagenet,cars,gtsrb
+export DATASETS="gtsrb"
 # cnn,resnet18,resnet50,harcnn,harmlp
 export MODELS="cnn"
 export FEATURE_DIMS="512"
@@ -44,22 +34,24 @@ export N_CLASSES="2"
 # =============
 # Training
 # =============
-export EPOCHS="10"
+export EPOCHS="1"
 export LRS="0.01"
-export ROUNDS="100"
+export ROUNDS="200"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
 export TIMES=1
 
-# =============
-# Compute
-# =============
-# 3,2,1,0  0,1,2,3
-# export GPUS="0,1,2,3"
-# export GPUS="2,3,0,1"
-export GPUS="3,0,1,2"
-export MP=1
-export MAX_WORKERS_PER_GPU=10
+# FedDPC
+export LAMDAS_DPC="100.0"
+export LAMBDA_PS_DPC="1.0"
+export LAMBDA_ACLS_DPC="0.01"
+export HEAD_EPOCHS_DPC="10"
+export BODY_EPOCHS_DPC="1"
+export LR_HEAD_DPC="0.01"
+export LR_BODY_DPC="0.01"
+export SERVER_EPOCHS_DPC="10"
+export SERVER_LRS_DPC="0.01"
+export MARGIN_THRESHOLDS_DPC="100.0"
 
 # =============
 # Test
@@ -70,15 +62,15 @@ if [ "${TEST}" -eq 1 ]; then
     export ROUNDS="2"
 fi
 
-# FedDPC
-export LAMDAS_DPC="100.0"
-export HEAD_EPOCHS_DPC="10"
-export BODY_EPOCHS_DPC="2"
-export LR_HEAD_DPC="0.01"
-export LR_BODY_DPC="0.01"
-export SERVER_EPOCHS_DPC="100"
-export SERVER_LRS_DPC="0.01"
-export MARGIN_THRESHOLDS_DPC="100.0"
+# =============
+# Compute
+# =============
+export GPUS="0,1,2,3"
+# export GPUS="1,2,3,0"
+# export GPUS="2,3,0,1"
+# export GPUS="3,0,1,2"
+export MP=0
+export MAX_WORKERS_PER_GPU=10
 
 # =============
 # Algorithm Specific
@@ -178,7 +170,7 @@ export MUS_FM="1.0"
 for ALGO in ${ALGOS//,/ }; do
     echo "Starting experiment for algorithm: $ALGO"
     if [ -f "./scripts/${ALGO}.sh" ]; then
-        bash ./scripts/${ALGO}.sh
+        bash "./scripts/${ALGO}.sh"
     else
         echo "Script not found: ./scripts/${ALGO}.sh"
         exit 1

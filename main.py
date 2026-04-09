@@ -80,7 +80,7 @@ def get_args():
         type=str,
         default="mnist",
         help="Dataset name",
-        choices=["mnist", "cifar10", "cifar100", "flowers102", "har", "har_feat"],
+        choices=["mnist", "cifar10", "cifar100", "flowers102", "cars", "gtsrb", "har", "har_feat", "tiny_imagenet"],
     )
     data_group.add_argument(
         "--model",
@@ -203,6 +203,7 @@ def main():
                 entity="haifeng_dai-southeast-university",
                 project="FL",
                 name=run_name,
+                settings=wandb.Settings(init_timeout=30),
                 config={
                     "algo": args.algo,
                     "dataset": args.dataset,
@@ -256,5 +257,5 @@ def main():
 
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn", force=True)
-    # torch.multiprocessing.set_sharing_strategy("file_system")
+    torch.multiprocessing.set_sharing_strategy("file_system")
     main()
