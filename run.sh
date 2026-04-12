@@ -11,7 +11,13 @@
 # personalized algorithms
 # export ALGOS="fedala,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
 
-export ALGOS="local"
+# export ALGOS="fedala,fedkd,fedper,fedproto"
+
+# export ALGOS="fedrep,fedsa,fedtgp,fml"
+
+# export ALGOS="lgfedavg,local,proxyfl,feddpc"
+
+export ALGOS="feddpc"
 
 # =============
 # Data
@@ -26,10 +32,9 @@ export NUM_CLIENTS="10"
 # =============
 # Partition
 # =============
-# iid,dirichlet,pathological
-export PARTITIONS="dirichlet"
+export PARTITIONS="pathological" # iid,dirichlet,pathological
 export ALPHAS="0.1"
-export N_CLASSES="2"
+export N_CLASSES="5" # 0 means auto: CIFAR10=2, CIFAR100=10, TinyImageNet=20
 
 # =============
 # Training
@@ -39,7 +44,7 @@ export LRS="0.01"
 export ROUNDS="200"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
-export TIMES=1
+export TIMES=5
 
 # FedDPC
 export LAMDAS_DPC="100.0"
@@ -49,14 +54,14 @@ export HEAD_EPOCHS_DPC="10"
 export BODY_EPOCHS_DPC="1"
 export LR_HEAD_DPC="0.01"
 export LR_BODY_DPC="0.01"
-export SERVER_EPOCHS_DPC="10"
+export SERVER_EPOCHS_DPC="100"
 export SERVER_LRS_DPC="0.01"
 export MARGIN_THRESHOLDS_DPC="100.0"
 
 # =============
 # Test
 # =============
-export TEST=1
+export TEST=0
 
 if [ "${TEST}" -eq 1 ]; then
     export ROUNDS="2"
@@ -69,7 +74,7 @@ export GPUS="0,1,2,3"
 # export GPUS="1,2,3,0"
 # export GPUS="2,3,0,1"
 # export GPUS="3,0,1,2"
-export MP=0
+export MP=1
 export MAX_WORKERS_PER_GPU=10
 
 # =============
@@ -82,19 +87,6 @@ export RAND_PERCENTS_ALA="20"
 export LAYER_IDXS_ALA="1"
 export ALA_THRESHOLDS_ALA="0.1"
 export NUM_PRE_LOSSES_ALA="10"
-
-# FedDPL
-export LAMBDAS_DPL="10.0"
-export EPOCH_PLNS_DPL="10"
-export LRS_DPL="0.01"
-export BATCH_SIZE_PLNS_DPL="64"
-export DEPTH_PLNS_DPL="1"
-export WIDTH_PLNS_DPL="512"
-export MODES_DPL="normal"
-export FIXED_PROTOS_DPL=0
-export INIT_EMBS_DPL="0"
-export HARS_DPL="0"
-export MUS_DPL="1.0"
 
 # FedKD
 export LR_GS_KD="0.01"

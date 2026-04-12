@@ -201,22 +201,29 @@ def print_summary_table(results_dict, x_lim, metric="acc", label_name="Algorithm
     for label, data in results_dict.items():
         if data is None or metric not in data: continue
         metric_data = data[metric]
-        if not isinstance(metric_data, dict): continue
-
+        
         m_max, m_last10 = 0.0, 0.0
         p_max, p_last10 = 0.0, 0.0
 
-        if "model" in metric_data or "local" in metric_data:
-            mk = "model" if "model" in metric_data else "local"
-            y = np.array(metric_data[mk][0:x_lim])
-            m_max = np.max(y)
-            m_last10 = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
+        if isinstance(metric_data, list):
+            y = np.array(metric_data[0:x_lim])
+            if len(y) > 0:
+                m_max = np.max(y)
+                m_last10 = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
+        elif isinstance(metric_data, dict):
+            if "model" in metric_data or "local" in metric_data:
+                mk = "model" if "model" in metric_data else "local"
+                y = np.array(metric_data[mk][0:x_lim])
+                if len(y) > 0:
+                    m_max = np.max(y)
+                    m_last10 = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
 
-        pk = "proto" if "proto" in metric_data else "prototype" if "prototype" in metric_data else "global" if "global" in metric_data else None
-        if pk:
-            y = np.array(metric_data[pk][0:x_lim])
-            p_max = np.max(y)
-            p_last10 = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
+            pk = "proto" if "proto" in metric_data else "prototype" if "prototype" in metric_data else "global" if "global" in metric_data else None
+            if pk:
+                y = np.array(metric_data[pk][0:x_lim])
+                if len(y) > 0:
+                    p_max = np.max(y)
+                    p_last10 = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
 
         # Clean up row label: if it's "param=value" and param matches label_name, just show "value"
         clean_row_label = label
@@ -237,8 +244,13 @@ def plot_results_split(results_dict, x_lim, metric="acc", title=None, xlabel="Ro
         metric_data = data.get(metric)
         if metric_data is None: continue
 
-        if isinstance(metric_data, dict):
-            display_label = beautify_label(label)
+        display_label = beautify_label(label)
+        if isinstance(metric_data, list):
+            # List data is treated as Model Accuracy
+            y = metric_data[0:x_lim]
+            max_val = max(y)
+            ax1.plot(y, label=f"{display_label} (Max: {max_val:.4f})")
+        elif isinstance(metric_data, dict):
             # Model Acc on Ax1 (Left)
             mk = "model" if "model" in metric_data else "local" if "local" in metric_data else None
             if mk:
@@ -329,3 +341,152 @@ def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
     plt.savefig(os.path.join("figures", save_name), dpi=300)
     print(f"Figure saved to figures/{save_name}")
     plt.show()
+
+def load_plot(selected_group, experiments, common_args, loader, x_lim=200):
+    """
+    加载并绘制对比图，根据数据格式自动识别是单线还是 Model/Proto 分离。
+    """
+    results = {}
+    for label in selected_group:
+        if label not in experiments: continue
+        algo_name, kwargs = experiments[label]
+        data = loader.load(algo_name, **{**common_args, **kwargs}, specific_run=0)
+        if data: results[label] = data
+
+    if results:
+        # 尝试检查第一个结果的 'acc' 类型来决定绘图函数
+        first_res = list(results.values())[0]
+        if isinstance(first_res.get("acc"), dict):
+            plot_results_split(results, x_lim, metric="acc", title=f"Test Accuracy on {common_args['dataset']} ({common_args['partition']})")
+        else:
+            plot_results(results, x_lim, metric="acc", title=f"Test Accuracy on {common_args['dataset']} ({common_args['partition']})")
+    else:
+        print("\n[Error] No results loaded. Check the warnings above for path/parameter mismatches.")
+
+def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=200):
+    """
+    加载并统计多轮实验的均值和标准差。
+    """
+    print(f"\nSummary of ALL RUNS (Mean ± Std):")
+    header = f"{'Algorithm':<25} | {'Max Acc':>20} | {'Last 10 Avg':>20}"
+    print("-" * 75)
+    print(header)
+    print("-" * 75)
+
+    for label in selected_group:
+        if label not in experiments: continue
+        algo_name, kwargs = experiments[label]
+        merged_args = {**common_args, **kwargs}
+
+        run_results = []
+        idx = 0
+        while True:
+            data = loader.load(algo_name, **merged_args, specific_run=idx)
+            if data is None: break
+            run_results.append(data)
+            idx += 1
+
+        if not run_results: continue
+
+        sample_data = run_results[0]["acc"]
+        
+        if isinstance(sample_data, list):
+            vals = []
+            last_vals = []
+            for run_data in run_results:
+                y = run_data["acc"][0:x_lim]
+                if not y: continue
+                vals.append(max(y))
+                last_vals.append(np.mean(y[-10:]) if len(y) >= 10 else np.mean(y))
+
+            if vals:
+                mean_max, std_max = np.mean(vals), np.std(vals)
+                mean_last, std_last = np.mean(last_vals), np.std(last_vals)
+                print(f"{label:<25} | {mean_max:>8.4f} ± {std_max:<7.4f} | {mean_last:>8.4f} ± {std_last:<7.4f} ({len(run_results)} runs)")
+
+        elif isinstance(sample_data, dict):
+            for key in ["model", "local", "proto", "global"]:
+                if key not in sample_data: continue
+                vals = []
+                last_vals = []
+                for run_data in run_results:
+                    y = run_data["acc"][key][0:x_lim]
+                    if not y: continue
+                    vals.append(max(y))
+                    last_vals.append(np.mean(y[-10:]) if len(y) >= 10 else np.mean(y))
+                
+                if vals:
+                    mean_max, std_max = np.mean(vals), np.std(vals)
+                    mean_last, std_last = np.mean(last_vals), np.std(last_vals)
+                    suffix = "Model" if key in ["model", "local"] else "Proto" if key == "proto" else "Global"
+                    print(f"{label+'-'+suffix:<25} | {mean_max:>8.4f} ± {std_max:<7.4f} | {mean_last:>8.4f} ± {std_last:<7.4f} ({len(run_results)} runs)")
+
+def print_stats(selected_group, experiments, common_args, loader, x_lim=200):
+    """
+    加载并打印多轮实验的均值汇总（Model 和 Proto 分列显示）。
+    """
+    print(f"\nSummary of Performance (Mean over runs):")
+    # 表头：Algorithm | Model Max | Model Last | Proto Max | Proto Last
+    header = f"{'Algorithm':<25} | {'M-Max':>10} | {'M-Last':>10} | {'P-Max':>10} | {'P-Last':>10}"
+    print("-" * 85)
+    print(header)
+    print("-" * 85)
+
+    for label in selected_group:
+        if label not in experiments: continue
+        algo_name, kwargs = experiments[label]
+        merged_args = {**common_args, **kwargs}
+
+        run_results = []
+        idx = 0
+        while True:
+            data = loader.load(algo_name, **merged_args, specific_run=idx)
+            if data is None: break
+            run_results.append(data)
+            idx += 1
+
+        if not run_results: continue
+
+        # 初始化统计变量
+        m_max, m_last, p_max, p_last = "-", "-", "-", "-"
+        sample_data = run_results[0]["acc"]
+        
+        if isinstance(sample_data, list):
+            vals, last_vals = [], []
+            for run_data in run_results:
+                y = run_data["acc"][0:x_lim]
+                if not y: continue
+                vals.append(max(y))
+                last_vals.append(np.mean(y[-10:]) if len(y) >= 10 else np.mean(y))
+            if vals:
+                m_max = f"{np.mean(vals):10.4f}"
+                m_last = f"{np.mean(last_vals):10.4f}"
+
+        elif isinstance(sample_data, dict):
+            # Model / Local
+            m_key = "model" if "model" in sample_data else "local" if "local" in sample_data else None
+            if m_key:
+                vals, last_vals = [], []
+                for run_data in run_results:
+                    y = run_data["acc"][m_key][0:x_lim]
+                    if not y: continue
+                    vals.append(max(y))
+                    last_vals.append(np.mean(y[-10:]) if len(y) >= 10 else np.mean(y))
+                if vals:
+                    m_max = f"{np.mean(vals):10.4f}"
+                    m_last = f"{np.mean(last_vals):10.4f}"
+            
+            # Proto / Global
+            p_key = "proto" if "proto" in sample_data else "global" if "global" in sample_data else None
+            if p_key:
+                vals, last_vals = [], []
+                for run_data in run_results:
+                    y = run_data["acc"][p_key][0:x_lim]
+                    if not y: continue
+                    vals.append(max(y))
+                    last_vals.append(np.mean(y[-10:]) if len(y) >= 10 else np.mean(y))
+                if vals:
+                    p_max = f"{np.mean(vals):10.4f}"
+                    p_last = f"{np.mean(last_vals):10.4f}"
+
+        print(f"{label:<25} | {m_max:>10} | {m_last:>10} | {p_max:>10} | {p_last:>10} ({len(run_results)} runs)")

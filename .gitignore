@@ -13,5 +13,7 @@ logs/
 figures/
 wandb/
 idea/
+scratch/
 
 uv.lock
+nohup.out

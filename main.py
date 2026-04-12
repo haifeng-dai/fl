@@ -100,7 +100,12 @@ def get_args():
         help="Data partitioning strategy",
     )
     data_group.add_argument("--alpha", type=float, default=0.5, help="For Dirichlet")
-    data_group.add_argument("--n_class", type=int, default=2, help="For Pathological")
+    data_group.add_argument(
+        "--n_class",
+        type=int,
+        default=0,
+        help="For Pathological (0 means auto select: cifar10:2, cifar100:10, tiny_imagenet:20)",
+    )
     data_group.add_argument(
         "--test_ratio", type=float, default=0.2, help="Ratio of test data"
     )
@@ -150,6 +155,16 @@ def get_args():
         algo_module.add_args(full_parser)
 
     args = full_parser.parse_args()
+
+    # 自动根据数据集设置 n_class (当 n_class 为 0 时)
+    if args.n_class == 0:
+        if args.dataset == "cifar100":
+            args.n_class = 10
+        elif args.dataset == "tiny_imagenet":
+            args.n_class = 20
+        else:
+            args.n_class = 2  # 默认回退值
+
     get_pre_name(args)
 
     return args, algo_module

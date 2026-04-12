@@ -94,31 +94,34 @@ def pathological_partition(
             f"请增加 num_clients 或 n_classes_per_client。"
         )
 
-    if total_slots % num_classes != 0:
-        raise ValueError(
-            f"[Pathological Partition Error] 总需求分片数 ({total_slots}) 无法被类别总数 ({num_classes}) 整除。\n"
-            f"请调整参数使得 (num_clients * n_classes_per_client) % {num_classes} == 0。"
-        )
-
-    shards_per_class = total_slots // num_classes
-    if shards_per_class == 0:
-        raise ValueError("[Pathological Partition Error] 计算出的每类分片数为 0。")
+    # 计算每个类别应该被分成的片数
+    # 例如：total_slots=50, num_classes=43 => 7个类2片, 36个类1片
+    shards_per_class_list = [total_slots // num_classes] * num_classes
+    remainder = total_slots % num_classes
+    for i in range(remainder):
+        shards_per_class_list[i] += 1
 
     train_shards = []
     test_shards = []
     for k in range(num_classes):
-        if len(train_indices_by_class[k]) < shards_per_class:
+        shards_for_this_class = shards_per_class_list[k]
+        if shards_for_this_class == 0:
+            train_shards.append([])
+            test_shards.append([])
+            continue
+
+        if len(train_indices_by_class[k]) < shards_for_this_class:
             raise ValueError(
                 f"[Pathological Partition Error] 类别 {k} 的样本量 ({len(train_indices_by_class[k])}) "
-                f"不足以切分为 {shards_per_class} 个分片。"
+                f"不足以切分为 {shards_for_this_class} 个分片。"
             )
 
-        train_shards.append(np.array_split(train_indices_by_class[k], shards_per_class))
-        test_shards.append(np.array_split(test_indices_by_class[k], shards_per_class))
+        train_shards.append(np.array_split(train_indices_by_class[k], shards_for_this_class))
+        test_shards.append(np.array_split(test_indices_by_class[k], shards_for_this_class))
 
     shard_ids = []
     for k in range(num_classes):
-        for s in range(shards_per_class):
+        for s in range(shards_per_class_list[k]):
             shard_ids.append((k, s))
 
     np.random.shuffle(shard_ids)
