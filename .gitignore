@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .claude/
 .sisyphus/
+.agents/
 GIF/
 datasets/
 test/
