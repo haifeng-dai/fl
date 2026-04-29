@@ -17,7 +17,7 @@
 
 # export ALGOS="lgfedavg,local,proxyfl,feddpc"
 
-export ALGOS="dfedavgm"
+export ALGOS="dfedpgp"
 
 # =============
 # Data
@@ -156,6 +156,12 @@ export MUS_FM="1.0"
 
 # ProxyFL
 export MUS_PROXY="1.0"
+
+# DFedPGP
+export LR_V="0.01"
+export LOCAL_V_EPOCHS="1"
+export MOMENTUM_V="0.0"
+export WEIGHT_DECAY_V="0.0"
 
 # Network topology (used by decentralized algorithms like dfedavgm, proxyfl)
 # 可用选项: ring, centralized, complete, random, small_world, scale_free, star
