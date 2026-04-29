@@ -5,6 +5,7 @@ import torch
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 from .fed_utils import BaseServer, get_model
+from .topology import generate_adjacency_matrix, compute_mh_weights, sinkhorn_knopp
 
 
 def compare_model_parameters(params1: dict, params2: dict) -> bool:

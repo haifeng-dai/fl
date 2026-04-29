@@ -11,7 +11,6 @@ dependencies = [
   "scikit-learn>=1.8.0",
   "torch",
   "torchvision",
-  "wandb>=0.25.1",
   "matplotlib>=3.10.8",
   "ray>=2.54.1",
   "kagglehub>=1.0.0",

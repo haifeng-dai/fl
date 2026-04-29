@@ -7,7 +7,6 @@ import time
 
 import numpy as np
 import torch
-import wandb
 
 from src import get_pre_name, prepare_data
 
@@ -80,7 +79,17 @@ def get_args():
         type=str,
         default="mnist",
         help="Dataset name",
-        choices=["mnist", "cifar10", "cifar100", "flowers102", "cars", "gtsrb", "har", "har_feat", "tiny_imagenet"],
+        choices=[
+            "mnist",
+            "cifar10",
+            "cifar100",
+            "flowers102",
+            "cars",
+            "gtsrb",
+            "har",
+            "har_feat",
+            "tiny_imagenet",
+        ],
     )
     data_group.add_argument(
         "--model",
@@ -213,47 +222,9 @@ def main():
                 test_ratio=args.test_ratio,
             )
 
-            run_name = f"{args.algo}_{args.dataset}_{args.model}_{args.partition}_{args.alpha}_seed{args.seed}_time{args.times}"
-            run = wandb.init(
-                entity="haifeng_dai-southeast-university",
-                project="FL",
-                name=run_name,
-                settings=wandb.Settings(init_timeout=30),
-                config={
-                    "algo": args.algo,
-                    "dataset": args.dataset,
-                    "model": args.model,
-                    "feature_dim": args.feature_dim,
-                    "num_clients": args.num_clients,
-                    "partition": args.partition,
-                    "alpha": args.alpha,
-                    "n_classes": args.n_class,
-                    "epochs": args.epochs,
-                    "lr": args.lr,
-                    "rounds": args.rounds,
-                    "batch_size": args.batch_size,
-                    "join_ratio": args.join_ratio,
-                    "seed": args.seed,
-                    "times": args.times,
-                },
-            )
-
             server = algo_module.Server(args=args)
             server.fit()
             server.save()
-
-            # 汇总指标记录 (Summary Metrics)
-            if hasattr(server, "acc") and len(server.acc) > 0:
-                wandb.run.summary["summary/max_acc"] = max(server.acc)
-                wandb.run.summary["summary/last_10_acc_mean"] = (
-                    np.mean(server.acc[-10:])
-                    if len(server.acc) >= 10
-                    else np.mean(server.acc)
-                )
-            if hasattr(server, "acc_proto") and len(server.acc_proto) > 0:
-                wandb.run.summary["summary/max_proto_acc"] = max(server.acc_proto)
-
-            run.finish()
 
             b = time.time()
             print(

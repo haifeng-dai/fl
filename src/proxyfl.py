@@ -12,6 +12,7 @@ from .utils import (
     get_model,
     kl_loss,
     param_aggregate,
+    generate_adjacency_matrix,
 )
 
 
@@ -27,14 +28,43 @@ def add_args(parser: argparse.ArgumentParser):
         "--adj_type",
         type=str,
         default="ring",
-        choices=["ring", "centralized"],
+        choices=["ring", "complete", "random", "small_world", "scale_free", "star"],
         help="Topology of the decentralized network",
     )
+
+    # optional topology parameters
+    group.add_argument(
+        "--edge_p",
+        type=float,
+        default=0.3,
+        help="Edge probability for random / small_world topologies (default: 0.3)",
+    )
+    group.add_argument(
+        "--k",
+        type=int,
+        default=4,
+        help="Neighborhood size k for small_world topology (default: 4)",
+    )
+    group.add_argument(
+        "--m",
+        type=int,
+        default=2,
+        help="Attachment parameter m for scale_free topology (default: 2)",
+    )
+
     return parser
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.mu}_{args.adj_type}"
+    adj_suffix = f"{args.adj_type}"
+    if args.adj_type == "random":
+        adj_suffix += f"_{args.edge_p}"
+    elif args.adj_type == "small_world":
+        adj_suffix += f"_{args.k}_{args.edge_p}"
+    elif args.adj_type == "scale_free":
+        adj_suffix += f"_{args.m}"
+
+    args.file_name = f"{args.name_pre}_{args.mu}_{adj_suffix}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
 
 
@@ -127,23 +157,8 @@ class Server(BaseServer):
 
         self.loss_p = []
         self.acc_p = []
-        self.adj_matrix = self.generate_adj_matrix()
-
-    def generate_adj_matrix(self):
-        num_clients = self.num_clients
-        adj = torch.zeros(num_clients, num_clients)
-        if self.args.adj_type == "ring":
-            for i in range(num_clients):
-                adj[i, i] = 1.0
-                adj[i, (i - 1) % num_clients] = 1.0
-                adj[i, (i + 1) % num_clients] = 1.0
-        elif self.args.adj_type == "centralized":
-            adj.fill_(1.0)
-
-        # 为每个客户端作权重标准化归一处理
-        row_sums = adj.sum(dim=1, keepdim=True)
-        adj = adj / row_sums
-        return adj
+        # 使用通用的邻接矩阵生成函数
+        self.adj_matrix = generate_adjacency_matrix(args)
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -217,9 +232,6 @@ class Server(BaseServer):
             print(
                 f"Avg Local Acc: {self.acc[-1]:.2f}%, Avg Local Loss: {self.loss[-1]:.4f}\n"
                 f"Avg Proxy Acc: {self.acc_p[-1]:.2f}%, Avg Proxy Loss: {self.loss_p[-1]:.4f}"
-            )
-            self.log_dict(
-                r, {"test/acc_proxy": self.acc_p[-1], "train/loss_proxy": self.loss_p[-1]}
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 

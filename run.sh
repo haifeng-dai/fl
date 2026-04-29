@@ -17,13 +17,13 @@
 
 # export ALGOS="lgfedavg,local,proxyfl,feddpc"
 
-export ALGOS="feddpc"
+export ALGOS="dfedavgm"
 
 # =============
 # Data
 # =============
 # mnist,cifar10,cifar100,har,har_feat,tiny_imagenet,cars,gtsrb
-export DATASETS="gtsrb"
+export DATASETS="cifar10"
 # cnn,resnet18,resnet50,harcnn,harmlp
 export MODELS="cnn"
 export FEATURE_DIMS="512"
@@ -32,9 +32,9 @@ export NUM_CLIENTS="10"
 # =============
 # Partition
 # =============
-export PARTITIONS="pathological" # iid,dirichlet,pathological
+export PARTITIONS="dirichlet" # iid,dirichlet,pathological
 export ALPHAS="0.1"
-export N_CLASSES="5" # 0 means auto: CIFAR10=2, CIFAR100=10, TinyImageNet=20
+export N_CLASSES="0" # 0 means auto: CIFAR10=2, CIFAR100=10, TinyImageNet=20
 
 # =============
 # Training
@@ -61,10 +61,12 @@ export MARGIN_THRESHOLDS_DPC="100.0"
 # =============
 # Test
 # =============
-export TEST=0
+export TEST=1
 
 if [ "${TEST}" -eq 1 ]; then
+    export EPOCHS="1"
     export ROUNDS="2"
+    export TIMES=1
 fi
 
 # =============
@@ -140,9 +142,6 @@ export BETAS_FML="1.0"
 export MUS_MOON="0.01"
 export TAUS_MOON="0.5"
 
-# ProxyFL
-export MUS_PROXY="1.0"
-
 # FedTest
 export MUS_TEST="10.0,1.0,0.1,0.01"
 
@@ -154,6 +153,17 @@ export ALPHA_COEFS_DYNN="0.1"
 
 # FedFM
 export MUS_FM="1.0"
+
+# ProxyFL
+export MUS_PROXY="1.0"
+
+# Network topology (used by decentralized algorithms like dfedavgm, proxyfl)
+# 可用选项: ring, centralized, complete, random, small_world, scale_free, star
+export ADJ_TYPES="ring"
+# 供某些拓扑使用的额外参数 (可选)
+export EDGE_P="0.3"   # for random / small_world
+export K_SMALL_WORLD="4"  # for small_world (k nearest neighbors)
+export M_SCALE_FREE="2"  # for scale_free (barabasi-albert m)
 
 # =============
 # Execution

@@ -6,7 +6,6 @@ def param_aggregate(
     weights: list[float],
 ):
     # 根据首个客户端的数据结构初始化为零的聚合状态字典
-    # 使用 CPU 内存来为模型训练节省 GPU 显存
     aggregated_state = {
         k: torch.zeros_like(v, device="cpu", dtype=torch.float32)
         for k, v in state_dicts[0].items()

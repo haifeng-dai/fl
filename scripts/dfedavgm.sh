@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 默认支持的拓扑类型，如果需要可以在运行前通过环境变量 ADJ_TYPES 覆盖
+: ${ADJ_TYPES:="ring"}
+
 for DATASET in ${DATASETS//,/ }; do
     for MODEL in ${MODELS//,/ }; do
         for FEATURE_DIM in ${FEATURE_DIMS//,/ }; do
@@ -11,9 +14,9 @@ for DATASET in ${DATASETS//,/ }; do
                                 for LR in ${LRS//,/ }; do
                                     for BATCH_SIZE in ${BATCH_SIZES//,/ }; do
                                         for JOIN_RATIO in ${JOIN_RATIOS//,/ }; do
-                                            for MU_PROXY in ${MUS_PROXY//,/ }; do
+                                            for ADJ_TYPE in ${ADJ_TYPES//,/ }; do
                                                 uv run main.py \
-                                                    --algo proxyfl \
+                                                    --algo dfedavgm \
                                                     --dataset $DATASET \
                                                     --model $MODEL \
                                                     --feature_dim $FEATURE_DIM \
@@ -31,7 +34,6 @@ for DATASET in ${DATASETS//,/ }; do
                                                     --max_workers_per_gpu $MAX_WORKERS_PER_GPU \
                                                     --times $TIMES \
                                                     --test $TEST \
-                                                    --mu $MU_PROXY \
                                                     --adj_type $ADJ_TYPE \
                                                     --edge_p $EDGE_P \
                                                     --k $K_SMALL_WORLD \

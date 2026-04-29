@@ -3,7 +3,6 @@ import os
 
 import torch
 import torch.multiprocessing as mp
-import wandb
 
 from ..models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 from .aggregate import param_aggregate
@@ -189,23 +188,6 @@ class BaseServer:
                 pool.join()
             # 防止重复关闭
             self.gpu_pools = {}
-
-    def log_dict(self, round_idx, metrics: dict = None):
-        """通用 WandB 日志记录接口"""
-        if wandb.run is not None:
-            # 基础指标汇总
-            log_data = {
-                "test/acc": self.acc[-1] if self.acc else 0.0,
-                "train/loss": self.loss[-1] if self.loss else 0.0,
-            }
-            if self.acc_proto:
-                log_data["test/proto_acc"] = self.acc_proto[-1]
-
-            # 合并额外指标
-            if metrics:
-                log_data.update(metrics)
-
-            wandb.log(log_data, step=round_idx)
 
     def deal_save(self, params):
         path = os.path.join(

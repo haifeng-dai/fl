@@ -379,16 +379,6 @@ class Server(BaseServer):
                 f"Loss CE: {self.loss[-1]:.4f}, Loss Proto: {self.loss_proto[-1]:.4f}, "
                 f"PLN Loss: {self.loss_pln[-1]:.4f} (Ortho: {self.loss_pln_ortho[-1]:.4f})"
             )
-            self.log_dict(
-                r,
-                {
-                    "train/loss_proto": self.loss_proto[-1],
-                    "server/pln_loss_total": self.loss_pln[-1],
-                    "server/pln_loss_ce": self.loss_pln_ce[-1],
-                    "server/pln_loss_mse": self.loss_pln_mse[-1],
-                    "server/pln_loss_ortho": self.loss_pln_ortho[-1],
-                },
-            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def calculate_gap(self, protos_per_client):
