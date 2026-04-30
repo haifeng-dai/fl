@@ -143,19 +143,19 @@ def get_args():
         "--gpus", type=str, default="0", help="Comma separated list of GPU ids"
     )
     train_group.add_argument(
-        "--mp", type=int, default=0, help="Enable multiprocessing training"
-    )
-    train_group.add_argument(
-        "--max_workers_per_gpu",
-        type=int,
-        default=1,
-        help="Maximum number of parallel workers per GPU to avoid OOM",
-    )
-    train_group.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
     train_group.add_argument(
         "--times", type=int, default=1, help="Number of times to run the experiment"
+    )
+
+    # Ray 并行框架参数 (Exclusive)
+    ray_group = full_parser.add_argument_group("Ray Framework Arguments")
+    ray_group.add_argument(
+        "--ray_gpu",
+        type=float,
+        default=0.5,
+        help="GPU resources per Ray worker (e.g., 0.5 means 2 workers per GPU)",
     )
 
     # 算法专属参数
@@ -246,6 +246,4 @@ def main():
 
 
 if __name__ == "__main__":
-    torch.multiprocessing.set_start_method("spawn", force=True)
-    torch.multiprocessing.set_sharing_strategy("file_system")
     main()

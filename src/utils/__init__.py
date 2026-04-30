@@ -145,8 +145,8 @@ def get_pre_name(args):
         fold_path += f"_{args.alpha}"
     elif args.partition == "pathological":
         fold_path += f"_{args.n_class}"
-    args.save_path = os.path.join("results", fold_path)
-    args.log_path = os.path.join("logs", fold_path)
+    args.save_path = os.path.join("results_ray", fold_path)
+    args.log_path = os.path.join("logs_ray", fold_path)
     os.makedirs(args.save_path, exist_ok=True)
     os.makedirs(args.log_path, exist_ok=True)
     args.name_pre = f"{args.epochs}_{args.batch_size}_{args.lr}"

@@ -2,7 +2,7 @@ import argparse
 import os
 
 import torch
-import torch.multiprocessing as mp
+import ray
 
 from ..models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 from .aggregate import param_aggregate
@@ -10,12 +10,26 @@ from .evaluate import evaluate_model, evaluate_prototype
 from .load_data import load_data
 
 
+@ray.remote
+def ray_worker_wrapper(worker_func, params):
+    """
+    Ray 远程工作者的通用包装函数。
+    """
+    p_list = list(params)
+    # 在 Ray 托管的环境中，CUDA_VISIBLE_DEVICES 会被自动设置
+    if torch.cuda.is_available():
+        p_list[1] = torch.device("cuda:0")
+    else:
+        p_list[1] = torch.device("cpu")
+
+    return worker_func(tuple(p_list))
+
+
 class BaseServer:
     def __init__(self, pfl: bool, args: argparse.Namespace):
         self.model = get_model(args.model, args.dataset, args.feature_dim).cpu()
         self.args = args
         self.rounds: int = args.rounds
-        self.mp: bool = bool(self.args.mp)
 
         self.num_clients: int = self.args.num_clients
         self.pfl = pfl
@@ -38,45 +52,21 @@ class BaseServer:
         ]
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
-        self._BaseServer__start_pools(args.gpus)
+        # 1. 解析 GPU 资源并初始化 Ray 环境
+        gpu_ids = [int(i) for i in args.gpus.split(",")]
+        self.device = gpu_ids[-1]  # 用于 Driver 进程评估
 
-    def _BaseServer__start_pools(self, gpus):
-        gpu_ids = [int(i) for i in gpus.split(",")]
-
-        # 根据是否启用并行模式来分配GPU
-        self.gpu_pools = {}
-        if self.mp:
-            # 并行模式：将客户端循环分配到多个GPU
-            self.client_gpu = {
-                i: torch.device(
-                    f"cuda:{gpu_ids[i % len(gpu_ids)]}"
-                    if torch.cuda.is_available()
-                    else "cpu"
-                )
-                for i in range(self.num_clients)
-            }
-            device_counts = dict.fromkeys(set(self.client_gpu.values()), 0)
-            for device in self.client_gpu.values():
-                device_counts[device] += 1
-
-            # 获取最大worker数限制（如果设置了的话）
-            max_workers = getattr(self.args, "max_workers_per_gpu", None)
-
-            for device, count in device_counts.items():
-                # 限制每个GPU的最大并行worker数，避免OOM
-                actual_workers = min(count, max_workers) if max_workers else count
-                self.gpu_pools[device] = mp.Pool(processes=actual_workers)
-        else:
-            # 非并行模式：所有客户端都使用第一个GPU
-            first_gpu = torch.device(
-                f"cuda:{gpu_ids[0]}" if torch.cuda.is_available() else "cpu"
-            )
-            self.client_gpu = {i: first_gpu for i in range(self.num_clients)}
-            print(
-                f"-> Multiprocessing not enabled, using sequential training (Device: {self.client_gpu[0]})"
+        if not ray.is_initialized():
+            print(f"-> Initializing Ray Framework (Mandatory) | GPUs: {len(gpu_ids)}")
+            ray.init(
+                num_gpus=len(gpu_ids),
+                ignore_reinit_error=True,
+                runtime_env={"env_vars": {"RAY_RUNTIME_ENV_IGNORE_PYPROJECT": "1"}},
             )
 
-        self.device = gpu_ids[-1]
+        # 2. 强制设备映射：在 Ray Worker 环境中逻辑显卡始终映射为 cuda:0
+        dev_str = "cuda:0" if torch.cuda.is_available() else "cpu"
+        self.client_gpu = {i: torch.device(dev_str) for i in range(self.num_clients)}
 
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
@@ -88,47 +78,28 @@ class BaseServer:
 
     def evaluate(self, model_states=None, protos=None):
         """
-        智能评估接口：自动在全局评估与个性化评估之间切换，
-        并支持可选的原型匹配功能。
-
-        参数说明:
-            model_states: (可选) 用于进行评估的模型状态字典列表。
-                          如果为 None，则默认使用 self.clients_state。
-            protos: (可选) 当前用于评估的全局原型参数 (Dict 或 Tensor 格式)。
+        智能评估接口：自动在全局评估与个性化评估之间切换。
         """
-        # 1. 状态保存保护：若处于 pFL (个性化联邦学习) 模式下，则备份全局模型
         if self.pfl:
             global_backup = {
                 k: v.cpu().clone() for k, v in self.model.state_dict().items()
             }
 
-        # 2. 基于普通模型的指标评估
         if not self.pfl:
-            # 模式 A: 传统/全局联邦学习
             acc = evaluate_model(self.model, self.test_set, self.device)
             self.acc.append(acc)
         else:
-            # 模式 B: 个性化联邦学习 (pFL)
             accs = []
             self.model.to(self.device)
-
-            # 使用提供传入的状态列表或回退使用实例自身的 clients_state
             target_states = (
                 model_states if model_states is not None else self.clients_state
             )
-
-            assert target_states, (
-                "Personalized algorithms (pfl=True) must provide model_states or maintain self.clients_state."
-            )
-
             for i in range(self.num_clients):
                 self.model.load_state_dict(target_states[i])
                 accs.append(evaluate_model(self.model, self.test_set[i], self.device))
             self.acc.append(sum(accs) / len(accs) if accs else 0.0)
 
-        # 3. 基于原型的指标评估（可选调用）
         if protos is not None:
-            # 将所传原型参数标准化为 Tensor 形态 [C, d]
             if isinstance(protos, dict):
                 proto_tensor = torch.zeros(
                     self.num_class, self.args.feature_dim, device=self.device
@@ -144,7 +115,6 @@ class BaseServer:
                 )
             else:
                 p_accs = []
-                # 为保持一致性，使用相同的 target_states 来重新评估对应的原型参数
                 target_states = (
                     model_states if model_states is not None else self.clients_state
                 )
@@ -158,86 +128,58 @@ class BaseServer:
                 p_acc = sum(p_accs) / len(p_accs) if p_accs else 0.0
             self.acc_proto.append(p_acc)
 
-        # 4. 模型状态恢复复原
         if self.pfl:
             self.model.load_state_dict(global_backup)
 
         self.model.cpu()
 
     def run_clients(self, client_worker, parameters):
-        """运行并行或顺序客户端训练。"""
-        if not self.mp:
-            res = {p[0]: client_worker(p) for p in parameters}
-        else:
-            async_results = {
-                p[0]: self.gpu_pools[p[1]].apply_async(client_worker, (p,))
-                for p in parameters
-            }
-            res = {i: r.get() for i, r in async_results.items()}
-        return res
-
-    def fit(self, *args, **kwargs):
-        raise NotImplementedError
+        """通过 Ray 运行客户端训练。"""
+        print(
+            f"-> Running {len(parameters)} clients via Ray (Resource: {self.args.ray_gpu} GPU/worker)"
+        )
+        remote_worker = ray_worker_wrapper.options(num_gpus=self.args.ray_gpu)
+        futures = [
+            remote_worker.remote(client_worker, p) for p in parameters
+        ]
+        results_list = ray.get(futures)
+        return {parameters[i][0]: results_list[i] for i in range(len(parameters))}
 
     def close(self):
-        """显式关闭并行池，释放 GPU 资源"""
-        if hasattr(self, "gpu_pools"):
-            for device, pool in self.gpu_pools.items():
-                print(f"-> Closing parallel pool on device {device}...")
-                pool.terminate()
-                pool.join()
-            # 防止重复关闭
-            self.gpu_pools = {}
-
-    def deal_save(self, params):
-        path = os.path.join(
-            self.args.save_path, f"{self.args.file_name}_{self.args.times}.pt"
-        )
-        if self.args.test:
-            print(f"\nnot save to {path}\n")
-        else:
-            print(f"\nsaved to {path}\n")
-            torch.save(params, path)
-        self.close()
+        """资源清理：关闭 Ray"""
+        if ray.is_initialized():
+            print("-> Closing Ray Framework...")
+            ray.shutdown()
 
 
-def get_model(model_name, dataset, feature_dim):
-    if dataset == "cifar100":
-        num_classes = 100
-    elif dataset == "flowers102":
-        num_classes = 102
-    elif dataset == "cars":
-        num_classes = 196
-    elif dataset == "gtsrb":
-        num_classes = 43
-    elif dataset == "tiny_imagenet":
-        num_classes = 200
-    elif dataset in ["har", "har_feat"]:
-        num_classes = 6
+def get_model(model_name, dataset_name, feature_dim=512):
+    """
+    模型工厂函数。
+    """
+    if dataset_name == "mnist":
+        n_class = 10
+    elif dataset_name == "cifar10":
+        n_class = 10
+    elif dataset_name == "cifar100":
+        n_class = 100
+    elif dataset_name == "flowers102":
+        n_class = 102
+    elif dataset_name == "tiny_imagenet":
+        n_class = 200
+    elif dataset_name == "har" or dataset_name == "har_feat":
+        n_class = 6
     else:
-        num_classes = 10
-    if model_name == "resnet18":
-        global_model = ResNet18(
-            num_classes=num_classes, dataset_name=dataset, feature_dim=feature_dim
-        )
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+
+    if model_name == "cnn":
+        return CNN(dataset_name, n_class, feature_dim)
+    elif model_name == "resnet18":
+        return ResNet18(n_class, feature_dim)
     elif model_name == "resnet50":
-        global_model = ResNet50(
-            num_classes=num_classes, dataset_name=dataset, feature_dim=feature_dim
-        )
+        return ResNet50(n_class, feature_dim)
     elif model_name == "harcnn":
-        global_model = HARCNN(in_channels=9, num_classes=6, feature_dim=feature_dim)
+        return HARCNN(n_class, feature_dim)
     elif model_name == "harmlp":
-        global_model = HARMLP(input_dim=561, num_classes=6, feature_dim=feature_dim)
-    elif model_name == "cnn":
-        # 根据数据集选择输入通道数
-        input_channels = 1 if dataset == "mnist" else 3
-        global_model = CNN(
-            input_channels=input_channels,
-            num_classes=num_classes,
-            feature_dim=feature_dim,
-            dataset_name=dataset,
-        )
+        return HARMLP(n_class, feature_dim)
     else:
-        raise ValueError(f"Unsupported model name: {model_name}")
-
-    return global_model
+        raise ValueError(f"Unknown model: {model_name}")

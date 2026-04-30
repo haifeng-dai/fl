@@ -18,3 +18,5 @@ scratch/
 
 uv.lock
 nohup.out
+.geminiignore
+fedtest.py
