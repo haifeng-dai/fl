@@ -232,8 +232,8 @@ def client_worker(params):
         compressed_params_g_new[name] = decompose_param(param, energy_threshold)
 
     # 准备返回状态数据
-    local_state = {k: v.cpu() for k, v in model.state_dict().items()}
-    wh_state = {k: v.cpu() for k, v in W_h.state_dict().items()}
+    local_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    wh_state = {k: v.cpu().detach().clone() for k, v in W_h.state_dict().items()}
 
     return [avg_loss, compressed_params_g_new, local_state, wh_state]
 

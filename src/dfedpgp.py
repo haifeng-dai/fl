@@ -241,9 +241,9 @@ def client_worker(params):
     head_keys = [k for k in new_full_state.keys() if k.startswith("classifier.")]
 
     return [
-        total_loss / max(1, num_batches),  # avg_loss
-        {k: new_full_state[k].cpu() for k in shared_keys},  # body_shared
-        {k: new_full_state[k].cpu() for k in head_keys},  # head_state
+        total_loss / num_batches,  # avg_loss
+        {k: new_full_state[k].cpu().detach().clone() for k in shared_keys},  # body_shared
+        {k: new_full_state[k].cpu().detach().clone() for k in head_keys},  # head_state
     ]
 
 
@@ -408,13 +408,17 @@ class Server(BaseServer):
 
     def save(self):
         """保存模型和相关状态"""
-        save_dict = {
+        f = {
             "acc": self.acc,
             "loss": self.loss,
-            "clients_state": self.clients_state,
-            "client_body": self.client_body,
-            "client_head": self.client_head,
-            "client_mu": self.client_mu,
-            "topology": self.adj_matrix,
+            "state_dict": {
+                "client": self.clients_state,
+                "body": self.client_body,
+                "head": self.client_head,
+                "mu": self.client_mu,
+                "topology": self.adj_matrix.cpu()
+                if isinstance(self.adj_matrix, torch.Tensor)
+                else self.adj_matrix,
+            },
         }
-        self.deal_save(save_dict)
+        self.deal_save(f)

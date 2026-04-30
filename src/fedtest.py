@@ -150,13 +150,13 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    avg_loss = total_loss / num_batches
 
     local_protos = extract_prototypes(
         model, loader, num_classes, feature_dim, device
     )
 
-    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     return [avg_loss, model_state, local_protos]
 
 

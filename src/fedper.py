@@ -54,10 +54,10 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    avg_loss = total_loss / num_batches
     # 将拆分后的特征提取器和分类头状态返回，以实现高效通信
-    new_body = {k: v.cpu() for k, v in model.extractor.state_dict().items()}
-    new_head = {k: v.cpu() for k, v in model.classifier.state_dict().items()}
+    new_body = {k: v.cpu().detach().clone() for k, v in model.extractor.state_dict().items()}
+    new_head = {k: v.cpu().detach().clone() for k, v in model.classifier.state_dict().items()}
     return [avg_loss, new_body, new_head]
 
 

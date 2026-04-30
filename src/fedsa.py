@@ -163,7 +163,7 @@ def client_worker(params):
         model, loader, num_classes, feature_dim, device
     )
 
-    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     return [total_loss / num_batches, model_state, local_anchors_dict]
 
 

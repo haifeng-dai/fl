@@ -212,7 +212,7 @@ def client_worker(params):
             total_loss_ce += loss.item()
             num_batches_head += 1
 
-    avg_loss_ce = total_loss_ce / num_batches_head if num_batches_head > 0 else 0.0
+    avg_loss_ce = total_loss_ce / num_batches_head
 
     # === Phase 2: Local Body Alignment ===
     # 冻结 classifier，激活 extractor
@@ -248,7 +248,7 @@ def client_worker(params):
                 total_loss_proto += l_proto.item()
                 num_batches_body += 1
 
-        avg_loss_proto = total_loss_proto / num_batches_body if num_batches_body > 0 else 0.0
+        avg_loss_proto = total_loss_proto / num_batches_body
     else:
         avg_loss_proto = 0.0
 
@@ -258,7 +258,7 @@ def client_worker(params):
         model, loader, num_class, feature_dim, device
     )
 
-    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     return [avg_loss_ce, avg_loss_proto, model_state, local_protos_avg]
 
 

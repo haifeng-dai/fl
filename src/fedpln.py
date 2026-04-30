@@ -214,10 +214,10 @@ def client_worker(params):
             total_loss_p += loss.item()
             num_batches_p += 1
 
-        avg_loss_p = total_loss_p / num_batches_p if num_batches_p > 0 else 0.0
+        avg_loss_p = total_loss_p / num_batches_p
 
-    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-    pln_state = {k: v.cpu() for k, v in pln.state_dict().items()}
+    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    pln_state = {k: v.cpu().detach().clone() for k, v in pln.state_dict().items()}
     return [avg_loss_m, avg_loss_p, model_state, pln_state]
 
 

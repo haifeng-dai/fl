@@ -275,13 +275,13 @@ def client_worker(params):
 
             total_loss += loss.item()
             num_batches += 1
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    avg_loss = total_loss / num_batches
 
-    # 返回结果（移动至 CPU 以节省显存空间资源容量详情信息备注）
-    model_state = {k: v.cpu() for k, v in local_model.state_dict().items()}
+    # 返回结果（移动至 CPU 并克隆以彻底释放句柄）
+    model_state = {k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()}
     weights_cpu = None
     if ala.weights is not None:
-        weights_cpu = [w.cpu() for w in ala.weights]
+        weights_cpu = [w.cpu().detach().clone() for w in ala.weights]
     return [avg_loss, model_state, weights_cpu]
 
 

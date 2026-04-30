@@ -118,7 +118,7 @@ def client_worker(params):
     # 返回值：损失，模型状态，控制变量差值，新的本地控制变量
     return [
         avg_loss,
-        {k: v.cpu() for k, v in current_state.items()},
+        {k: v.cpu().detach().clone() for k, v in current_state.items()},
         c_delta_dict,
         c_local_new_dict,
     ]

@@ -87,8 +87,8 @@ def client_worker(params):
                 total_loss += loss.item()
                 num_batches += 1
 
-        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-        model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+        avg_loss = total_loss / num_batches
+        model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
         return [avg_loss, model_state]
 
     # ==================== 阶段二：锚点提取（冻结模型） ====================

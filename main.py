@@ -131,6 +131,10 @@ def get_args():
         "--epochs", type=int, default=1, help="Number of local epochs"
     )
     train_group.add_argument("--lr", type=float, default=0.01, help="Learning rate")
+    train_group.add_argument("--momentum", type=float, default=0.0, help="Momentum")
+    train_group.add_argument(
+        "--weight_decay", type=float, default=0.0, help="Weight decay"
+    )
     train_group.add_argument(
         "--rounds", type=int, default=5, help="Number of communication rounds"
     )

@@ -92,11 +92,10 @@ def client_worker(params):
             total_loss += task_loss.item()
             num_batches += 1
 
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    avg_loss = total_loss / num_batches
 
-    # 将更新后的模型状态（存放于 CPU）返回
-    return_state = {k: v.cpu() for k, v in model.state_dict().items()}
-    return [avg_loss, return_state]
+    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    return [avg_loss, model_state]
 
 
 class Server(BaseServer):

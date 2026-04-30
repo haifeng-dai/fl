@@ -138,11 +138,10 @@ def client_worker(params):
             total_loss_l += loss_l.item()
             num_batches += 1
 
-    avg_loss_p = total_loss_p / num_batches
     avg_loss_l = total_loss_l / num_batches
-
-    proxy_state = {k: v.cpu() for k, v in proxy_model.state_dict().items()}
-    local_state = {k: v.cpu() for k, v in local_model.state_dict().items()}
+    avg_loss_p = total_loss_p / num_batches
+    local_state = {k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()}
+    proxy_state = {k: v.cpu().detach().clone() for k, v in proxy_model.state_dict().items()}
     return [avg_loss_l, avg_loss_p, local_state, proxy_state]
 
 

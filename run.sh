@@ -9,14 +9,15 @@
 # export ALGOS="fedavg,feddyn,fedfm,fedlsa,fedpln,fedproc,fedprox,moon,scaffold"
 
 # personalized algorithms
-# export ALGOS="fedala,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local,proxyfl"
+# export ALGOS="fedala,feddpc,fedkd,fedper,fedproto,fedrep,fedsa,fedtgp,fml,lgfedavg,local"
 
-# export ALGOS="fedala,fedkd,fedper,fedproto"
+# decentralized
+# export ALGOS="l2c,dispfl,pearfl,dfedavgm,dfedpgp,proxyfl"
 
-# export ALGOS="fedrep,fedsa,fedtgp,fml"
-
-# export ALGOS="lgfedavg,local,proxyfl,feddpc"
-
+# export ALGOS="l2c"
+# export ALGOS="dispfl"
+# export ALGOS="pearfl"
+# export ALGOS="dfedavgm"
 export ALGOS="dfedpgp"
 
 # =============
@@ -41,6 +42,8 @@ export N_CLASSES="0" # 0 means auto: CIFAR10=2, CIFAR100=10, TinyImageNet=20
 # =============
 export EPOCHS="1"
 export LRS="0.01"
+export MOMENTUM="0.0"
+export WEIGHT_DECAY="0.0"
 export ROUNDS="200"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
@@ -61,7 +64,7 @@ export MARGIN_THRESHOLDS_DPC="100.0"
 # =============
 # Test
 # =============
-export TEST=1
+export TEST=0
 
 if [ "${TEST}" -eq 1 ]; then
     export EPOCHS="1"
@@ -163,10 +166,10 @@ export LOCAL_V_EPOCHS="1"
 export MOMENTUM_V="0.0"
 export WEIGHT_DECAY_V="0.0"
 
-# Network topology (used by decentralized algorithms like dfedavgm, proxyfl)
-# 可用选项: ring, centralized, complete, random, small_world, scale_free, star
+# Network topology (used by decentralized algorithms like dfedavgm, pearfl, l2c, dispfl, dfedpgp)
+# Available options: ring, centralized, complete, random, small_world, scale_free, star
 export ADJ_TYPES="ring"
-# 供某些拓扑使用的额外参数 (可选)
+# Extra parameters for certain topologies (optional)
 export EDGE_P="0.3"   # for random / small_world
 export K_SMALL_WORLD="4"  # for small_world (k nearest neighbors)
 export M_SCALE_FREE="2"  # for scale_free (barabasi-albert m)

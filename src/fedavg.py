@@ -59,7 +59,7 @@ def client_worker(params):
     avg_loss = total_loss / num_batches
 
     # 4. 整理返回结果（将模型状态移至 CPU 以节省 GPU 显存容量消耗）
-    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     return [avg_loss, model_state]
 
 

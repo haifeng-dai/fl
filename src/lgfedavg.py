@@ -62,11 +62,10 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-    # 返回拆分的模块状态
-    new_body = {k: v.cpu() for k, v in model.extractor.state_dict().items()}
-    new_head = {k: v.cpu() for k, v in model.classifier.state_dict().items()}
-    return [avg_loss, new_body, new_head]
+    avg_loss = total_loss / num_batches
+    body_state = {k: model.extractor.state_dict()[k].cpu().detach().clone() for k in model.extractor.state_dict().keys()}
+    head_state = {k: model.classifier.state_dict()[k].cpu().detach().clone() for k in model.classifier.state_dict().keys()}
+    return [avg_loss, body_state, head_state]
 
 
 class Server(BaseServer):
