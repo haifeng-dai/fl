@@ -1,10 +1,9 @@
-import argparse
 import os
 import time
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
@@ -23,73 +22,13 @@ def get_path(args):
     if args.adj_type == "random":
         adj_suffix += f"_{args.edge_p}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{args.k}_{args.edge_p}"
+        adj_suffix += f"_{args.k_small_world}_{args.edge_p}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{args.m}"
+        adj_suffix += f"_{args.m_scale_free}"
 
     # 将算法的关键超参加入文件名，便于区分实验
     args.file_name = f"{args.name_pre}_{adj_suffix}_{args.epochs}_{args.lamda}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
-
-
-def add_args(parser: argparse.ArgumentParser):
-    """添加 PearFL 特定的命令行参数"""
-    group = parser.add_argument_group("PearFL Specific Arguments")
-
-    # 拓扑参数
-    group.add_argument(
-        "--adj_type",
-        type=str,
-        default="ring",
-        choices=["ring", "complete", "random", "small_world", "scale_free", "star"],
-        help="Topology of the decentralized network",
-    )
-
-    # 可选的拓扑参数
-    group.add_argument(
-        "--edge_p",
-        type=float,
-        default=0.3,
-        help="Edge probability for random / small_world topologies (default: 0.3)",
-    )
-    group.add_argument(
-        "--k",
-        type=int,
-        default=4,
-        help="Neighborhood size k for small_world topology (default: 4)",
-    )
-    group.add_argument(
-        "--m",
-        type=int,
-        default=2,
-        help="Attachment parameter m for scale_free topology (default: 2)",
-    )
-
-    # PearFL 特定参数：原型正则化权重
-    group.add_argument(
-        "--lamda",
-        type=float,
-        default=1.0,
-        help="Weight for prototype regularization loss (default: 1.0)",
-    )
-
-    # Sinkhorn-Knopp 参数
-    group.add_argument(
-        "--epsilon",
-        type=float,
-        default=1e-3,
-        help="Tolerance for Sinkhorn-Knopp algorithm (default: 1e-3)",
-    )
-
-    # Global-on-Local 评估开关
-    group.add_argument(
-        "--do_global_on_local_eval",
-        type=bool,
-        default=False,
-        help="Whether to perform global-on-local evaluation (default: False)",
-    )
-
-    return parser
 
 
 def client_worker(params):
@@ -213,7 +152,9 @@ def client_worker(params):
 
     return [
         total_loss / num_batches,  # avg_loss
-        {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},  # model_state
+        {
+            k: v.cpu().detach().clone() for k, v in model.state_dict().items()
+        },  # model_state
         protos_tensor.cpu(),  # local_protos [num_classes, feature_dim]
         counts_tensor.cpu(),  # local_counts [num_classes]
     ]
@@ -229,7 +170,7 @@ class Server(BaseServer):
     - 聚合包括原型加权平均和模型参数平均
     """
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(pfl=True, args=args)
 
         # 1. 通信矩阵初始化（基于 Sinkhorn-Knopp 的双随机矩阵）
@@ -243,17 +184,15 @@ class Server(BaseServer):
         self.local_protos_pool = torch.zeros(
             self.num_clients, self.num_class, args.feature_dim
         ).to(self.device)
-        self.local_counts_pool = torch.zeros(
-            self.num_clients, self.num_class
-        ).to(self.device)
+        self.local_counts_pool = torch.zeros(self.num_clients, self.num_class).to(
+            self.device
+        )
         self.personalized_protos = torch.zeros(
             self.num_clients, self.num_class, args.feature_dim
         ).to(self.device)
 
         # 3. 初始化 clients_state 为当前全局模型
-        self.clients_state = [
-            self.model.state_dict() for _ in range(self.num_clients)
-        ]
+        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
     def fit(self):
         """主训练循环"""
@@ -329,15 +268,13 @@ class Server(BaseServer):
         # W: [num_clients, num_clients] - 双随机矩阵
         # local_counts_pool: [num_clients, num_classes] - 各客户端各类别的样本数
         # combine_weight[i,j,c] = W[i,j] * count[j,c]
-        combine_weight = (
-            self.W.unsqueeze(-1) * self.local_counts_pool.unsqueeze(0)
+        combine_weight = self.W.unsqueeze(-1) * self.local_counts_pool.unsqueeze(
+            0
         )  # [num_clients, num_clients, num_classes]
 
         # 2. 计算归一化分母
         denom = combine_weight.sum(dim=1, keepdim=True)  # [num_clients, 1, num_classes]
-        denom_safe = torch.where(
-            denom > 0, denom, torch.ones_like(denom)
-        )
+        denom_safe = torch.where(denom > 0, denom, torch.ones_like(denom))
 
         # 3. 矩阵运算实现加权聚合
         # new_proto[i,c,d] = sum_j(combine_weight[i,j,c] * proto[j,c,d]) / sum_j(combine_weight[i,j,c])

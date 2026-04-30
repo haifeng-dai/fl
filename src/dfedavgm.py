@@ -1,11 +1,17 @@
-import argparse
 import os
 import time
 
 import numpy as np
 import torch
 
-from .utils import BaseServer, ce_loss, param_aggregate, get_model, evaluate_model, generate_adjacency_matrix, compute_mh_weights
+from .utils import (
+    BaseServer,
+    ce_loss,
+    compute_mh_weights,
+    generate_adjacency_matrix,
+    get_model,
+    param_aggregate,
+)
 
 
 def get_path(args):
@@ -13,45 +19,12 @@ def get_path(args):
     if args.adj_type == "random":
         adj_suffix += f"_{args.edge_p}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{args.k}_{args.edge_p}"
+        adj_suffix += f"_{args.k_small_world}_{args.edge_p}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{args.m}"
+        adj_suffix += f"_{args.m_scale_free}"
 
     args.file_name = f"{args.name_pre}_{adj_suffix}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("DFedAvgM Specific Arguments")
-    group.add_argument(
-        "--adj_type",
-        type=str,
-        default="ring",
-        choices=["ring", "complete", "random", "small_world", "scale_free", "star"],
-        help="Topology of the decentralized network",
-    )
-
-    # optional topology parameters used by specific topologies
-    group.add_argument(
-        "--edge_p",
-        type=float,
-        default=0.3,
-        help="Edge probability for random / small_world topologies (default: 0.3)",
-    )
-    group.add_argument(
-        "--k",
-        type=int,
-        default=4,
-        help="Neighborhood size k for small_world topology (default: 4)",
-    )
-    group.add_argument(
-        "--m",
-        type=int,
-        default=2,
-        help="Attachment parameter m for scale_free topology (default: 2)",
-    )
-
-    return parser
 
 
 def client_worker(params):
@@ -103,7 +76,7 @@ def client_worker(params):
 class Server(BaseServer):
     # DFedAvgM Server: 使用 Metropolis-Hastings (MH) 权重矩阵进行去中心化模型聚合
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(pfl=True, args=args)
 
         # 使用通用的邻接矩阵生成函数

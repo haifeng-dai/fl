@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -9,40 +8,11 @@ import torch.nn.functional as F
 from .utils import (
     BaseServer,
     ce_loss,
-    mse_loss,
-    get_model,
-    param_aggregate,
     extract_prototypes,
+    get_model,
+    mse_loss,
+    param_aggregate,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedSA Specific Arguments")
-    group.add_argument(
-        "--alpha_sa",
-        type=float,
-        default=0.5,
-        help="Momentum factor for updating semantic anchors (Decay factor alpha in paper)",
-    )
-    group.add_argument(
-        "--lambda_r",
-        type=float,
-        default=0.1,
-        help="Weight for regularization loss",
-    )
-    group.add_argument(
-        "--lambda_mcl",
-        type=float,
-        default=0.1,
-        help="Weight for margin-enhanced contrastive loss",
-    )
-    group.add_argument(
-        "--lambda_cc",
-        type=float,
-        default=0.1,
-        help="Weight for classifier calibration loss",
-    )
-    return parser
 
 
 def get_path(args):
@@ -168,7 +138,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         # FedSA 是个性化联邦学习算法 (pfl=True)
         super().__init__(True, args)
 

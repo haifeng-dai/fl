@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -12,14 +11,6 @@ from .utils import (
     get_model,
     param_aggregate,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("SCAFFOLD Specific Arguments")
-    group.add_argument(
-        "--global_lr", type=float, default=1.0, help="Global learning rate"
-    )
-    return parser
 
 
 def get_path(args):
@@ -125,7 +116,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(False, args)
 
         # 获取所有可训练参数的名称

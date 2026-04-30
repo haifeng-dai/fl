@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 from collections import defaultdict
@@ -16,72 +15,6 @@ from .utils import (
     get_model,
     mse_loss,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    """添加 FedDPC 相关的特定参数"""
-    group = parser.add_argument_group("FedDPC Specific Arguments")
-    group.add_argument(
-        "--lamda_",
-        type=float,
-        default=10.0,
-        help="Weight for prototype matching loss (default: 10.0)",
-    )
-    group.add_argument(
-        "--head_epochs",
-        type=int,
-        default=4,
-        help="Number of local head-only epochs (default: 4)",
-    )
-    group.add_argument(
-        "--body_epochs",
-        type=int,
-        default=1,
-        help="Number of local body-only epochs (default: 1)",
-    )
-    group.add_argument(
-        "--lr_head",
-        type=float,
-        default=0.01,
-        help="Learning rate for local head-only training (default: 0.01)",
-    )
-    group.add_argument(
-        "--lr_body",
-        type=float,
-        default=0.001,
-        help="Learning rate for local body-only training (default: 0.001)",
-    )
-    group.add_argument(
-        "--server_epochs",
-        type=int,
-        default=10,
-        help="Number of server-side PLN training epochs (default: 10)",
-    )
-    group.add_argument(
-        "--server_lr",
-        type=float,
-        default=0.01,
-        help="Learning rate for server-side PLN training (default: 0.01)",
-    )
-    group.add_argument(
-        "--margin_threshold",
-        type=float,
-        default=5.0,
-        help="Margin threshold for PLN training (default: 5.0)",
-    )
-    group.add_argument(
-        "--lambda_p",
-        type=float,
-        default=1.0,
-        help="Weight for prototype matching loss in local training (default: 1.0)",
-    )
-    group.add_argument(
-        "--lambda_acl",
-        type=float,
-        default=0.01,
-        help="Weight for contrastive loss in PLN training (default: 0.01)",
-    )
-    return parser
 
 
 def get_path(args):
@@ -254,16 +187,14 @@ def client_worker(params):
 
     # === Phase 3: Recalculate Precise Prototypes ===
     model.eval()
-    local_protos_avg = extract_prototypes(
-        model, loader, num_class, feature_dim, device
-    )
+    local_protos_avg = extract_prototypes(model, loader, num_class, feature_dim, device)
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     return [avg_loss_ce, avg_loss_proto, model_state, local_protos_avg]
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(True, args)
         if hasattr(self.model, "feature_dim"):
             self.feature_dim = self.model.feature_dim
@@ -395,7 +326,7 @@ class Server(BaseServer):
         dist_matrix = torch.cdist(all_protos, all_protos, p=2.0)
 
         # 将对角线(自距离)设为无穷大，防止被误选为最小间距
-        dist_matrix.fill_diagonal_(float('inf'))
+        dist_matrix.fill_diagonal_(float("inf"))
 
         # 获取每个类别的最小间距 [C]
         self.gap = torch.min(dist_matrix, dim=1)[0]
@@ -461,7 +392,7 @@ class Server(BaseServer):
 
             if (epoch + 1) % 20 == 0 or epoch == 0:
                 print(
-                    f"  PLN Epoch {epoch+1}/{self.args.server_epochs}, "
+                    f"  PLN Epoch {epoch + 1}/{self.args.server_epochs}, "
                     f"Loss: {avg_loss:.4f} (CE: {avg_loss_ce:.4f}, MSE: {avg_loss_mse:.4f}, Ortho: {avg_loss_ortho:.4f})"
                 )
 

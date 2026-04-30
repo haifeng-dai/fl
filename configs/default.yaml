@@ -1,0 +1,39 @@
+# 全局默认配置 (Global Defaults)
+
+# 数据相关 (Data)
+dataset: "cifar10"
+model: "cnn"
+feature_dim: 512
+num_clients: 10
+partition: "dirichlet"
+alpha: 0.1
+n_class: 0           # 0 表示自动根据数据集选择
+test_ratio: 0.2
+
+# 训练相关 (Training)
+rounds: 200
+epochs: 10
+lr: 0.01
+momentum: 0.0
+weight_decay: 0.0
+batch_size: 64
+join_ratio: 1.0
+seed: 42
+times: 1             # 实验重复次数
+
+# 资源与框架 (Resources & Ray)
+gpus: "0,1,2,3"            # 使用的物理 GPU 编号，逗号分隔
+max_workers_per_gpu: 3
+test: 0              # 是否开启测试模式 (1: 开启, 0: 关闭)
+
+# 去中心化网络拓扑 (Network Topology)
+# ring, complete, random, small_world, scale_free, star
+adj_type: "ring"
+edge_p: 0.3          # random / small_world
+k_small_world: 4     # small_world
+m_scale_free: 2      # scale_free
+
+# 评估开关 (由算法特定配置覆盖)
+do_global_eval: true
+do_local_eval: false
+do_global_on_local_eval: true

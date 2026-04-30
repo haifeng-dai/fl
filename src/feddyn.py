@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -11,17 +10,6 @@ from .utils import (
     ce_loss,
     get_model,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedDyn Specific Arguments")
-    group.add_argument(
-        "--alpha_coef",
-        type=float,
-        default=0.01,
-        help="Regularization coefficient (alpha)",
-    )
-    return parser
 
 
 def get_path(args):
@@ -99,7 +87,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(False, args)
 
         # FedDyn 服务器状态

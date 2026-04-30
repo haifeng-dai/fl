@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -10,20 +9,6 @@ from .utils import (
     ce_loss,
     get_model,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("MOON Specific Arguments")
-    group.add_argument(
-        "--mu", type=float, default=1.0, help="Weight for contrastive loss"
-    )
-    group.add_argument(
-        "--tau",
-        type=float,
-        default=0.5,
-        help="Temperature parameter for contrastive loss",
-    )
-    return parser
 
 
 def get_path(args):
@@ -108,7 +93,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(False, args)
         # 使用最初始的全局模型来初始化所有客户端作为其“上一轮状态”
 

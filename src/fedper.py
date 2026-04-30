@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -56,13 +55,17 @@ def client_worker(params):
 
     avg_loss = total_loss / num_batches
     # 将拆分后的特征提取器和分类头状态返回，以实现高效通信
-    new_body = {k: v.cpu().detach().clone() for k, v in model.extractor.state_dict().items()}
-    new_head = {k: v.cpu().detach().clone() for k, v in model.classifier.state_dict().items()}
+    new_body = {
+        k: v.cpu().detach().clone() for k, v in model.extractor.state_dict().items()
+    }
+    new_head = {
+        k: v.cpu().detach().clone() for k, v in model.classifier.state_dict().items()
+    }
     return [avg_loss, new_body, new_head]
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(True, args)
         self.client_head_states = [
             self.model.classifier.state_dict() for _ in range(self.num_clients)

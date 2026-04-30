@@ -3,10 +3,11 @@ import os
 import torch
 
 from .aggregate import param_aggregate
+from .config import get_config
+from .env_utils import init_ray, setup_runtime_env, shutdown_ray
 from .evaluate import evaluate_model, evaluate_prototype
 from .fed_utils import BaseServer, get_model
-from .topology import generate_adjacency_matrix, compute_mh_weights, sinkhorn_knopp
-from .env_utils import setup_runtime_env, init_ray, shutdown_ray
+from .topology import compute_mh_weights, generate_adjacency_matrix, sinkhorn_knopp
 
 
 def compare_model_parameters(params1: dict, params2: dict) -> bool:

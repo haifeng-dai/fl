@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -10,12 +9,6 @@ from .utils import (
     ce_loss,
     get_model,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    parser.add_argument(
-        "--mu", type=float, default=0.01, help="Proximal term coefficient for FedProx"
-    )
 
 
 def get_path(args):
@@ -86,7 +79,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(False, args)
 
     def fit(self):

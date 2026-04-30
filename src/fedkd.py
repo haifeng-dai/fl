@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -12,20 +11,6 @@ from .utils import (
     kl_loss,
     mse_loss,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedKD Specific Arguments")
-    group.add_argument(
-        "--lr_g",
-        type=float,
-        default=0.005,
-        help="Learning rate for global model (student)",
-    )
-    group.add_argument(
-        "--energy", type=float, default=0.95, help="SVD energy threshold (0-1)"
-    )
-    return parser
 
 
 def get_path(args):
@@ -239,7 +224,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(True, args)
 
         # 初始分解运算

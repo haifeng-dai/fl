@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -63,13 +62,19 @@ def client_worker(params):
             num_batches += 1
 
     avg_loss = total_loss / num_batches
-    body_state = {k: model.extractor.state_dict()[k].cpu().detach().clone() for k in model.extractor.state_dict().keys()}
-    head_state = {k: model.classifier.state_dict()[k].cpu().detach().clone() for k in model.classifier.state_dict().keys()}
+    body_state = {
+        k: model.extractor.state_dict()[k].cpu().detach().clone()
+        for k in model.extractor.state_dict().keys()
+    }
+    head_state = {
+        k: model.classifier.state_dict()[k].cpu().detach().clone()
+        for k in model.classifier.state_dict().keys()
+    }
     return [avg_loss, body_state, head_state]
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         # pfl=True 表示此算法是个性化算法，评估时使用本地测试集
         super().__init__(True, args)
         # 覆盖 BaseServer 的初始化逻辑：LG-FedAvg 只需存储各客户端的特征提取器 (Extractor) 状态

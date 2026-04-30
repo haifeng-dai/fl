@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -11,17 +10,6 @@ from .utils import (
     get_model,
     param_aggregate,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedRep Specific Arguments")
-    group.add_argument(
-        "--epochs_head",
-        type=int,
-        default=5,
-        help="Number of local epochs for Head update",
-    )
-    return parser
 
 
 def get_path(args):
@@ -88,13 +76,17 @@ def client_worker(params):
 
     return [
         total_loss / num_batches,  # avg_loss
-        {k: model.state_dict()[k].cpu().detach().clone() for k in body_keys},  # body_state
-        {k: model.state_dict()[k].cpu().detach().clone() for k in head_keys},  # head_state
+        {
+            k: model.state_dict()[k].cpu().detach().clone() for k in body_keys
+        },  # body_state
+        {
+            k: model.state_dict()[k].cpu().detach().clone() for k in head_keys
+        },  # head_state
     ]
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(True, args)
         self.client_head_states = [
             self.model.classifier.state_dict() for _ in range(self.num_clients)

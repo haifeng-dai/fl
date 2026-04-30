@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 from collections import defaultdict
@@ -16,36 +15,6 @@ from .utils import (
     get_model,
     mse_loss,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    """添加 FedTGP 相关的特定参数"""
-    group = parser.add_argument_group("FedTGP Specific Arguments")
-    group.add_argument(
-        "--lamda_",
-        type=float,
-        default=10.0,
-        help="Weight for prototype matching loss (default: 10.0)",
-    )
-    group.add_argument(
-        "--server_epochs",
-        type=int,
-        default=10,
-        help="Number of server-side TGP training epochs (default: 10)",
-    )
-    group.add_argument(
-        "--server_lr",
-        type=float,
-        default=0.01,
-        help="Learning rate for server-side TGP training (default: 0.01)",
-    )
-    group.add_argument(
-        "--margin_threshold",
-        type=float,
-        default=1.0,
-        help="Margin threshold for TGP training (default: 1.0)",
-    )
-    return parser
 
 
 def get_path(args):
@@ -176,7 +145,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(True, args)
         if hasattr(self.model, "feature_dim"):
             self.feature_dim = self.model.feature_dim

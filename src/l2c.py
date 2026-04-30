@@ -1,4 +1,3 @@
-import argparse
 import logging
 import os
 import time
@@ -24,9 +23,9 @@ def get_path(args):
     if args.adj_type == "random":
         adj_suffix += f"_{args.edge_p}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{args.k}_{args.edge_p}"
+        adj_suffix += f"_{args.k_small_world}_{args.edge_p}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{args.m}"
+        adj_suffix += f"_{args.m_scale_free}"
 
     # 将算法的关键超参加入文件名
     args.file_name = (
@@ -34,62 +33,6 @@ def get_path(args):
         f"_{args.val_ratio}_{args.lr_alpha}_{args.threshold}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
-
-
-def add_args(parser: argparse.ArgumentParser):
-    """添加 L2C 特定的命令行参数"""
-    group = parser.add_argument_group("L2C Specific Arguments")
-
-    # 拓扑参数（去中心化网络拓扑）
-    group.add_argument(
-        "--adj_type",
-        type=str,
-        default="ring",
-        choices=["ring", "complete", "random", "small_world", "scale_free", "star"],
-        help="Topology of the decentralized network",
-    )
-
-    # 可选的拓扑参数
-    group.add_argument(
-        "--edge_p",
-        type=float,
-        default=0.3,
-        help="Edge probability for random / small_world topologies (default: 0.3)",
-    )
-    group.add_argument(
-        "--k",
-        type=int,
-        default=4,
-        help="Neighborhood size k for small_world topology (default: 4)",
-    )
-    group.add_argument(
-        "--m",
-        type=int,
-        default=2,
-        help="Attachment parameter m for scale_free topology (default: 2)",
-    )
-
-    # L2C 特定参数：元学习相关
-    group.add_argument(
-        "--val_ratio",
-        type=float,
-        default=0.1,
-        help="Ratio of training data used as validation set for meta-gradient (default: 0.1)",
-    )
-    group.add_argument(
-        "--lr_alpha",
-        type=float,
-        default=0.1,
-        help="Learning rate for meta-learning (alpha update) (default: 0.1)",
-    )
-    group.add_argument(
-        "--threshold",
-        type=float,
-        default=0.0,
-        help="Threshold for edge pruning in final aggregation (default: 0.0)",
-    )
-
-    return parser
 
 
 def client_worker_phase1(params):
@@ -173,7 +116,9 @@ def client_worker_phase1(params):
 
     # 4. 计算 Delta = theta_t - theta_updated
     theta_mid = model.state_dict()
-    delta_theta = {k: (theta_t[k].to(device) - theta_mid[k]).cpu() for k in theta_t.keys()}
+    delta_theta = {
+        k: (theta_t[k].to(device) - theta_mid[k]).cpu() for k in theta_t.keys()
+    }
 
     return [
         total_loss / num_batches,  # avg_loss
@@ -289,7 +234,9 @@ def client_worker_phase2(params):
         for k in final_state.keys():
             layer_deltas = torch.stack([d[k].to(device) for d in neighbor_deltas])
             dims = [1] * (layer_deltas.dim() - 1)
-            final_state[k] -= torch.sum(layer_deltas * w_final_gpu.view(-1, *dims), dim=0)
+            final_state[k] -= torch.sum(
+                layer_deltas * w_final_gpu.view(-1, *dims), dim=0
+            )
 
     return [
         {k: v.cpu().detach().clone() for k, v in final_state.items()},  # 最终模型状态
@@ -307,7 +254,7 @@ class Server(BaseServer):
     Phase 2: 分发邻居 Delta 并执行元更新与最终聚合
     """
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(pfl=True, args=args)
 
         # 1. 自动生成邻接矩阵（用于确定协作节点）
@@ -368,7 +315,9 @@ class Server(BaseServer):
 
             total_loss = 0.0
             for cid in selected_clients:
-                avg_loss, theta_t, delta_theta, train_indices, val_indices = p1_results[cid]
+                avg_loss, theta_t, delta_theta, train_indices, val_indices = p1_results[
+                    cid
+                ]
                 total_loss += avg_loss
                 cid_to_delta[cid] = delta_theta
                 cid_to_theta_t[cid] = theta_t
@@ -435,7 +384,9 @@ class Server(BaseServer):
             # --- 评估与日志记录 ---
             self.evaluate()
 
-            print(f"[Round {round_idx + 1}] Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
+            print(
+                f"[Round {round_idx + 1}] Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%"
+            )
             print(f"[Round {round_idx + 1}] Time spent: {time.time() - t0:.2f}s")
 
     def aggregate(self):
@@ -461,7 +412,9 @@ class Server(BaseServer):
             "loss": self.loss,
             "state_dict": {
                 "client": self.clients_state,
-                "topology": self.A.cpu() if isinstance(self.A, torch.Tensor) else self.A,
+                "topology": self.A.cpu()
+                if isinstance(self.A, torch.Tensor)
+                else self.A,
                 "alphas": self.alphas,
             },
         }

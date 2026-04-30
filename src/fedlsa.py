@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -12,41 +11,6 @@ from .utils import (
     ce_loss,
     get_model,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedLSA Specific Arguments")
-    group.add_argument(
-        "--lambda_com",
-        type=float,
-        default=0.1,
-        help="Weight for Compactness Loss (L_COM) on client side",
-    )
-    group.add_argument(
-        "--alpha_sep",
-        type=float,
-        default=0.1,
-        help="Weight for Separation Loss (L_SEP) on server side",
-    )
-    group.add_argument(
-        "--server_epochs",
-        type=int,
-        default=1,
-        help="Number of server-side optimization epochs (Es)",
-    )
-    group.add_argument(
-        "--server_lr",
-        type=float,
-        default=0.01,
-        help="Learning rate for server-side optimization",
-    )
-    group.add_argument(
-        "--tau",
-        type=float,
-        default=0.1,
-        help="Temperature parameter for separation loss",
-    )
-    return parser
 
 
 def get_path(args):
@@ -189,7 +153,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(False, args)
 
         # 从模型的 extractor 层推断 embedding 维度 I

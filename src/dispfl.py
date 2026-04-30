@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -20,9 +19,9 @@ def get_path(args):
     if args.adj_type == "random":
         adj_suffix += f"_{args.edge_p}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{args.k}_{args.edge_p}"
+        adj_suffix += f"_{args.k_small_world}_{args.edge_p}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{args.m}"
+        adj_suffix += f"_{args.m_scale_free}"
 
     # 将算法的关键超参加入文件名
     args.file_name = (
@@ -30,56 +29,6 @@ def get_path(args):
         f"_{args.dense_ratio}_{args.anneal_factor}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
-
-
-def add_args(parser: argparse.ArgumentParser):
-    """添加 DisPFL 特定的命令行参数"""
-    group = parser.add_argument_group("DisPFL Specific Arguments")
-
-    # 拓扑参数（去中心化网络拓扑）
-    group.add_argument(
-        "--adj_type",
-        type=str,
-        default="ring",
-        choices=["ring", "complete", "random", "small_world", "scale_free", "star"],
-        help="Topology of the decentralized network",
-    )
-
-    # 可选的拓扑参数
-    group.add_argument(
-        "--edge_p",
-        type=float,
-        default=0.3,
-        help="Edge probability for random / small_world topologies (default: 0.3)",
-    )
-    group.add_argument(
-        "--k",
-        type=int,
-        default=4,
-        help="Neighborhood size k for small_world topology (default: 4)",
-    )
-    group.add_argument(
-        "--m",
-        type=int,
-        default=2,
-        help="Attachment parameter m for scale_free topology (default: 2)",
-    )
-
-    # DisPFL 特定参数：动态稀疏化相关
-    group.add_argument(
-        "--dense_ratio",
-        type=float,
-        default=0.1,
-        help="Initial density ratio of masks (default: 0.1)",
-    )
-    group.add_argument(
-        "--anneal_factor",
-        type=float,
-        default=1.0,
-        help="Initial pruning rate (will decay during training) (default: 1.0)",
-    )
-
-    return parser
 
 
 def client_worker(params):
@@ -220,7 +169,9 @@ def client_worker(params):
 
     return [
         total_loss / num_batches,  # avg_loss
-        {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},  # model_state
+        {
+            k: v.cpu().detach().clone() for k, v in model.state_dict().items()
+        },  # model_state
         new_masks,  # updated_masks
         correct / total if total > 0 else 0.0,  # accuracy
     ]
@@ -237,7 +188,7 @@ class Server(BaseServer):
     - 梯度驱动的权重恢复
     """
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(pfl=True, args=args)
 
         # 1. 生成拓扑结构（generate_adjacency_matrix 已内置自环）

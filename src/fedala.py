@@ -1,4 +1,3 @@
-import argparse
 import os
 import random
 import time
@@ -12,42 +11,6 @@ from .utils import (
     ce_loss,
     get_model,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    """添加 FedALA 算法特定的参数"""
-    group = parser.add_argument_group("FedALA Specific Arguments")
-    group.add_argument(
-        "--eta",
-        type=float,
-        default=1.0,
-        help="ALA weight learning rate (default: 1.0)",
-    )
-    group.add_argument(
-        "--rand_percent",
-        type=int,
-        default=80,
-        help="Percentage of local data to sample for ALA weight learning (default: 80)",
-    )
-    group.add_argument(
-        "--layer_idx",
-        type=int,
-        default=2,
-        help="Number of higher layers to apply ALA. 0 means all layers (default: 2)",
-    )
-    group.add_argument(
-        "--ala_threshold",
-        type=float,
-        default=0.1,
-        help="Convergence threshold for ALA weight learning (default: 0.1)",
-    )
-    group.add_argument(
-        "--num_pre_loss",
-        type=int,
-        default=10,
-        help="Number of recent losses to calculate std for ALA convergence (default: 10)",
-    )
-    return parser
 
 
 def get_path(args):
@@ -278,7 +241,9 @@ def client_worker(params):
     avg_loss = total_loss / num_batches
 
     # 返回结果（移动至 CPU 并克隆以彻底释放句柄）
-    model_state = {k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()}
+    model_state = {
+        k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()
+    }
     weights_cpu = None
     if ala.weights is not None:
         weights_cpu = [w.cpu().detach().clone() for w in ala.weights]
@@ -286,7 +251,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         # FedALA 是一种个性化联邦学习 (pFL) 方法
         super().__init__(True, args)
         self.clients_weights = [None] * self.num_clients

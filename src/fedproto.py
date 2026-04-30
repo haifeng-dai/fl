@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 from collections import defaultdict
@@ -9,21 +8,10 @@ import torch
 from .utils import (
     BaseServer,
     ce_loss,
+    extract_prototypes,
     get_model,
     mse_loss,
-    extract_prototypes,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedProto Specific Arguments")
-    group.add_argument(
-        "--mu",
-        type=float,
-        default=0.1,
-        help="Weight for prototype consistency loss",
-    )
-    return parser
 
 
 def get_path(args):
@@ -88,16 +76,12 @@ def client_worker(params):
 
     avg_loss = total_loss / num_batches
 
-    local_protos = extract_prototypes(
-        model, loader, num_classes, feature_dim, device
-    )
-
-    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    local_protos = extract_prototypes(model, loader, num_classes, feature_dim, device)
     return [avg_loss, model_state, local_protos]
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(True, args)
 
         self.global_protos = None

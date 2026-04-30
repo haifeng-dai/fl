@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -11,47 +10,6 @@ from .utils import (
     get_model,
     param_aggregate,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedPLN Specific Arguments")
-    group.add_argument(
-        "--lambda_", type=float, default=10.0, help="Weight for PLN Contrastive Loss"
-    )
-    group.add_argument(
-        "--epoch_pln", type=int, default=10, help="Epochs for PLN learning"
-    )
-    group.add_argument(
-        "--lr_pln", type=float, default=0.01, help="Learning rate for PLN learning"
-    )
-    group.add_argument(
-        "--batch_size_pln", type=int, default=32, help="Batch size for PLN learning"
-    )
-    group.add_argument("--depth_pln", type=int, default=2, help="Depth of PLN network")
-    group.add_argument(
-        "--width_pln", type=int, default=128, help="Width of PLN network"
-    )
-    group.add_argument(
-        "--mode",
-        type=str,
-        default="normal",
-        choices=["normal", "pln", "model", "all"],
-        help="Task mode",
-    )
-    group.add_argument(
-        "--fixed_proto",
-        type=int,
-        default=0,
-        help="Whether to fix the prototypes during training",
-    )
-    group.add_argument(
-        "--init_emb",
-        type=int,
-        default=0,
-        help="Initialization strategy for PLN embeddings",
-    )
-    group.add_argument("--har", type=int, default=0, help="Whether to use HAR dataset")
-    return parser
 
 
 def get_path(args):
@@ -222,7 +180,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(False, args)
 
         self.pln = PLN(

@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -12,14 +11,6 @@ from .utils import (
     get_model,
     mse_loss,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FedFM Specific Arguments")
-    group.add_argument(
-        "--mu", type=float, default=1.0, help="Weight for contrastive guiding loss"
-    )
-    return parser
 
 
 def get_path(args):
@@ -88,7 +79,9 @@ def client_worker(params):
                 num_batches += 1
 
         avg_loss = total_loss / num_batches
-        model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+        model_state = {
+            k: v.cpu().detach().clone() for k, v in model.state_dict().items()
+        }
         return [avg_loss, model_state]
 
     # ==================== 阶段二：锚点提取（冻结模型） ====================
@@ -101,7 +94,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(False, args)
         self.global_anchors = torch.zeros((self.num_class, self.args.feature_dim))
 

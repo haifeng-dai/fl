@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -8,8 +7,8 @@ import torch
 from .utils import (
     BaseServer,
     ce_loss,
-    get_model,
     generate_adjacency_matrix,
+    get_model,
     param_aggregate,
 )
 
@@ -20,79 +19,13 @@ def get_path(args):
     if args.adj_type == "random":
         adj_suffix += f"_{args.edge_p}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{args.k}_{args.edge_p}"
+        adj_suffix += f"_{args.k_small_world}_{args.edge_p}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{args.m}"
+        adj_suffix += f"_{args.m_scale_free}"
 
     # 将算法的关键超参加入文件名，便于区分实验
     args.file_name = f"{args.name_pre}_{adj_suffix}_{args.epochs}_{args.local_v_epochs}_{args.lr_v}_{args.momentum_v}_{args.weight_decay_v}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.times}.log")
-
-
-def add_args(parser: argparse.ArgumentParser):
-    """添加 DFedPGP 特定的命令行参数"""
-    group = parser.add_argument_group("DFedPGP Specific Arguments")
-
-    # 拓扑参数
-    group.add_argument(
-        "--adj_type",
-        type=str,
-        default="ring",
-        choices=["ring", "complete", "random", "small_world", "scale_free", "star"],
-        help="Topology of the decentralized network",
-    )
-
-    # 可选的拓扑参数
-    group.add_argument(
-        "--edge_p",
-        type=float,
-        default=0.3,
-        help="Edge probability for random / small_world topologies (default: 0.3)",
-    )
-    group.add_argument(
-        "--k",
-        type=int,
-        default=4,
-        help="Neighborhood size k for small_world topology (default: 4)",
-    )
-    group.add_argument(
-        "--m",
-        type=int,
-        default=2,
-        help="Attachment parameter m for scale_free topology (default: 2)",
-    )
-
-    # DFedPGP 特定的学习率：仅为分类头提供额外学习率，特征提取器使用全局 --lr
-    group.add_argument(
-        "--lr_v",
-        type=float,
-        default=None,
-        help="Learning rate for classifier (private head) training. If None, uses --lr",
-    )
-
-    # 本地训练轮数：特征提取器使用全局 --epochs，分类头可以单独设置
-    group.add_argument(
-        "--local_v_epochs",
-        type=int,
-        default=1,
-        help="Local epochs for training classifier (head)",
-    )
-
-    # 优化器参数
-    group.add_argument(
-        "--momentum_v",
-        type=float,
-        default=0.0,
-        help="Momentum for SGD optimizer (default: 0.0)",
-    )
-    group.add_argument(
-        "--weight_decay_v",
-        type=float,
-        default=0.0,
-        help="Weight decay for SGD optimizer (default: 0.0)",
-    )
-
-    return parser
 
 
 def client_worker(params):
@@ -164,9 +97,7 @@ def client_worker(params):
     )
 
     # 4. 准备数据加载器
-    loader = torch.utils.data.DataLoader(
-        train_set, batch_size=batch_size, shuffle=True
-    )
+    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     # ========== Phase 1: 训练分类头 V (固定 Body 为初始解偏值 z_0) ==========
     for param in model.extractor.parameters():
@@ -197,10 +128,7 @@ def client_worker(params):
 
     # 恢复为原始带偏的 body_biased (U)
     model.extractor.load_state_dict(
-        {
-            k.replace("extractor.", ""): v.to(device)
-            for k, v in body_biased.items()
-        }
+        {k.replace("extractor.", ""): v.to(device) for k, v in body_biased.items()}
     )
 
     total_loss = 0.0
@@ -242,7 +170,9 @@ def client_worker(params):
 
     return [
         total_loss / num_batches,  # avg_loss
-        {k: new_full_state[k].cpu().detach().clone() for k in shared_keys},  # body_shared
+        {
+            k: new_full_state[k].cpu().detach().clone() for k in shared_keys
+        },  # body_shared
         {k: new_full_state[k].cpu().detach().clone() for k in head_keys},  # head_state
     ]
 
@@ -258,7 +188,7 @@ class Server(BaseServer):
     - 支持任意网络拓扑
     """
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(pfl=True, args=args)
 
         # 验证模型架构：必须有 extractor 和 classifier

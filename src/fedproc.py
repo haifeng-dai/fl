@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -83,7 +82,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(False, args)
         self.global_protos = torch.zeros((self.num_class, self.args.feature_dim))
 

@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -13,23 +12,6 @@ from .utils import (
     kl_loss,
     param_aggregate,
 )
-
-
-def add_args(parser: argparse.ArgumentParser):
-    group = parser.add_argument_group("FML Specific Arguments")
-    group.add_argument(
-        "--alpha_fml",
-        type=float,
-        default=1.0,
-        help="Weight for KL Divergence Loss (Global to Local)",
-    )
-    group.add_argument(
-        "--beta_fml",
-        type=float,
-        default=1.0,
-        help="Weight for KL Divergence Loss (Local to Global)",
-    )
-    return parser
 
 
 def get_path(args):
@@ -109,19 +91,25 @@ def client_worker(params):
 
     avg_loss_g = total_loss_g / num_batches
     avg_loss_l = total_loss_l / num_batches
-    global_state = {k: v.cpu().detach().clone() for k, v in global_model.state_dict().items()}
-    local_state = {k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()}
+    global_state = {
+        k: v.cpu().detach().clone() for k, v in global_model.state_dict().items()
+    }
+    local_state = {
+        k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()
+    }
     return [avg_loss_l, avg_loss_g, local_state, global_state]
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(True, args)
 
         self.loss_g = []
         self.acc_g = []
         # 聚合所有客户端的测试集用于全局模型评估
-        self.test_set_global = torch.utils.data.ConcatDataset(list(self.test_set.values()))
+        self.test_set_global = torch.utils.data.ConcatDataset(
+            list(self.test_set.values())
+        )
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)

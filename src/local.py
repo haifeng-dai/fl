@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -62,7 +61,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         super().__init__(True, args)
 
     def fit(self):

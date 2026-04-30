@@ -1,5 +1,5 @@
-import torch
 import networkx as nx
+import torch
 
 
 def generate_adjacency_matrix(args):
@@ -21,7 +21,7 @@ def generate_adjacency_matrix(args):
     elif adj_type == "ring":
         g = nx.cycle_graph(n)
     elif adj_type == "random":
-        edge_p = config.edge_p
+        edge_p = args.edge_p
         g = nx.erdos_renyi_graph(n, edge_p)
         if n > 1:
             retry = 0
@@ -29,11 +29,11 @@ def generate_adjacency_matrix(args):
                 g = nx.erdos_renyi_graph(n, edge_p)
                 retry += 1
     elif adj_type == "small_world":
-        k = config.k
-        p = config.edge_p
+        k = args.k_small_world
+        p = args.edge_p
         g = nx.watts_strogatz_graph(n, k, p)
     elif adj_type == "scale_free":
-        m = config.m
+        m = args.m_scale_free
         if n > m:
             g = nx.barabasi_albert_graph(n, m)
         else:

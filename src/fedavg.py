@@ -1,4 +1,3 @@
-import argparse
 import os
 import time
 
@@ -64,7 +63,7 @@ def client_worker(params):
 
 
 class Server(BaseServer):
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         # FedAvg 是传统的全局联邦学习方法，因此 pfl=False
         super().__init__(False, args)
 

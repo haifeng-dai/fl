@@ -1,14 +1,12 @@
-import argparse
 import os
 
-import torch
 import ray
+import torch
 
 from ..models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 from .load_data import load_data
-from .env_utils import init_ray, shutdown_ray
 
 
 @ray.remote
@@ -27,7 +25,7 @@ def worker(worker_func, params):
 
 
 class BaseServer:
-    def __init__(self, pfl: bool, args: argparse.Namespace):
+    def __init__(self, pfl: bool, args):
         self.model = get_model(args.model, args.dataset, args.feature_dim).cpu()
         self.args = args
         self.rounds: int = args.rounds
@@ -53,11 +51,9 @@ class BaseServer:
         ]
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
-        # 1. 解析 GPU 资源并初始化 Ray 环境
+        # 1. 解析 GPU 资源
         gpu_ids = [int(i) for i in args.gpus.split(",")]
         self.device = gpu_ids[-1]  # 用于 Driver 进程评估
-
-        init_ray(args, gpu_ids)
 
         # 2. 强制设备映射：在 Ray Worker 环境中逻辑显卡始终映射为 cuda:0
         dev_str = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -134,15 +130,9 @@ class BaseServer:
         ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
 
         remote_worker = worker.options(num_gpus=ray_gpu_fraction)
-        futures = [
-            remote_worker.remote(client_worker, p) for p in parameters
-        ]
+        futures = [remote_worker.remote(client_worker, p) for p in parameters]
         results_list = ray.get(futures)
         return {parameters[i][0]: results_list[i] for i in range(len(parameters))}
-
-    def close(self):
-        """资源清理：关闭 Ray"""
-        shutdown_ray()
 
     def deal_save(self, f):
         """将实验结果字典持久化到磁盘"""
@@ -150,7 +140,7 @@ class BaseServer:
         save_name = f"{self.args.name_pre}_{self.args.times}.pt"
         save_full_path = os.path.join(self.args.save_path, save_name)
         torch.save(f, save_full_path)
-        print(f"-> Results saved to: {save_full_path}")
+        print(f"\n-> Results saved to: {save_full_path}")
 
 
 def get_model(model_name, dataset_name, feature_dim=512):
@@ -172,7 +162,14 @@ def get_model(model_name, dataset_name, feature_dim=512):
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
-    input_channels = 3 if ("cifar" in dataset_name or dataset_name in ["tiny_imagenet", "flowers102", "cars", "gtsrb"]) else 1
+    input_channels = (
+        3
+        if (
+            "cifar" in dataset_name
+            or dataset_name in ["tiny_imagenet", "flowers102", "cars", "gtsrb"]
+        )
+        else 1
+    )
     if model_name == "cnn":
         return CNN(input_channels, n_class, feature_dim, dataset_name)
     elif model_name == "resnet18":
