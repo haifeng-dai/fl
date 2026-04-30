@@ -7,13 +7,30 @@ import re
 PARAM_MAP = {
     "lamda_": r"$\lambda$",
     "lambda_": r"$\lambda$",
+    "lamda": r"$\lambda$",
     "mu": r"$\mu$",
     "eta": r"$\eta$",
     "alpha": r"$\alpha$",
     "tau": r"$\tau$",
     "rho": r"$\rho$",
     "lr": "LR",
+    "lr_alpha": r"$\alpha_{meta}$",
+    "threshold": "Thres",
+    "dense_ratio": "Density",
+    "anneal_factor": "Anneal",
+    "lr_v": r"$LR_{head}$",
 }
+
+def get_adj_suffix(args):
+    adj_type = args.get('adj_type', 'ring')
+    suffix = f"{adj_type}"
+    if adj_type == "random":
+        suffix += f"_{args.get('edge_p', 0.3)}"
+    elif adj_type == "small_world":
+        suffix += f"_{args.get('k', 4)}_{args.get('edge_p', 0.3)}"
+    elif adj_type == "scale_free":
+        suffix += f"_{args.get('m', 2)}"
+    return suffix
 
 def beautify_label(name):
     """Converts code-style parameter names to LaTeX symbols or cleaner names."""
@@ -54,9 +71,15 @@ class ResultLoader:
             "fml": lambda args: f"_{args['alpha_fml']}_{args['beta_fml']}",
             "lgfedavg": lambda args: "",
             "moon": lambda args: f"_{args['mu']}_{args['tau']}",
-            "proxyfl": lambda args: f"_{args['mu']}_{args['adj_type']}",
+            "proxyfl": lambda args: f"_{args['mu']}_{get_adj_suffix(args)}",
             "fedtest": lambda args: f"_{args['mu_test']}",
             "local": lambda args: "_local",
+            # Decentralized Algorithms
+            "l2c": lambda args: f"_{get_adj_suffix(args)}_{args.get('epochs', 1)}_{args['val_ratio']}_{args['lr_alpha']}_{args['threshold']}",
+            "dispfl": lambda args: f"_{get_adj_suffix(args)}_{args.get('epochs', 1)}_{args['dense_ratio']}_{args['anneal_factor']}",
+            "pearfl": lambda args: f"_{get_adj_suffix(args)}_{args.get('epochs', 1)}_{args['lamda']}",
+            "dfedavgm": lambda args: f"_{get_adj_suffix(args)}",
+            "dfedpgp": lambda args: f"_{get_adj_suffix(args)}_{args.get('epochs', 1)}_{args['local_v_epochs']}_{args['lr_v']}_{args['momentum_v']}_{args['weight_decay_v']}",
         }
 
     def _average_recursive(self, data_list):

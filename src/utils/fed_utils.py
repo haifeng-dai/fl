@@ -8,10 +8,11 @@ from ..models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 from .load_data import load_data
+from .env_utils import init_ray, shutdown_ray
 
 
 @ray.remote
-def ray_worker_wrapper(worker_func, params):
+def worker(worker_func, params):
     """
     Ray 远程工作者的通用包装函数。
     """
@@ -56,13 +57,7 @@ class BaseServer:
         gpu_ids = [int(i) for i in args.gpus.split(",")]
         self.device = gpu_ids[-1]  # 用于 Driver 进程评估
 
-        if not ray.is_initialized():
-            print(f"-> Initializing Ray Framework (Mandatory) | GPUs: {len(gpu_ids)}")
-            ray.init(
-                num_gpus=len(gpu_ids),
-                ignore_reinit_error=True,
-                runtime_env={"env_vars": {"RAY_RUNTIME_ENV_IGNORE_PYPROJECT": "1"}},
-            )
+        init_ray(args, gpu_ids)
 
         # 2. 强制设备映射：在 Ray Worker 环境中逻辑显卡始终映射为 cuda:0
         dev_str = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -134,11 +129,11 @@ class BaseServer:
         self.model.cpu()
 
     def run_clients(self, client_worker, parameters):
-        """通过 Ray 运行客户端训练。"""
-        print(
-            f"-> Running {len(parameters)} clients via Ray (Resource: {self.args.ray_gpu} GPU/worker)"
-        )
-        remote_worker = ray_worker_wrapper.options(num_gpus=self.args.ray_gpu)
+        """强制通过 Ray 运行客户端训练。"""
+        # 根据 max_workers_per_gpu 计算 Ray 需要的显存比例 (1/n)
+        ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
+
+        remote_worker = worker.options(num_gpus=ray_gpu_fraction)
         futures = [
             remote_worker.remote(client_worker, p) for p in parameters
         ]
@@ -147,9 +142,15 @@ class BaseServer:
 
     def close(self):
         """资源清理：关闭 Ray"""
-        if ray.is_initialized():
-            print("-> Closing Ray Framework...")
-            ray.shutdown()
+        shutdown_ray()
+
+    def deal_save(self, f):
+        """将实验结果字典持久化到磁盘"""
+        os.makedirs(self.args.save_path, exist_ok=True)
+        save_name = f"{self.args.name_pre}_{self.args.times}.pt"
+        save_full_path = os.path.join(self.args.save_path, save_name)
+        torch.save(f, save_full_path)
+        print(f"-> Results saved to: {save_full_path}")
 
 
 def get_model(model_name, dataset_name, feature_dim=512):
@@ -171,12 +172,13 @@ def get_model(model_name, dataset_name, feature_dim=512):
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
+    input_channels = 3 if ("cifar" in dataset_name or dataset_name in ["tiny_imagenet", "flowers102", "cars", "gtsrb"]) else 1
     if model_name == "cnn":
-        return CNN(dataset_name, n_class, feature_dim)
+        return CNN(input_channels, n_class, feature_dim, dataset_name)
     elif model_name == "resnet18":
-        return ResNet18(n_class, feature_dim)
+        return ResNet18(n_class, feature_dim, dataset_name)
     elif model_name == "resnet50":
-        return ResNet50(n_class, feature_dim)
+        return ResNet50(n_class, feature_dim, dataset_name)
     elif model_name == "harcnn":
         return HARCNN(n_class, feature_dim)
     elif model_name == "harmlp":

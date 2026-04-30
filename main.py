@@ -4,11 +4,12 @@ import importlib
 import random
 import sys
 import time
+import traceback
 
 import numpy as np
 import torch
 
-from src import get_pre_name, prepare_data
+from src import get_pre_name, prepare_data, setup_runtime_env
 
 
 def set_seed(seed):
@@ -152,10 +153,10 @@ def get_args():
     # Ray 并行框架参数 (Exclusive)
     ray_group = full_parser.add_argument_group("Ray Framework Arguments")
     ray_group.add_argument(
-        "--ray_gpu",
-        type=float,
-        default=0.5,
-        help="GPU resources per Ray worker (e.g., 0.5 means 2 workers per GPU)",
+        "--max_workers_per_gpu",
+        type=int,
+        default=2,
+        help="Number of parallel workers per GPU (e.g., 2 means 2 workers per GPU)",
     )
 
     # 算法专属参数
@@ -236,6 +237,9 @@ def main():
             )
             delta = datetime.timedelta(seconds=int(b - a))
             print(f"\nTotal time: {delta}")
+        except Exception:
+            traceback.print_exc()
+            raise
         finally:
             # 恢复 stdout/stderr 并关闭日志文件
             if not args.test:
@@ -246,4 +250,5 @@ def main():
 
 
 if __name__ == "__main__":
+    setup_runtime_env()
     main()

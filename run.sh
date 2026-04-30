@@ -18,7 +18,9 @@
 # export ALGOS="dispfl"
 # export ALGOS="pearfl"
 # export ALGOS="dfedavgm"
-export ALGOS="dfedpgp"
+# export ALGOS="dfedpgp"
+
+export ALGOS="fedavg"
 
 # =============
 # Data
@@ -40,14 +42,14 @@ export N_CLASSES="0" # 0 means auto: CIFAR10=2, CIFAR100=10, TinyImageNet=20
 # =============
 # Training
 # =============
-export EPOCHS="1"
+export EPOCHS="10"
 export LRS="0.01"
 export MOMENTUM="0.0"
 export WEIGHT_DECAY="0.0"
-export ROUNDS="200"
+export ROUNDS="1000"
 export BATCH_SIZES="64"
 export JOIN_RATIOS="1.0"
-export TIMES=5
+export TIMES=1
 
 # FedDPC
 export LAMDAS_DPC="100.0"
@@ -64,7 +66,7 @@ export MARGIN_THRESHOLDS_DPC="100.0"
 # =============
 # Test
 # =============
-export TEST=0
+export TEST=1
 
 if [ "${TEST}" -eq 1 ]; then
     export EPOCHS="1"
@@ -73,14 +75,10 @@ if [ "${TEST}" -eq 1 ]; then
 fi
 
 # =============
-# Compute
+# Compute (Ray)
 # =============
 export GPUS="0,1,2,3"
-# export GPUS="1,2,3,0"
-# export GPUS="2,3,0,1"
-# export GPUS="3,0,1,2"
-export MP=1
-export MAX_WORKERS_PER_GPU=10
+export MAX_WORKERS_PER_GPU=3
 
 # =============
 # Algorithm Specific

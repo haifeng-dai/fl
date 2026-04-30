@@ -11,6 +11,8 @@ datasets/
 test/
 results/
 logs/
+results_ray/
+logs_ray/
 figures/
 wandb/
 idea/

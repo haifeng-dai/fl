@@ -17,20 +17,13 @@
 
 1.  **MP 绝对禁令**: 严禁引入 `torch.multiprocessing`。若发现相关代码，必须立即重构为 Ray Task。
 2.  **结果隔离策略**: 必须确保 `BaseServer` 初始化时，`save_path` 和 `log_path` 分别指向 `results_ray/` 和 `logs_ray/`。
-3.  **显存配额管理**: `--ray_gpu` 的值必须根据模型复杂度动态调整。ResNet18 级模型严禁设为 `>0.5`（防止并发冲突）。
+3.  **Ray 显存管理**: 必须通过 `--max_workers_per_gpu` 控制并行度（框架会自动计算 1/n 的显存比例）。建议：ResNet18 设为 2，CNN 设为 3 或 4。
 4.  **模型状态导出**: 在 `client_worker` 返回前，必须执行 `{k: v.cpu().detach().clone() for k, v in state.items()}`，这是防止 Ray 对象存储出现悬空引用的关键。
+5.  **代码风格规范**: 必须严格遵守 **PEP 8** 标准。所有 `import` 语句必须置于文件顶部，严禁在函数或异常处理块内进行非必要的局部导入。
+6.  **沟通与文档语言**: 所有输出、计划、说明以及与用户的沟通必须统一使用 **中文**。
 
 ## 3. 性能陷阱与优化 (Pitfalls & Optimization)
 
 *   **ANCData 幽灵**: 在此分支下若出现 `ancdata` 错误，说明有地方误用了原生多进程通信。
 *   **Serialization Error**: 传递给 `remote` 函数的参数必须是可序列化的。避免直接传递 `torch.device` 对象，应传递字符串。
 *   **GPU 预热**: 第一轮训练由于 Ray 的启动开销会显著变慢，属于正常现象，性能评估应从第二轮开始。
-
-## 4. 目录权限与隔离
-
-*   **ReadOnly**: `results/` 和 `logs/` 对此分支应视为“只读”或“遗留数据”。
-*   **WriteOnly**: 本分支产生的任何持久化数据必须进入 `results_ray/`。
-
----
-**配置版本**: v2.0 (Ray-Integrated)
-**状态**: 生产级
