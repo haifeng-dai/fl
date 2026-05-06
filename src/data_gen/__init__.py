@@ -138,7 +138,11 @@ def pathological_partition(
     )
 
 
-def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
+def prepare_data(args):
+    dataset_name = args.dataset
+    partition_method = args.partition
+    num_clients = args.num_clients
+
     raw_dir = "./datasets/raw"
     raw_path = os.path.join(raw_dir, f"{dataset_name}_raw.pt")
 
@@ -151,11 +155,9 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     if partition_method == "iid":
         part_str = f"iid_n{num_clients}"
     elif partition_method == "dirichlet":
-        alpha = kwargs.get("alpha", 0.5)
-        part_str = f"dirichlet_n{num_clients}_a{alpha}"
+        part_str = f"dirichlet_n{num_clients}_a{args.alpha}"
     elif partition_method == "pathological":
-        n_classes = kwargs.get("n_classes", 2)
-        part_str = f"pathological_n{num_clients}_c{n_classes}"
+        part_str = f"pathological_n{num_clients}_c{args.n_class}"
     else:
         raise ValueError(f"未知分区方法: {partition_method}")
 
@@ -169,11 +171,9 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
     data = torch.load(raw_path, weights_only=False)
     X, Y = data["x"], data["y"]
 
-    test_ratio = kwargs.get("test_ratio", 0.2)
-
     # 1. 首先按类别划分训练和测试索引
     tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(
-        Y.numpy(), test_ratio
+        Y.numpy(), args.test_ratio
     )
 
     # 2. 执行分区逻辑
@@ -182,14 +182,12 @@ def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
             tr_idx_by_cls, te_idx_by_cls, num_clients
         )
     elif partition_method == "dirichlet":
-        alpha = kwargs.get("alpha", 0.5)
         cli_tr_idx, cli_te_idx = dirichlet_partition(
-            tr_idx_by_cls, te_idx_by_cls, num_clients, alpha
+            tr_idx_by_cls, te_idx_by_cls, num_clients, args.alpha
         )
     elif partition_method == "pathological":
-        n_classes = kwargs.get("n_classes", 2)
         cli_tr_idx, cli_te_idx = pathological_partition(
-            tr_idx_by_cls, te_idx_by_cls, num_clients, n_classes
+            tr_idx_by_cls, te_idx_by_cls, num_clients, args.n_class
         )
     else:
         raise ValueError(f"未知分区方法: {partition_method}")

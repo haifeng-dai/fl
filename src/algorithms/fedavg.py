@@ -1,0 +1,131 @@
+import os
+import time
+
+import numpy as np
+import torch
+
+from .utils import (
+    BaseServer,
+    ce_loss,
+    get_model,
+)
+
+
+def get_path(args):
+    args.file_name = f"{args.name_pre}"
+    return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+def client_worker(params):
+    """
+    标准的 FedAvg 本地训练流程。
+    """
+    (
+        _,
+        device,
+        model_state,
+        train_set,
+        model_name,
+        dataset_name,
+        lr,
+        batch_size,
+        epochs,
+        feature_dim,
+    ) = params
+
+    # 1. 初始化模型并加载最新的全局模型参数
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model.load_state_dict(model_state)
+
+    # 2. 设置优化器与数据加载器
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+
+    # 3. 本地模型多轮次 (Epochs) 训练
+    total_loss = 0.0
+    num_batches = 0
+    for _ in range(epochs):
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            logits = model(x)
+            loss = ce_loss(logits, y)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+            num_batches += 1
+    avg_loss = total_loss / num_batches
+
+    # 4. 整理返回结果（将模型状态移至 CPU 以节省 GPU 显存容量消耗）
+    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    return [avg_loss, model_state]
+
+
+class Server(BaseServer):
+    def __init__(self, args):
+        # FedAvg 是传统的全局联邦学习方法，因此 pfl=False
+        super().__init__(False, args)
+
+    def fit(self):
+        """运行 FedAvg 训练流程"""
+        num_join_clients = int(self.num_clients * self.args.join_ratio)
+        num_join_clients = max(1, num_join_clients)
+
+        for r in range(self.rounds):
+            t0 = time.time()
+            print(f"\n--- FedAvg Round {r + 1}/{self.rounds} ---")
+
+            selected_clients = np.random.choice(
+                self.num_clients, num_join_clients, replace=False
+            )
+            print(f"Selected clients: {selected_clients}")
+
+            p = [
+                [
+                    i,
+                    self.client_gpu[i],
+                    self.model.state_dict(),
+                    self.train_sets[i],
+                    self.args.model,
+                    self.args.dataset,
+                    self.args.lr,
+                    self.args.batch_size,
+                    self.args.epochs,
+                    self.args.feature_dim,
+                ]
+                for i in selected_clients
+            ]
+            results = self.run_clients(client_worker, p)
+
+            # 汇集各客户端的回传结果，计算总损失与聚合权重分布
+            total_loss = 0.0
+            selected_states = []
+            current_weights = []
+            for i in selected_clients:
+                client_loss, client_state = results[i]
+                total_loss += client_loss
+                selected_states.append(client_state)
+                current_weights.append(self.weights[i])
+            self.loss.append(total_loss / num_join_clients)
+            sum_weights = sum(current_weights)
+            norm_weights = [w / sum_weights for w in current_weights]
+
+            # 根据客户端的数据量权重，对上传的模型参数进行加权平均汇聚
+            self.aggregate(selected_states, weights=norm_weights)
+            self.evaluate()
+            print(
+                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+            )
+            print(f"Round finished in {time.time() - t0:.2f} seconds")
+
+    def save(self):
+        """保存全局模型的实验结果与最终参数"""
+        f = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "state_dict": {
+                "global": self.model.state_dict(),
+            },
+        }
+        self.deal_save(f)

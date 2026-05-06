@@ -106,28 +106,30 @@ class ResultLoader:
             print(f"  [Warning] Folder not found: {folder_path}")
             return None
 
-        # 支持将 times 也作为基础文件名的一部分
+        # 构造基础文件名 (Ray 分支强制使用简化命名)
         base_name = f"{kwargs.get('epochs', 10)}_{kwargs.get('batch_size', 64)}_{kwargs.get('lr', 0.01)}"
 
-        suffix_gen = self.algo_patterns.get(algo)
-        if suffix_gen:
-            try: base_name += suffix_gen(kwargs)
-            except KeyError as e:
-                print(f"  [Error] Missing parameter {e} for algo {algo}")
-                return None
+        # 仅在非 Ray 目录下（即旧框架 results/）尝试添加算法特定的后缀
+        if "results_ray" not in self.base_dir:
+            suffix_gen = self.algo_patterns.get(algo)
+            if suffix_gen:
+                base_name += suffix_gen(kwargs)
 
-        if specific_run is not None:
-            # 如果指定了 specific_run，先检查文件是否存在，避免 torch.load 报错
-            file_path = os.path.join(folder_path, f"{base_name}_{specific_run}.pt")
-            if not os.path.exists(file_path):
-                return None
-            run_indices = [specific_run]
-        else:
-            run_indices = []
-            idx = 0
-            while os.path.exists(os.path.join(folder_path, f"{base_name}_{idx}.pt")):
-                run_indices.append(idx)
-                idx += 1
+        # Try to find run indices
+        def get_indices(b_name):
+            if specific_run is not None:
+                if os.path.exists(os.path.join(folder_path, f"{b_name}_{specific_run}.pt")):
+                    return [specific_run]
+                return []
+            else:
+                indices = []
+                idx = 0
+                while os.path.exists(os.path.join(folder_path, f"{b_name}_{idx}.pt")):
+                    indices.append(idx)
+                    idx += 1
+                return indices
+
+        run_indices = get_indices(base_name)
 
         if not run_indices:
             return None

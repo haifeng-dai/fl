@@ -2,199 +2,198 @@
 
 # 基础算法
 fedavg:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
 
 fedprox:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
-  mu: 0.01
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
+    mu: 0.01
 
 scaffold:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
-  global_lr: 1.0
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
+    global_lr: 1.0
 
 feddyn:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
-  alpha_coef: 0.1
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
+    alpha_coef: 0.1
 
 fedpln:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
-  lambda_: 10.0
-  epoch_pln: 10
-  lr_pln: 0.01
-  batch_size_pln: 64
-  depth_pln: 1
-  width_pln: 512
-  mode: "normal"
-  fixed_proto: 0
-  init_emb: 0
-  har: 0
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
+    lambda_: 10.0
+    epoch_pln: 10
+    lr_pln: 0.01
+    batch_size_pln: 64
+    depth_pln: 1
+    width_pln: 512
+    mode: "normal"
+    fixed_proto: 0
+    init_emb: 0
+    har: 0
 
 fedproc:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
 
 fedfm:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
-  mu: 1.0
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
+    mu: 1.0
 
 moon:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
-  mu: 0.01
-  tau: 0.5
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
+    mu: 0.01
+    tau: 0.5
 
 fedlsa:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
-  lambda_com: 0.1
-  alpha_sep: 0.1
-  server_epochs: 10
-  server_lr: 0.01
-  tau: 0.1
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
+    lambda_com: 0.1
+    alpha_sep: 0.1
+    server_epochs: 10
+    server_lr: 0.01
+    tau: 0.1
 
 # 个性化算法
 fedper:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: false
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: false
 
 fedrep:
-  do_global_eval: false
-  do_local_eval: true
-  do_global_on_local_eval: false
-  epochs_head: 5
+    do_global_eval: false
+    do_local_eval: true
+    do_global_on_local_eval: false
+    epochs_head: 5
 
 fedproto:
-  do_global_eval: false
-  do_local_eval: true
-  do_global_on_local_eval: false
-  mu: 1.0
+    do_global_eval: false
+    do_local_eval: true
+    do_global_on_local_eval: false
+    mu: 1.0
 
 fedala:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: true
-  eta: 1.0
-  rand_percent: 20
-  layer_idx: 1
-  ala_threshold: 0.1
-  num_pre_loss: 10
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: true
+    eta: 1.0
+    rand_percent: 20
+    layer_idx: 1
+    ala_threshold: 0.1
+    num_pre_loss: 10
 
 fedtgp:
-  do_global_eval: false
-  do_local_eval: true
-  do_global_on_local_eval: false
-  lamda_: 10.0
-  server_epochs: 10
-  server_lr: 0.01
-  margin_threshold: 1.0
+    do_global_eval: false
+    do_local_eval: true
+    do_global_on_local_eval: false
+    lamda_: 10.0
+    server_epochs: 10
+    server_lr: 0.01
+    margin_threshold: 1.0
 
 feddpc:
-  do_global_eval: false
-  do_local_eval: true
-  do_global_on_local_eval: false
-  lamda_: 100.0
-  lambda_p: 1.0
-  lambda_acl: 0.01
-  head_epochs: 10
-  body_epochs: 1
-  lr_head: 0.01
-  lr_body: 0.01
-  margin_threshold: 100.0
-  server_epochs: 100
-  server_lr: 0.01
+    do_global_eval: false
+    do_local_eval: true
+    do_global_on_local_eval: false
+    lamda_: 100.0
+    lambda_p: 1.0
+    lambda_acl: 0.01
+    head_epochs: 10
+    body_epochs: 1
+    lr_head: 0.01
+    lr_body: 0.01
+    server_epochs: 100
+    server_lr: 0.01
 
 lgfedavg:
-  do_global_eval: false
-  do_local_eval: true
-  do_global_on_local_eval: false
+    do_global_eval: false
+    do_local_eval: true
+    do_global_on_local_eval: false
 
 fedkd:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: true
-  lr_g: 0.01
-  energy: 0.9
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: true
+    lr_g: 0.01
+    energy: 0.9
 
 fml:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: true
-  alpha_fml: 1.0
-  beta_fml: 1.0
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: true
+    alpha_fml: 1.0
+    beta_fml: 1.0
 
 proxyfl:
-  do_global_eval: false
-  do_local_eval: true
-  do_global_on_local_eval: true
-  mu: 1.0
+    do_global_eval: false
+    do_local_eval: true
+    do_global_on_local_eval: true
+    mu: 1.0
 
 fedsa:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: true
-  alpha_sa: 0.9999
-  lambda_r: 0.1
-  lambda_mcl: 0.01
-  lambda_cc: 1.0
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: true
+    alpha_sa: 0.9999
+    lambda_r: 0.1
+    lambda_mcl: 0.01
+    lambda_cc: 1.0
 
 local:
-  do_global_eval: false
-  do_local_eval: true
-  do_global_on_local_eval: false
+    do_global_eval: false
+    do_local_eval: true
+    do_global_on_local_eval: false
 
 # 去中心化算法
 l2c:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: true
-  val_ratio: 0.1
-  lr_alpha: 0.1
-  threshold: 0.0
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: true
+    val_ratio: 0.1
+    lr_alpha: 0.1
+    threshold: 0.0
 
 dispfl:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: true
-  dense_ratio: 0.1
-  anneal_factor: 1.0
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: true
+    dense_ratio: 0.1
+    anneal_factor: 1.0
 
 pearfl:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: true
-  lamda: 1.0
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: true
+    lamda: 1.0
 
 dfedavgm:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: true
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: true
 
 dfedpgp:
-  do_global_eval: true
-  do_local_eval: true
-  do_global_on_local_eval: true
-  local_v_epochs: 1
-  lr_v: 0.01
-  momentum_v: 0.0
-  weight_decay_v: 0.0
+    do_global_eval: true
+    do_local_eval: true
+    do_global_on_local_eval: true
+    local_v_epochs: 1
+    lr_v: 0.01
+    momentum_v: 0.0
+    weight_decay_v: 0.0
 
 fedtest:
-  do_global_eval: true
-  do_local_eval: false
-  do_global_on_local_eval: true
+    do_global_eval: true
+    do_local_eval: false
+    do_global_on_local_eval: true
