@@ -27,33 +27,13 @@ def get_path(args):
         adj_suffix += f"_{args.m_scale_free}"
 
     # 将算法的关键超参加入文件名，便于区分实验
-    args.file_name = f"{args.name_pre}_{adj_suffix}_{args.epochs}_{args.lamda}"
+    args.file_name = f"{args.common_name}_{adj_suffix}_{args.lamda}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
 def client_worker(params):
     """
     PearFL 客户端工作函数：本地训练包含原型对齐损失，返回模型参数和本地原型
-
-    参数结构：
-        params: [
-            client_id,
-            device,
-            model_state (dict),                # 初始模型参数
-            train_set,
-            model_name,
-            dataset_name,
-            test_set,
-            num_classes,
-            feature_dim,
-            batch_size,
-            local_epochs,
-            lr,
-            momentum,
-            weight_decay,
-            lamda,                            # 原型正则化权重
-            personalized_protos (torch.Tensor or None),  # 共识原型
-        ]
     """
     (
         _,
@@ -62,7 +42,6 @@ def client_worker(params):
         train_set,
         model_name,
         dataset_name,
-        test_set,
         num_classes,
         feature_dim,
         batch_size,
@@ -94,43 +73,42 @@ def client_worker(params):
         weight_decay=weight_decay,
     )
 
-    # 5. 本地训练循环
+    # 5. 本地训练：仅执行 1 个 Epoch（由服务端控制多跳逻辑）
     total_loss = 0.0
     correct = 0
     total = 0
     num_batches = 0
 
-    for _ in range(local_epochs):
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            optimizer.zero_grad()
+    # 强制执行 1 个 epoch 以适配 Algorithm 3 的 Inter-Epoch 交换
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        optimizer.zero_grad()
 
-            # 模型前向传播：分别提取特征和 logits
-            features = model.extractor(x)
-            logits = model.classifier(features)
+        # 模型前向传播
+        features = model.extractor(x)
+        logits = model.classifier(features)
 
-            # 计算交叉熵损失
-            l_ce = ce_loss(logits, y)
+        # 交叉熵损失
+        l_ce = ce_loss(logits, y)
 
-            # 计算原型正则化损失：迫使特征靠近聚合后的个性化原型
-            l_reg = torch.tensor(0.0, device=device)
-            if personalized_protos is not None and personalized_protos.abs().sum() > 0:
-                target_protos = personalized_protos[y]
-                l_reg = mse_loss(features, target_protos)
+        # 原型正则化损失
+        l_reg = torch.tensor(0.0, device=device)
+        if personalized_protos is not None and personalized_protos.abs().sum() > 0:
+            target_protos = personalized_protos[y]
+            l_reg = mse_loss(features, target_protos)
 
-            # 总损失 = 交叉熵 + lamda * 原型损失
-            loss = l_ce + lamda * l_reg
-            loss.backward()
-            optimizer.step()
+        # 总损失
+        loss = l_ce + lamda * l_reg
+        loss.backward()
+        optimizer.step()
 
-            total_loss += loss.item()
-            _, predicted = torch.max(logits.data, 1)
-            total += y.size(0)
-            correct += (predicted == y).sum().item()
-            num_batches += 1
+        total_loss += loss.item()
+        _, predicted = torch.max(logits.data, 1)
+        total += y.size(0)
+        correct += (predicted == y).sum().item()
+        num_batches += 1
 
     # 6. 提取本地经验原型及其样本统计
-    # 使用 Subset 确保兼容性
     local_protos, local_counts = extract_prototypes(
         model,
         loader,
@@ -140,24 +118,14 @@ def client_worker(params):
         return_counts=True,
     )
 
-    # 将本地原型转换为张量格式 [num_classes, feature_dim]
-    protos_tensor = torch.zeros((num_classes, feature_dim), device=device)
-    counts_tensor = torch.zeros(num_classes, device=device)
-
-    for class_id, proto in local_protos.items():
-        protos_tensor[class_id] = proto.to(device)
-
-    for class_id, count in local_counts.items():
-        counts_tensor[class_id] = float(count)
-
-    return [
-        total_loss / num_batches,  # avg_loss
-        {
+    return {
+        "loss": total_loss / num_batches,  # avg_loss
+        "state": {
             k: v.cpu().detach().clone() for k, v in model.state_dict().items()
         },  # model_state
-        protos_tensor.cpu(),  # local_protos [num_classes, feature_dim]
-        counts_tensor.cpu(),  # local_counts [num_classes]
-    ]
+        "protos": local_protos,  # local_protos [num_classes, feature_dim]
+        "counts": local_counts,  # local_counts [num_classes]
+    }
 
 
 class Server(BaseServer):
@@ -175,7 +143,7 @@ class Server(BaseServer):
 
         # 1. 通信矩阵初始化（基于 Sinkhorn-Knopp 的双随机矩阵）
         A = generate_adjacency_matrix(args)
-        self.W = sinkhorn_knopp(A, args.epsilon).to(self.device)
+        self.W = sinkhorn_knopp(A).to(self.device)
 
         # 2. 状态池初始化
         # local_protos_pool: 存储各节点的原始本地原型 [num_clients, num_classes, feature_dim]
@@ -195,7 +163,7 @@ class Server(BaseServer):
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
     def fit(self):
-        """主训练循环"""
+        """主训练循环：实现 Algorithm 3 的 Inter-Epoch Prototype Exchange"""
         num_join_clients = int(self.num_clients * self.args.join_ratio)
         num_join_clients = max(1, num_join_clients)
 
@@ -209,87 +177,102 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # 2. 为每个选中的客户端准备参数
-            def get_client_param(i):
-                return [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.test_set[i],
-                    self.num_class,
-                    self.args.feature_dim,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.lr,
-                    self.args.momentum,
-                    self.args.weight_decay,
-                    self.args.lamda,
-                    self.personalized_protos[i].cpu(),
-                ]
+            # 2. 嵌套循环：执行 E 个本地 Epoch，并在每个 Epoch 结束后交换原型
+            round_loss = 0.0
+            for e in range(self.args.epochs):
+                # 2.1 为每个选中的客户端准备参数
+                def get_client_param(i):
+                    return [
+                        i,
+                        self.client_gpu[i],
+                        self.clients_state[i],
+                        self.train_sets[i],
+                        self.args.model,
+                        self.args.dataset,
+                        self.num_class,
+                        self.args.feature_dim,
+                        self.args.batch_size,
+                        1,  # 强制 local_epochs = 1
+                        self.args.lr,
+                        self.args.momentum,
+                        self.args.weight_decay,
+                        self.args.lamda,
+                        self.personalized_protos[i].cpu(),
+                    ]
 
-            params = [get_client_param(i) for i in selected_clients]
+                params = [get_client_param(i) for i in selected_clients]
 
-            # 3. 启动客户端并行训练
-            results = self.run_clients(client_worker, params)
+                # 2.2 启动 Ray 并行训练 (1 Epoch)
+                results = self.run_clients(client_worker, params)
 
-            # 4. 收集客户端的更新
-            total_loss = 0.0
-            for client_idx in selected_clients:
-                avg_loss, model_state, protos, counts = results[client_idx]
-                total_loss += avg_loss
-                self.clients_state[client_idx] = model_state
-                self.local_protos_pool[client_idx] = protos.to(self.device)
-                self.local_counts_pool[client_idx] = counts.to(self.device)
+                # 2.3 回收结果：更新模型状态、原型和样本计数
+                epoch_loss = 0.0
+                for cid, res in results.items():
+                    epoch_loss += res["loss"]
+                    self.clients_state[cid] = res["state"]
+                    self.local_protos_pool[cid] = res["protos"].to(self.device)
+                    self.local_counts_pool[cid] = res["counts"].to(self.device)
+                
+                epoch_loss /= len(selected_clients)
+                if e == self.args.epochs - 1: # 记录最后一个 epoch 的 loss 作为 round loss
+                    round_loss = epoch_loss
 
-            self.loss.append(total_loss / len(selected_clients))
+                # 2.4 执行原型交换与聚合 (Algorithm 2)
+                self.aggregate_prototypes()
 
-            # 5. 执行去中心化聚合
-            self.aggregate()
+            self.loss.append(round_loss)
 
-            # 6. 评估模型
+            # 3. 执行模型聚合（可选，论文主要强调原型，但 FL 框架通常保留模型同步）
+            self.aggregate_models()
+
+            # 4. 评估模型
             self.evaluate()
 
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def aggregate(self):
+    def aggregate_prototypes(self):
         """
-        全向量化实现原型聚合（Algorithm 2）：基于双随机权重的分布式原型聚合
-
-        聚合步骤：
-        1. 采集本轮活跃节点的本地原型和计数
-        2. 构造组合权重：combine_weight[i,k,c] = W[i,k] * count[k,c]
-        3. 执行加权聚合：new_proto[i,c] = sum_k(combine_weight[i,k,c] * proto[k,c]) / sum_k(combine_weight[i,k,c])
+        全向量化实现 Algorithm 2：基于样本量权重的分布式原型聚合
+        根据用户反馈：原型聚合仅使用对应类的样本数，不使用 W 的权重。
         """
-        # 1. 构造组合权重（按照 Algorithm 2）
-        # W: [num_clients, num_clients] - 双随机矩阵
-        # local_counts_pool: [num_clients, num_classes] - 各客户端各类别的样本数
-        # combine_weight[i,j,c] = W[i,j] * count[j,c]
-        combine_weight = self.W.unsqueeze(-1) * self.local_counts_pool.unsqueeze(
-            0
-        )  # [num_clients, num_clients, num_classes]
+        # 1. 构造组合权重：mask(邻居关系) * count(样本量)
+        # mask[i,j] 表示 j 是否为 i 的邻居
+        mask = (self.W > 0).float()
+        combine_weight = mask.unsqueeze(-1) * self.local_counts_pool.unsqueeze(0)
 
-        # 2. 计算归一化分母
-        denom = combine_weight.sum(dim=1, keepdim=True)  # [num_clients, 1, num_classes]
+        # 2. 计算归一化分母（每个类别在每个节点的邻域内的总样本数）
+        denom = combine_weight.sum(dim=1, keepdim=True)
         denom_safe = torch.where(denom > 0, denom, torch.ones_like(denom))
 
-        # 3. 矩阵运算实现加权聚合
-        # new_proto[i,c,d] = sum_j(combine_weight[i,j,c] * proto[j,c,d]) / sum_j(combine_weight[i,j,c])
-        # 使用 einsum：(combine_weight / denom) @ protos
+        # 3. 执行加权聚合 (Weighted Average)
         new_protos = torch.einsum(
             "ijc,jcd->icd",
             combine_weight / denom_safe,
             self.local_protos_pool,
-        )  # [num_clients, num_classes, feature_dim]
+        )
 
         self.personalized_protos = new_protos
 
-        # 4. 更新虚拟全局模型供日志记录
-        states = [self.clients_state[cid] for cid in range(self.num_clients)]
-        avg_state = self.weighted_aggregate(states, self.weights)
+    def aggregate_models(self):
+        """
+        模型参数聚合：使用双随机矩阵 W 进行去中心化聚合
+        """
+        new_clients_state = []
+        for i in range(self.num_clients):
+            # 找到节点 i 的所有邻居索引及其在 W 中的权重
+            neighbor_indices = torch.where(self.W[i] > 0)[0].tolist()
+            neighbor_weights = [self.W[i, j].item() for j in neighbor_indices]
+            neighbor_states = [self.clients_state[j] for j in neighbor_indices]
+
+            # 执行去中心化聚合更新本地模型状态
+            new_state = self.weighted_aggregate(neighbor_states, neighbor_weights)
+            new_clients_state.append(new_state)
+
+        self.clients_state = new_clients_state
+
+        # 更新全局 model 供 evaluate() 全局统计使用
+        avg_state = self.weighted_aggregate(self.clients_state, self.weights)
         self.model.load_state_dict(avg_state)
 
     def weighted_aggregate(self, states, weights):

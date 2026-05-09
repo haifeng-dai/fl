@@ -1,3 +1,4 @@
+import math
 import os
 import time
 
@@ -25,7 +26,7 @@ def get_path(args):
 
     # 将算法的关键超参加入文件名
     args.file_name = (
-        f"{args.name_pre}_{adj_suffix}_{args.epochs}"
+        f"{args.common_name}_{adj_suffix}"
         f"_{args.dense_ratio}_{args.anneal_factor}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
@@ -96,12 +97,12 @@ def client_worker(params):
             loss = ce_loss(output, y)
             loss.backward()
 
-            # DisPFL 核心：梯度掩码（只更新被掩码为 1 的位置）
+            optimizer.step()
+
+            # DisPFL 核心：参数掩码（确保未被掩码的参数保持为 0）
             for name, param in model.named_parameters():
                 if name in masks:
-                    param.grad.mul_(masks[name].to(device))
-
-            optimizer.step()
+                    param.data.mul_(masks[name].to(device))
 
             total_loss += loss.item()
             _, predicted = torch.max(output.data, 1)
@@ -135,44 +136,41 @@ def client_worker(params):
             weights = param.data
             grads = param.grad.data
 
-            # A. Magnitude Pruning：按权重绝对值裁剪
+            # A. Magnitude Pruning：按权重绝对值裁剪最小的权重
             num_active = int(torch.sum(mask).item())
-            n_update = int(num_active * alpha_t)
+            n_remove = math.ceil(alpha_t.item() * num_active)
 
-            if n_update > 0:
-                active_weights = weights[mask > 0].abs()
-                # 计算阈值：保留绝对值最大的 (num_active - n_update) 个权重
-                k_val = max(1, num_active - n_update)
-                threshold = torch.topk(active_weights, k_val, largest=True).values.min()
-                mask = (weights.abs() >= threshold).float()
+            if n_remove > 0 and num_active > 0:
+                # 仅在当前活跃的权重中寻找最小值
+                temp_weights = torch.where(
+                    mask > 0, weights.abs(), torch.tensor(float("inf")).to(device)
+                )
+                _, idx = torch.sort(temp_weights.view(-1))
+                mask.view(-1)[idx[:n_remove]] = 0
 
             # B. Gradient Regrowing：按梯度强度恢复权重
-            # 保持总密度不变：重生长的数量等于剪掉的数量 (n_update)
-            if n_update > 0:
+            # 保持总密度不变：重生长的数量等于剪掉的数量 (n_remove)
+            if n_remove > 0:
                 # 仅在当前掩码为 0 的位置寻找梯度最大的权重恢复
                 inactive_mask = (mask == 0).float()
-                inactive_grads = (grads * inactive_mask).abs()
-
-                # 确定恢复阈值
                 num_available = int(torch.sum(inactive_mask).item())
-                actual_regrow = min(n_update, num_available)
+                actual_regrow = min(n_remove, num_available)
+
                 if actual_regrow > 0:
-                    regrow_threshold = torch.topk(
-                        inactive_grads.view(-1), actual_regrow, largest=True
-                    ).values.min()
-                    regrow_mask = (inactive_grads >= regrow_threshold).float()
-                    mask = mask + regrow_mask
+                    inactive_grads = (grads * inactive_mask).abs()
+                    _, idx = torch.sort(inactive_grads.view(-1), descending=True)
+                    mask.view(-1)[idx[:actual_regrow]] = 1
 
             new_masks[name] = mask.cpu()
 
-    return [
-        total_loss / num_batches,  # avg_loss
-        {
+    return {
+        "loss": total_loss / num_batches,  # avg_loss
+        "state": {
             k: v.cpu().detach().clone() for k, v in model.state_dict().items()
         },  # model_state
-        new_masks,  # updated_masks
-        correct / total if total > 0 else 0.0,  # accuracy
-    ]
+        "masks": new_masks,  # updated_masks
+        "acc": correct / total if total > 0 else 0.0,  # accuracy
+    }
 
 
 class Server(BaseServer):
@@ -192,12 +190,15 @@ class Server(BaseServer):
         # 1. 生成拓扑结构（generate_adjacency_matrix 已内置自环）
         self.A = generate_adjacency_matrix(args).to(self.device).float()
 
-        # 2. 初始化稀疏掩码
+        # 2. 初始化稀疏掩码 (使用 ERK 策略)
         self.dense_ratio = args.dense_ratio
         initial_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
 
+        # 计算每一层的 ERK 稀疏度
+        sparsities = self._calculate_erk_sparsities(initial_state, self.dense_ratio)
+
         self.client_masks = {
-            cid: self._init_masks(initial_state) for cid in range(args.num_clients)
+            cid: self._init_masks(initial_state, sparsities) for cid in range(args.num_clients)
         }
 
         # 3. 严格执行初始掩码：直接将未被掩码的参数置为 0
@@ -205,13 +206,74 @@ class Server(BaseServer):
             for k, mask in self.client_masks[cid].items():
                 self.clients_state[cid][k] = self.clients_state[cid][k].mul_(mask)
 
-    def _init_masks(self, states):
-        """随机初始化密度为 dense_ratio 的掩码"""
-        masks = {}
+    def _calculate_erk_sparsities(self, states, density):
+        """
+        计算 Erdos-Renyi Kernel (ERK) 稀疏度分布
+        公式: P_l = epsilon * (n_in + n_out) / (n_in * n_out)
+        """
+        raw_probabilities = {}
+        total_params = 0
         for k, v in states.items():
             if "weight" in k or "bias" in k:
-                mask = torch.rand(v.shape) < self.dense_ratio
-                masks[k] = mask.float()
+                n_param = v.numel()
+                total_params += n_param
+                # 计算 ERK 特征值: (n_in + n_out) / (n_in * n_out)
+                # 对于 4D 卷积 [out, in, h, w]，n_in = in*h*w, n_out = out
+                if len(v.shape) == 4:
+                    n_out, n_in_h_w = v.shape[0], np.prod(v.shape[1:])
+                    raw_probabilities[k] = (n_in_h_w + n_out) / (n_in_h_w * n_out)
+                elif len(v.shape) == 2:
+                    n_out, n_in = v.shape
+                    raw_probabilities[k] = (n_in + n_out) / (n_in * n_out)
+                else:
+                    raw_probabilities[k] = 1.0 / n_param
+
+        # 迭代寻找 epsilon 使得总密度符合目标
+        epsilon = 0.0
+        is_epsilon_valid = False
+        dense_layers = set()
+
+        while not is_epsilon_valid:
+            divisor = 0
+            rhs = total_params * density
+            for k, prob in raw_probabilities.items():
+                if k in dense_layers:
+                    rhs -= states[k].numel()
+                else:
+                    divisor += prob * states[k].numel()
+
+            epsilon = rhs / divisor
+            is_epsilon_valid = True
+            for k, prob in raw_probabilities.items():
+                if k not in dense_layers and prob * epsilon > 1.0:
+                    dense_layers.add(k)
+                    is_epsilon_valid = False
+                    break
+
+        # 最终计算各层稀疏度 (1 - 密度)
+        sparsities = {}
+        for k in states.keys():
+            if k in raw_probabilities:
+                prob = 1.0 if k in dense_layers else raw_probabilities[k] * epsilon
+                sparsities[k] = 1.0 - prob
+            else:
+                sparsities[k] = 0.0 # BN层等不稀疏
+        return sparsities
+
+    def _init_masks(self, states, sparsities):
+        """根据分层稀疏度初始化掩码"""
+        masks = {}
+        for k, v in states.items():
+            if k in sparsities:
+                s = sparsities[k]
+                if s <= 0:
+                    masks[k] = torch.ones_like(v)
+                elif s >= 1:
+                    masks[k] = torch.zeros_like(v)
+                else:
+                    # 随机生成掩码
+                    mask = torch.rand(v.shape) > s
+                    masks[k] = mask.float()
         return masks
 
     def fit(self):
@@ -255,11 +317,10 @@ class Server(BaseServer):
 
             # 4. 收集客户端的更新
             total_loss = 0.0
-            for client_idx in selected_clients:
-                avg_loss, model_state, masks, _ = results[client_idx]
-                total_loss += avg_loss
-                self.clients_state[client_idx] = model_state
-                self.client_masks[client_idx] = masks
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                self.clients_state[cid] = res["state"]
+                self.client_masks[cid] = res["masks"]
 
             self.loss.append(total_loss / len(selected_clients))
 

@@ -18,7 +18,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.lamda_}_{args.head_epochs}_{args.body_epochs}_{args.lr_head}_{args.lr_body}_{args.server_epochs}_{args.server_lr}_{args.lambda_p}_{args.lambda_acl}"
+    args.file_name = f"{args.common_name}_{args.lamda_}_{args.head_epochs}_{args.body_epochs}_{args.lr_head}_{args.lr_body}_{args.server_epochs}_{args.server_lr}_{args.lambda_p}_{args.lambda_acl}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -175,7 +175,12 @@ def client_worker(params):
     local_protos_avg = extract_prototypes(model, loader, num_class, feature_dim, device)
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    return [avg_loss_ce, avg_loss_proto, model_state, local_protos_avg]
+    return {
+        "loss": avg_loss_ce,
+        "loss_proto": avg_loss_proto,
+        "state": model_state,
+        "protos": local_protos_avg,
+    }
 
 
 class Server(BaseServer):
@@ -241,13 +246,12 @@ class Server(BaseServer):
             total_loss_ce = 0.0
             total_loss_proto = 0.0
             selected_protos = []
-            for i in selected_clients:
-                l_ce, l_p, client_state, client_proto = results[i]
-                total_loss_ce += l_ce
-                total_loss_proto += l_p
+            for cid, res in results.items():
+                total_loss_ce += res["loss"]
+                total_loss_proto += res["loss_proto"]
                 # 仅更新本地状态映射，不进行任何全局聚合
-                self.clients_state[i] = client_state
-                selected_protos.append(client_proto)
+                self.clients_state[cid] = res["state"]
+                selected_protos.append(res["protos"])
 
             self.loss.append(total_loss_ce / num_join_clients)
             self.loss_proto.append(total_loss_proto / num_join_clients)
@@ -298,13 +302,14 @@ class Server(BaseServer):
         # 预先生成类别索引张量，避免循环中重复转换
         all_class_ids = torch.arange(self.num_class, device=self.device)
 
-        for epoch in range(self.args.server_epochs):
+        epoch_loss = 0.0
+        epoch_loss_mse = 0.0
+        epoch_loss_ortho = 0.0
+        num_batches = 0
+        for _ in range(self.args.server_epochs):
             proto_loader = DataLoader(
                 uploaded_protos, batch_size=self.args.batch_size, shuffle=True
             )
-            epoch_loss = 0.0
-            epoch_loss_mse = 0.0
-            epoch_loss_ortho = 0.0
             for proto_batch, labels_batch in proto_loader:
                 proto_batch = proto_batch.to(self.device)
                 labels_batch = labels_batch.to(self.device, dtype=torch.long)
@@ -320,19 +325,18 @@ class Server(BaseServer):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                num_batches += 1
                 epoch_loss += loss.item()
                 epoch_loss_mse += loss_mse.item()
                 epoch_loss_ortho += loss_ortho.item()
 
-            avg_loss = epoch_loss / len(proto_loader)
-            avg_loss_mse = epoch_loss_mse / len(proto_loader)
-            avg_loss_ortho = epoch_loss_ortho / len(proto_loader)
+        avg_loss = epoch_loss / num_batches
+        avg_loss_mse = epoch_loss_mse / num_batches
+        avg_loss_ortho = epoch_loss_ortho / num_batches
 
-            if (epoch + 1) % 20 == 0 or epoch == 0:
-                print(
-                    f"  PLN Epoch {epoch + 1}/{self.args.server_epochs}, "
-                    f"Loss: {avg_loss:.4f} (MSE: {avg_loss_mse:.4f}, Ortho: {avg_loss_ortho:.4f})"
-                )
+        print(
+            f"Loss: {avg_loss:.4f} (MSE: {avg_loss_mse:.4f}, Ortho: {avg_loss_ortho:.4f})"
+        )
 
         # 记录每轮最后一轮 PLN 优化的损失均值
         self.loss_pln.append(avg_loss)
@@ -341,8 +345,7 @@ class Server(BaseServer):
 
         self.pln.eval()
         with torch.no_grad():
-            # 彻底转向 Tensor 型原型：[C, d]
-            self.global_protos = self.pln(all_class_ids).detach()
+            self.global_protos = self.pln(all_class_ids).cpu().clone()
 
     def save(self):
         f = {

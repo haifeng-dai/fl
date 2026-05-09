@@ -30,6 +30,14 @@ class BaseServer:
         self.args = args
         self.rounds: int = args.rounds
 
+        # 自适应 Round 调整逻辑
+        if self.rounds == 0:
+            self.rounds = 200 if pfl else 1000
+            args.rounds = self.rounds
+            print(
+                f"-> Adaptive Rounds: detected {'PFL' if pfl else 'GFL'} algorithm, setting rounds={self.rounds}"
+            )
+
         self.num_clients: int = self.args.num_clients
         self.pfl = pfl
         self.acc: list[float] = []
@@ -137,7 +145,7 @@ class BaseServer:
     def deal_save(self, f):
         """将实验结果字典持久化到磁盘"""
         os.makedirs(self.args.save_path, exist_ok=True)
-        save_name = f"{self.args.name_pre}_{self.args.cur_time}.pt"
+        save_name = f"{self.args.file_name}_{self.args.cur_time}.pt"
         save_full_path = os.path.join(self.args.save_path, save_name)
         torch.save(f, save_full_path)
         print(f"\n-> Results saved to: {save_full_path}")

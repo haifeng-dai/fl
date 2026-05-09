@@ -14,7 +14,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.lambda_}_{args.epoch_pln}_{args.lr_pln}_{args.batch_size_pln}_{args.depth_pln}_{args.width_pln}_{args.mode}_{args.fixed_proto}_{args.init_emb}_{args.har}"
+    args.file_name = f"{args.common_name}_{args.lambda_}_{args.epoch_pln}_{args.lr_pln}_{args.batch_size_pln}_{args.depth_pln}_{args.width_pln}_{args.mode}_{args.fixed_proto}_{args.init_emb}_{args.har}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -175,7 +175,12 @@ def client_worker(params):
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     pln_state = {k: v.cpu().detach().clone() for k, v in pln.state_dict().items()}
-    return [avg_loss_m, avg_loss_p, model_state, pln_state]
+    return {
+        "loss": avg_loss_m,
+        "loss_proto": avg_loss_p,
+        "state": model_state,
+        "pln_state": pln_state,
+    }
 
 
 class Server(BaseServer):
@@ -241,13 +246,12 @@ class Server(BaseServer):
             selected_states = []
             selected_plns = []
             current_weights = []
-            for i in selected_clients:
-                client_loss_m, client_loss_p, client_state, client_pln = results[i]
-                total_loss_model += client_loss_m
-                total_loss_pln += client_loss_p
-                selected_states.append(client_state)
-                selected_plns.append(client_pln)
-                current_weights.append(self.weights[i])
+            for cid, res in results.items():
+                total_loss_model += res["loss"]
+                total_loss_pln += res["loss_proto"]
+                selected_states.append(res["state"])
+                selected_plns.append(res["pln_state"])
+                current_weights.append(self.weights[cid])
             self.loss.append(total_loss_model / num_join_clients)
             self.loss_p.append(total_loss_pln / num_join_clients)
             sum_weights = sum(current_weights)

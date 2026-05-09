@@ -32,8 +32,8 @@ def get_config():
         "-t", "--test", action="store_true", help="Enable test mode"
     )
 
-    # 允许接收任何未定义的参数作为覆盖项
-    args, unknown = base_parser.parse_known_args()
+    # 解析命令行参数
+    args = base_parser.parse_args()
 
     # 2. 加载 YAML 基础配置
     config_dict = load_yaml("configs/default.yaml")
@@ -112,8 +112,8 @@ def get_pre_name(args):
         fold_path += f"_{args.alpha}"
     elif args.partition == "pathological":
         fold_path += f"_{args.n_class}"
+    args.common_name = f"{args.epochs}_{args.batch_size}_{args.lr}"
     args.save_path = os.path.join("results_ray", fold_path)
     args.log_path = os.path.join("logs_ray", fold_path)
     os.makedirs(args.save_path, exist_ok=True)
     os.makedirs(args.log_path, exist_ok=True)
-    args.name_pre = f"{args.epochs}_{args.batch_size}_{args.lr}"

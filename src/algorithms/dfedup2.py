@@ -8,10 +8,10 @@ from torch.utils.data import DataLoader
 from .utils import (
     BaseServer,
     ce_loss,
-    cos_contrastive_loss,
     extract_prototypes,
     generate_adjacency_matrix,
     get_model,
+    mse_loss,
 )
 
 
@@ -24,7 +24,7 @@ def get_path(args):
     elif args.adj_type == "scale_free":
         adj_suffix += f"_{args.m_scale_free}"
 
-    args.file_name = f"{args.common_name}_{adj_suffix}_{args.mu}_{args.temp}"
+    args.file_name = f"{args.common_name}_{adj_suffix}_{args.mu}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -46,7 +46,6 @@ def client_worker(params):
         num_classes,
         consensus_P,
         mu,
-        temp,
     ) = params
 
     # 1. 初始化模型并加载状态
@@ -68,9 +67,10 @@ def client_worker(params):
             features = model.extractor(x)
             logits = model.classifier(features)
 
-            # 损失组合：交叉熵损失 + 原型对比损失
+            # 损失组合：交叉熵损失 + 原型 MSE 对齐损失
             l_ce = ce_loss(logits, y)
-            l_con = cos_contrastive_loss(features, consensus_P, y, temperature=temp)
+            target_protos = consensus_P[y]
+            l_con = mse_loss(features, target_protos)
             loss = l_ce + mu * l_con
 
             optimizer.zero_grad()
@@ -119,11 +119,13 @@ class Server(BaseServer):
 
         # 2. 初始化各客户端的 Push-Sum 状态缓存与共识原型
         self.S_cache = [
-            torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)
+            torch.zeros(self.num_class, args.feature_dim)
+            for _ in range(self.num_clients)
         ]
         self.W_cache = [torch.zeros(self.num_class, 1) for _ in range(self.num_clients)]
         self.consensus_P = [
-            torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)
+            torch.zeros(self.num_class, args.feature_dim)
+            for _ in range(self.num_clients)
         ]
 
     def fit(self):
@@ -155,7 +157,6 @@ class Server(BaseServer):
                     self.num_class,
                     self.consensus_P[i],
                     self.args.mu,
-                    self.args.temp,
                 )
 
             params = [get_client_param(i) for i in selected_clients]

@@ -23,13 +23,13 @@ def get_path(args):
     elif args.adj_type == "scale_free":
         adj_suffix += f"_{args.m_scale_free}"
 
-    args.file_name = f"{args.name_pre}_{adj_suffix}"
+    args.file_name = f"{args.common_name}_{adj_suffix}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
 def client_worker(params):
     """
-    标准的 FedAvg 本地训练流程。
+    标准的 FedAvg 本地训练流程，支持动量。
     """
     (
         _,
@@ -42,6 +42,7 @@ def client_worker(params):
         batch_size,
         epochs,
         feature_dim,
+        optimizer_state,  # 新增：接收动量状态
     ) = params
 
     # 1. 初始化模型并加载最新的全局模型参数
@@ -49,12 +50,16 @@ def client_worker(params):
     model.load_state_dict(model_state)
 
     # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+    if optimizer_state is not None:
+        optimizer.load_state_dict(optimizer_state)
+
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
     # 3. 本地模型多轮次 (Epochs) 训练
     total_loss = 0.0
     num_batches = 0
+    model.train()
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
@@ -68,9 +73,24 @@ def client_worker(params):
             num_batches += 1
     avg_loss = total_loss / num_batches
 
-    # 4. 整理返回结果（将模型状态移至 CPU 以节省 GPU 显存容量消耗）
+    # 4. 整理返回结果
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    return [avg_loss, model_state]
+    # 导出动量状态字典
+    new_optimizer_state = {
+        "state": {
+            k: {
+                mk: mv.cpu().detach().clone() if torch.is_tensor(mv) else mv
+                for mk, mv in v.items()
+            }
+            for k, v in optimizer.state_dict()["state"].items()
+        },
+        "param_groups": optimizer.state_dict()["param_groups"],
+    }
+    return {
+        "loss": avg_loss,
+        "state": model_state,
+        "opt_state": new_optimizer_state,
+    }
 
 
 class Server(BaseServer):
@@ -85,11 +105,11 @@ class Server(BaseServer):
         # 计算 Metropolis-Hastings (MH) 混合权重矩阵
         self.mh_weights = compute_mh_weights(self.adj_matrix, device=self.device)
 
-    def aggregate_mh(self):
-        """执行分布式聚合：根据 MH 权重矩阵聚合所有客户端的参数
+        # 初始化各客户端的优化器状态 (动量)
+        self.opt_states = [None for _ in range(self.num_clients)]
 
-        每个客户端 i 根据 self.mh_weights[i] 的权重，聚合所有客户端（包括自己）的参数。
-        """
+    def aggregate_mh(self):
+        """执行分布式聚合：根据 MH 权重矩阵聚合所有客户端的参数"""
         new_client_states = {}
 
         for i in range(self.num_clients):
@@ -116,7 +136,7 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # 1. 为每个选中的客户端准备参数（使用当前本地模型进行训练）
+            # 1. 为每个选中的客户端准备参数
             def get_client_param(i):
                 return [
                     i,
@@ -129,6 +149,7 @@ class Server(BaseServer):
                     self.args.batch_size,
                     self.args.epochs,
                     self.args.feature_dim,
+                    self.opt_states[i],  # 新增：发送历史动量
                 ]
 
             p = [get_client_param(i) for i in selected_clients]
@@ -137,13 +158,13 @@ class Server(BaseServer):
 
             # 3. 收集客户端训练后的状态和损失
             total_loss = 0.0
-            for i in selected_clients:
-                avg_loss, client_state = results[i]
-                total_loss += avg_loss
-                self.clients_state[i] = client_state
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                self.clients_state[cid] = res["state"]
+                self.opt_states[cid] = res["opt_state"]  # 保存最新动量
             self.loss.append(total_loss / num_join_clients)
 
-            # 4. 执行分布式聚合：根据 MH 权重矩阵聚合邻居参数
+            # 4. 执行分布式聚合
             self.aggregate_mh()
 
             # 5. 执行评估

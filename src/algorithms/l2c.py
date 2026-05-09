@@ -29,8 +29,9 @@ def get_path(args):
 
     # 将算法的关键超参加入文件名
     args.file_name = (
-        f"{args.name_pre}_{adj_suffix}_{args.epochs}"
-        f"_{args.val_ratio}_{args.lr_alpha}_{args.threshold}"
+        f"{args.common_name}_{adj_suffix}"
+        f"_{args.val_ratio}_{args.lr_alpha}"
+        f"_{args.prune_round}_{args.prune_num}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
@@ -120,13 +121,13 @@ def client_worker_phase1(params):
         k: (theta_t[k].to(device) - theta_mid[k]).cpu() for k in theta_t.keys()
     }
 
-    return [
-        total_loss / num_batches,  # avg_loss
-        theta_t,  # 返回初始参数供第二阶段使用
-        {k: v.detach().clone() for k, v in delta_theta.items()},  # delta_theta
-        train_indices,  # 用于第二阶段的验证集
-        val_indices,
-    ]
+    return {
+        "loss": total_loss / num_batches,  # avg_loss
+        "state_t": theta_t,  # 返回初始参数供第二阶段使用
+        "delta": {k: v.detach().clone() for k, v in delta_theta.items()},  # delta_theta
+        "train_idx": train_indices,  # 用于第二阶段的验证集
+        "val_idx": val_indices,
+    }
 
 
 def client_worker_phase2(params):
@@ -153,7 +154,6 @@ def client_worker_phase2(params):
             alpha (tensor),
             val_indices (list),
             lr_alpha,
-            threshold,
         ]
     """
     (
@@ -175,7 +175,6 @@ def client_worker_phase2(params):
         alpha,
         val_indices,
         lr_alpha,
-        threshold,
     ) = params
 
     # 1. 初始化模型
@@ -218,31 +217,12 @@ def client_worker_phase2(params):
             with torch.no_grad():
                 alpha -= lr_alpha * alpha_grads
 
-    # 6. 执行最终聚合（带阈值去边）
-    with torch.no_grad():
-        w_final = F.softmax(alpha, dim=0)
-
-        # 阈值去边：去掉权重小于阈值的连接
-        w_final = w_final * (w_final >= threshold).float()
-        if w_final.sum() > 0:
-            w_final = w_final / w_final.sum()
-
-        # 最终状态聚合
-        final_state = {k: theta_t[k].to(device).clone() for k in theta_t.keys()}
-        w_final_gpu = w_final.to(device)
-
-        for k in final_state.keys():
-            layer_deltas = torch.stack([d[k].to(device) for d in neighbor_deltas])
-            dims = [1] * (layer_deltas.dim() - 1)
-            final_state[k] -= torch.sum(
-                layer_deltas * w_final_gpu.view(-1, *dims), dim=0
-            )
-
-    return [
-        {k: v.cpu().detach().clone() for k, v in final_state.items()},  # 最终模型状态
-        alpha.cpu().detach().clone(),  # 更新后的 alpha
-        w_final.cpu().detach().clone().tolist(),  # 最终的混合权重
-    ]
+    # 6. 整理返回结果（严格遵守伪代码：返回 alpha 更新前的聚合模型）
+    return {
+        "state": {k: v.cpu().detach().clone() for k, v in theta_agg.items()},  # 对应伪代码 Line 16 的 theta_i^{t+1}
+        "alpha": alpha.cpu().detach().clone(),  # 更新后的 alpha 用于下一轮
+        "weights": w.cpu().detach().clone().tolist(),  # 返回更新前的权重用于 Server 端剪枝判断
+    }
 
 
 class Server(BaseServer):
@@ -314,14 +294,11 @@ class Server(BaseServer):
             cid_to_indices = {}
 
             total_loss = 0.0
-            for cid in selected_clients:
-                avg_loss, theta_t, delta_theta, train_indices, val_indices = p1_results[
-                    cid
-                ]
-                total_loss += avg_loss
-                cid_to_delta[cid] = delta_theta
-                cid_to_theta_t[cid] = theta_t
-                cid_to_indices[cid] = {"train": train_indices, "val": val_indices}
+            for cid, res in p1_results.items():
+                total_loss += res["loss"]
+                cid_to_delta[cid] = res["delta"]
+                cid_to_theta_t[cid] = res["state_t"]
+                cid_to_indices[cid] = {"train": res["train_idx"], "val": res["val_idx"]}
 
             self.loss.append(total_loss / len(selected_clients))
 
@@ -333,16 +310,17 @@ class Server(BaseServer):
                 neighbors = torch.where(self.A[i] > 0)[0].tolist()
                 neighbors.sort()
 
-                # 收集邻居的 Delta（如果邻居也被选中）
+                # 收集邻居的 Delta
                 neighbor_deltas = []
                 for nb in neighbors:
                     if nb in cid_to_delta:
                         neighbor_deltas.append(cid_to_delta[nb])
+                    elif nb in self.phase1_results:
+                        neighbor_deltas.append(self.phase1_results[nb])
                     else:
-                        # 使用之前保存的 Delta
-                        neighbor_deltas.append(
-                            self.phase1_results.get(nb, cid_to_delta[neighbors[0]])
-                        )
+                        # 既无本轮增量也无缓存，则使用零增量（不贡献变化），严禁随机 fallback
+                        zero_delta = {k: torch.zeros_like(v) for k, v in cid_to_delta[i].items()}
+                        neighbor_deltas.append(zero_delta)
 
                 payloads_p2.append(
                     [
@@ -364,19 +342,49 @@ class Server(BaseServer):
                         self.alphas[i],
                         cid_to_indices[i]["val"],
                         self.args.lr_alpha,
-                        self.args.threshold,
                     ]
                 )
 
             p2_results = self.run_clients(client_worker_phase2, payloads_p2)
 
             # --- 更新 Server 端状态 ---
-            for i in selected_clients:
-                model_state, alpha, w_final = p2_results[i]
-                self.clients_state[i] = model_state
-                self.alphas[i] = alpha
+            all_weights = {}
+            for cid, res in p2_results.items():
+                self.clients_state[cid] = res["state"]
+                self.alphas[cid] = res["alpha"]
+                all_weights[cid] = res["weights"]
                 # 保存该轮的 Delta 用于下一轮
-                self.phase1_results[i] = cid_to_delta[i]
+                self.phase1_results[cid] = cid_to_delta[cid]
+
+            # --- 拓扑演化：Top-K 剪枝 (对应伪代码 Line 20-22) ---
+            # 仅在特定的 prune_round (T0) 执行
+            prune_round = getattr(self.args, "prune_round", -1)
+            prune_num = getattr(self.args, "prune_num", 0)
+
+            if round_idx + 1 == prune_round and prune_num > 0:
+                logger.info(f"Applying Top-K pruning (K={prune_num}) at round {round_idx+1}")
+                for i in range(self.num_clients):
+                    if i not in all_weights:
+                        continue
+
+                    # 获取当前邻居列表（对应权重向量的顺序）
+                    neighbors = torch.where(self.A[i] > 0)[0].tolist()
+                    neighbors.sort()
+
+                    weights = np.array(all_weights[i])
+                    # 排除自环（不剪掉自己）
+                    neighbor_indices = [idx for idx, nb in enumerate(neighbors) if nb != i]
+                    if len(neighbor_indices) <= prune_num:
+                        continue
+
+                    # 找到权重最小的 K0 个邻居的索引
+                    neighbor_weights = weights[neighbor_indices]
+                    to_prune_indices = np.argsort(neighbor_weights)[:prune_num]
+
+                    for idx in to_prune_indices:
+                        neighbor_to_remove = neighbors[neighbor_indices[idx]]
+                        self.A[i, neighbor_to_remove] = 0.0
+                        logger.debug(f"Client {i}: Removed neighbor {neighbor_to_remove}")
 
             # --- 聚合虚拟全局模型（Evaluation Oracle）---
             self.aggregate()

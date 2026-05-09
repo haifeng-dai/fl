@@ -18,7 +18,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.lamda_}_{args.server_epochs}_{args.server_lr}_{args.margin_threshold}"
+    args.file_name = f"{args.common_name}_{args.lamda_}_{args.server_epochs}_{args.server_lr}_{args.margin_threshold}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -122,7 +122,12 @@ def client_worker(params):
     )
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    return [avg_loss_ce, avg_loss_proto, model_state, local_protos_avg]
+    return {
+        "loss": avg_loss_ce,
+        "loss_proto": avg_loss_proto,
+        "state": model_state,
+        "protos": local_protos_avg,
+    }
 
 
 class Server(BaseServer):
@@ -185,13 +190,12 @@ class Server(BaseServer):
             total_loss_proto = 0.0
             selected_states = []
             selected_protos = []
-            for i in selected_clients:
-                l_ce, l_p, client_state, client_proto = results[i]
-                total_loss_ce += l_ce
-                total_loss_proto += l_p
-                self.clients_state[i] = client_state
-                selected_states.append(client_state)
-                selected_protos.append(client_proto)
+            for cid, res in results.items():
+                total_loss_ce += res["loss"]
+                total_loss_proto += res["loss_proto"]
+                self.clients_state[cid] = res["state"]
+                selected_states.append(res["state"])
+                selected_protos.append(res["protos"])
 
             self.loss.append(total_loss_ce / num_join_clients)
             self.loss_proto.append(total_loss_proto / num_join_clients)

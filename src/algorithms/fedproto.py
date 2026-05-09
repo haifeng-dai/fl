@@ -15,7 +15,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.mu}"
+    args.file_name = f"{args.common_name}_{args.mu}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -70,11 +70,11 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    return [
-        total_loss / num_batches,
-        {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},
-        extract_prototypes(model, loader, num_classes, feature_dim, device),
-    ]
+    return {
+        "loss": total_loss / num_batches,
+        "state": {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},
+        "protos": extract_prototypes(model, loader, num_classes, feature_dim, device),
+    }
 
 
 class Server(BaseServer):
@@ -110,7 +110,7 @@ class Server(BaseServer):
                     self.num_class,
                     self.args.feature_dim,
                     self.args.mu,
-                    self.global_protos.cpu(),
+                    self.global_protos.cpu() if self.global_protos is not None else None,
                 ]
                 for i in selected_clients
             ]
@@ -118,11 +118,10 @@ class Server(BaseServer):
 
             total_loss = 0.0
             selected_protos = []
-            for i in selected_clients:
-                client_loss, client_state, client_proto = results[i]
-                total_loss += client_loss
-                self.clients_state[i] = client_state
-                selected_protos.append(client_proto)
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                self.clients_state[cid] = res["state"]
+                selected_protos.append(res["protos"])
             self.loss.append(total_loss / num_join_clients)
 
             # 计算参与客户端的权重

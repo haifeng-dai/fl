@@ -13,7 +13,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_local"
+    args.file_name = f"{args.common_name}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -57,7 +57,7 @@ def client_worker(params):
 
     avg_loss = total_loss / num_batches
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    return [avg_loss, model_state]
+    return {"loss": avg_loss, "state": model_state}
 
 
 class Server(BaseServer):
@@ -95,10 +95,9 @@ class Server(BaseServer):
             results = self.run_clients(client_worker, p)
 
             total_loss = 0.0
-            for i in selected_clients:
-                client_loss, client_state = results[i]
-                total_loss += client_loss
-                self.clients_state[i] = client_state
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                self.clients_state[cid] = res["state"]
             self.loss.append(total_loss / num_join_clients)
 
             self.evaluate()

@@ -22,14 +22,14 @@ PARAM_MAP = {
 }
 
 def get_adj_suffix(args):
-    adj_type = args.get('adj_type', 'ring')
+    adj_type = args['adj_type']
     suffix = f"{adj_type}"
     if adj_type == "random":
-        suffix += f"_{args.get('edge_p', 0.3)}"
+        suffix += f"_{args['edge_p']}"
     elif adj_type == "small_world":
-        suffix += f"_{args.get('k', 4)}_{args.get('edge_p', 0.3)}"
+        suffix += f"_{args['k_small_world']}_{args['edge_p']}"
     elif adj_type == "scale_free":
-        suffix += f"_{args.get('m', 2)}"
+        suffix += f"_{args['m_scale_free']}"
     return suffix
 
 def beautify_label(name):
@@ -71,15 +71,18 @@ class ResultLoader:
             "fml": lambda args: f"_{args['alpha_fml']}_{args['beta_fml']}",
             "lgfedavg": lambda args: "",
             "moon": lambda args: f"_{args['mu']}_{args['tau']}",
-            "proxyfl": lambda args: f"_{args['mu']}_{get_adj_suffix(args)}",
-            "fedtest": lambda args: f"_{args['mu_test']}",
-            "local": lambda args: "_local",
+            "fedtest": lambda args: f"_ray_{args['use_ray']}",
+            "local": lambda args: "",
             # Decentralized Algorithms
-            "l2c": lambda args: f"_{get_adj_suffix(args)}_{args.get('epochs', 1)}_{args['val_ratio']}_{args['lr_alpha']}_{args['threshold']}",
-            "dispfl": lambda args: f"_{get_adj_suffix(args)}_{args.get('epochs', 1)}_{args['dense_ratio']}_{args['anneal_factor']}",
-            "pearfl": lambda args: f"_{get_adj_suffix(args)}_{args.get('epochs', 1)}_{args['lamda']}",
+            "l2c": lambda args: f"_{get_adj_suffix(args)}_{args['val_ratio']}_{args['lr_alpha']}_{args['prune_round']}_{args['prune_num']}",
+            "dispfl": lambda args: f"_{get_adj_suffix(args)}_{args['dense_ratio']}_{args['anneal_factor']}",
+            "pearfl": lambda args: f"_{get_adj_suffix(args)}_{args['lamda']}",
             "dfedavgm": lambda args: f"_{get_adj_suffix(args)}",
-            "dfedpgp": lambda args: f"_{get_adj_suffix(args)}_{args.get('epochs', 1)}_{args['local_v_epochs']}_{args['lr_v']}_{args['momentum_v']}_{args['weight_decay_v']}",
+            "dfedpgp": lambda args: f"_{get_adj_suffix(args)}_{args['local_v_epochs']}_{args['lr_v']}_{args['momentum_v']}_{args['weight_decay_v']}",
+            "dfedup": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}_{args['temp']}",
+            "dfedup1": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
+            "dfedup2": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
+            "proxyfl": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
         }
 
     def _average_recursive(self, data_list):
@@ -98,24 +101,26 @@ class ResultLoader:
 
     def load(self, algo, dataset, partition, num_clients, specific_run=None, **kwargs):
         folder_name = f"{dataset}_{partition}_{num_clients}"
-        if partition == "dirichlet": folder_name += f"_{kwargs.get('alpha', 0.1)}"
-        elif partition == "pathological": folder_name += f"_{kwargs.get('n_class', 2)}"
+        if partition == "dirichlet": folder_name += f"_{kwargs['alpha']}"
+        elif partition == "pathological": folder_name += f"_{kwargs['n_class']}"
 
+        # 结果目录路径：算法 / 数据集 /
         folder_path = os.path.join(self.base_dir, algo, folder_name)
+
         if not os.path.exists(folder_path):
-            print(f"  [Warning] Folder not found: {folder_path}")
+            if specific_run is None or specific_run == 0:
+                print(f"  [提示] 实验目录不存在: {folder_path}")
             return None
 
-        # 构造基础文件名 (Ray 分支强制使用简化命名)
-        base_name = f"{kwargs.get('epochs', 10)}_{kwargs.get('batch_size', 64)}_{kwargs.get('lr', 0.01)}"
+        # 构造基础文件名 (包含公共参数前缀)
+        common_name = f"{kwargs['epochs']}_{kwargs['batch_size']}_{kwargs['lr']}"
+        base_name = common_name
 
-        # 仅在非 Ray 目录下（即旧框架 results/）尝试添加算法特定的后缀
-        if "results_ray" not in self.base_dir:
-            suffix_gen = self.algo_patterns.get(algo)
-            if suffix_gen:
-                base_name += suffix_gen(kwargs)
+        # 添加算法特定的后缀以实现严格参数匹配
+        suffix_gen = self.algo_patterns.get(algo)
+        if suffix_gen:
+            base_name += suffix_gen(kwargs)
 
-        # Try to find run indices
         def get_indices(b_name):
             if specific_run is not None:
                 if os.path.exists(os.path.join(folder_path, f"{b_name}_{specific_run}.pt")):
@@ -129,9 +134,12 @@ class ResultLoader:
                     idx += 1
                 return indices
 
+        # 严格匹配
         run_indices = get_indices(base_name)
 
         if not run_indices:
+            if specific_run is None or specific_run == 0:
+                print(f"  [提示] 结果文件不存在: {os.path.join(folder_path, base_name)}_X.pt")
             return None
 
         loaded_data = []
@@ -190,7 +198,7 @@ def plot_results(results_dict, x_lim, metric="acc", title=None, xlabel="Rounds",
     plt.title(title or f"Comparison of {metric.upper()}")
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
-    plt.legend()
+    plt.legend(loc='lower right', fontsize=14)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
 
@@ -293,14 +301,14 @@ def plot_results_split(results_dict, x_lim, metric="acc", title=None, xlabel="Ro
     ax1.set_title(f"Model {metric.upper()}: {title or ''}")
     ax1.set_xlabel(xlabel)
     ax1.set_ylabel(ylabel)
-    ax1.legend()
+    ax1.legend(loc='lower right', fontsize=14)
     ax1.grid(True, alpha=0.3)
     ax1.set_xlim(0, x_lim)
 
     ax2.set_title(f"Prototype {metric.upper()}: {title or ''}")
     ax2.set_xlabel(xlabel)
     ax2.set_ylabel(ylabel)
-    ax2.legend()
+    ax2.legend(loc='lower right', fontsize=14)
     ax2.grid(True, alpha=0.3)
     ax2.set_xlim(0, x_lim)
 
@@ -356,7 +364,7 @@ def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
     plt.title(title or "Comparison of Loss")
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
-    plt.legend()
+    plt.legend(loc='lower right', fontsize=14)
     plt.grid(True, alpha=0.3)
     plt.yscale("log")
     plt.tight_layout()

@@ -18,7 +18,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.alpha_sa}_{args.lambda_r}_{args.lambda_mcl}_{args.lambda_cc}"
+    args.file_name = f"{args.common_name}_{args.alpha_sa}_{args.lambda_r}_{args.lambda_mcl}_{args.lambda_cc}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -122,7 +122,11 @@ def client_worker(params):
     )
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    return [total_loss / num_batches, model_state, local_anchors_dict]
+    return {
+        "loss": total_loss / num_batches,
+        "state": model_state,
+        "protos": local_anchors_dict,
+    }
 
 
 class Server(BaseServer):
@@ -180,13 +184,14 @@ class Server(BaseServer):
             selected_states = []
             local_anchors_list = []
             current_weights = []
-            for i in selected_clients:
-                client_loss, client_state, client_anchors = results[i]
-                total_loss += client_loss
-                self.clients_state[i] = client_state
-                selected_states.append(client_state)
-                local_anchors_list.append(client_anchors)
-                current_weights.append(self.weights[i])
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                self.clients_state[cid] = res["state"]
+                selected_states.append(res["state"])
+                local_anchors_list.append(res["protos"])
+                current_weights.append(self.weights[cid])
+                # 更新服务端缓存的客户端锚点，用于下一轮的边界 (margin) 计算
+                self.clients_anchors[cid] = res["protos"].detach().clone()
 
             self.loss.append(total_loss / num_join_clients)
             norm_weights = [w / sum(current_weights) for w in current_weights]
@@ -196,11 +201,6 @@ class Server(BaseServer):
 
             # 2. 聚合各个本地原型以生成全局 P_bar 并更新语义锚点 A_bar (公式 10)
             self.update_global_anchors(local_anchors_list, norm_weights)
-
-            # 3. 更新服务端缓存的客户端锚点，用于下一轮的边界 (margin) 计算
-            for idx, anchors_tensor in enumerate(local_anchors_list):
-                c_idx = selected_clients[idx]
-                self.clients_anchors[c_idx] = anchors_tensor.detach().clone()
 
             self.evaluate()
             print(

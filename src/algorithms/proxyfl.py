@@ -24,7 +24,7 @@ def get_path(args):
     elif args.adj_type == "scale_free":
         adj_suffix += f"_{args.m_scale_free}"
 
-    args.file_name = f"{args.name_pre}_{args.mu}_{adj_suffix}"
+    args.file_name = f"{args.common_name}_{adj_suffix}_{args.mu}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -106,7 +106,12 @@ def client_worker(params):
     proxy_state = {
         k: v.cpu().detach().clone() for k, v in proxy_model.state_dict().items()
     }
-    return [avg_loss_l, avg_loss_p, local_state, proxy_state]
+    return {
+        "loss": avg_loss_l,
+        "loss_proxy": avg_loss_p,
+        "state": local_state,
+        "state_proxy": proxy_state,
+    }
 
 
 class Server(BaseServer):
@@ -120,8 +125,10 @@ class Server(BaseServer):
 
         self.loss_p = []
         self.acc_p = []
-        # 使用通用的邻接矩阵生成函数
-        self.adj_matrix = generate_adjacency_matrix(args)
+        # 使用通用的邻接矩阵生成函数并进行行归一化处理
+        # 必须归一化以防止在去中心化聚合时权重累加导致梯度爆炸 (NaN)
+        A = generate_adjacency_matrix(args)
+        self.adj_matrix = A / A.sum(dim=1, keepdim=True)
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -171,12 +178,11 @@ class Server(BaseServer):
             # 3. 收集更新客户端状态数据与评估并计算平均损失
             total_loss = 0.0
             total_loss_p = 0.0
-            for i in selected_clients:
-                client_loss, client_loss_p, client_state, client_state_p = results[i]
-                total_loss += client_loss
-                total_loss_p += client_loss_p
-                self.clients_state[i] = client_state
-                self.client_states_p[i] = client_state_p
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                total_loss_p += res["loss_proxy"]
+                self.clients_state[cid] = res["state"]
+                self.client_states_p[cid] = res["state_proxy"]
             self.loss.append(total_loss / num_join_clients)
             self.loss_p.append(total_loss_p / num_join_clients)
 

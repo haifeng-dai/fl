@@ -14,7 +14,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.mu}"
+    args.file_name = f"{args.common_name}_{args.mu}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -82,15 +82,12 @@ def client_worker(params):
         model_state = {
             k: v.cpu().detach().clone() for k, v in model.state_dict().items()
         }
-        return [avg_loss, model_state]
-
-    # ==================== 阶段二：锚点提取（冻结模型） ====================
-    elif mode == "extract":
+        return {"loss": avg_loss, "state": model_state}
+    else:
         local_anchors, local_counts = extract_prototypes(
             model, loader, num_classes, feature_dim, device, return_counts=True
         )
-
-        return [local_anchors, local_counts]
+        return {"protos": local_anchors, "counts": local_counts}
 
 
 class Server(BaseServer):
@@ -136,10 +133,9 @@ class Server(BaseServer):
             # 收集训练结果并聚合全局模型
             total_loss = 0.0
             selected_states = []
-            for i in selected_clients:
-                client_loss, client_state = results_train[i]
-                total_loss += client_loss
-                selected_states.append(client_state)
+            for cid, res in results_train.items():
+                total_loss += res["loss"]
+                selected_states.append(res["state"])
             self.loss.append(total_loss / num_join_clients)
             self.aggregate(selected_states)
 
@@ -169,10 +165,9 @@ class Server(BaseServer):
             # 收集本地锚点并按样本数量加权聚合为全局锚点
             all_local_anchors = []
             all_local_counts = []
-            for i in selected_clients:
-                client_anchors, client_counts = results_extract[i]
-                all_local_anchors.append(client_anchors)
-                all_local_counts.append(client_counts)
+            for cid, res in results_extract.items():
+                all_local_anchors.append(res["protos"])
+                all_local_counts.append(res["counts"])
             self.aggregate_anchors(all_local_anchors, all_local_counts)
 
             self.evaluate()

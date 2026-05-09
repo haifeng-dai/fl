@@ -13,7 +13,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_alpha{args.alpha_coef}"
+    args.file_name = f"{args.common_name}_alpha{args.alpha_coef}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -80,10 +80,10 @@ def client_worker(params):
             total_loss += task_loss.item()
             num_batches += 1
 
-    avg_loss = total_loss / num_batches
-
-    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    return [avg_loss, model_state]
+    return {
+        "loss": total_loss / num_batches,
+        "state": {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},
+    }
 
 
 class Server(BaseServer):
@@ -141,12 +141,11 @@ class Server(BaseServer):
 
             total_loss = 0.0
             sum_model_params = torch.zeros_like(global_model_vector)
-            for i in selected_clients:
-                loss, client_state_dict = results[i]
-                total_loss += loss
+            for cid, res in results.items():
+                total_loss += res["loss"]
 
                 # 将客户端模型状态字典转化为一维向量
-                self.model.load_state_dict(client_state_dict)
+                self.model.load_state_dict(res["state"])
                 client_flat = parameters_to_vector(self.model.parameters()).detach()
 
                 sum_model_params += client_flat
@@ -154,7 +153,7 @@ class Server(BaseServer):
                 # 更新本地梯度历史记录：
                 # nabla L_k(w^{t+1}) 约等于 nabla L_k(w^t) - alpha * (w^{t+1} - w^t)
                 model_diff = client_flat - global_model_vector
-                self.local_grads[i] -= self.args.alpha_coef * model_diff
+                self.local_grads[cid] -= self.args.alpha_coef * model_diff
             self.loss.append(total_loss / num_join_clients)
 
             # 1. 计算所有客户端模型的平均值

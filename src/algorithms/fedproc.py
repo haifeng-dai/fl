@@ -15,13 +15,13 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}"
+    args.file_name = f"{args.common_name}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
 def client_worker(params):
     (
-        client_id,
+        _,
         device,
         model_state,
         global_protos,
@@ -69,11 +69,11 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    return [
-        total_loss / num_batches,
-        {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},
-        extract_prototypes(model, loader, num_classes, feature_dim, device),
-    ]
+    return {
+        "loss": total_loss / num_batches,
+        "state": {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},
+        "protos": extract_prototypes(model, loader, num_classes, feature_dim, device),
+    }
 
 
 class Server(BaseServer):
@@ -117,11 +117,10 @@ class Server(BaseServer):
             total_loss = 0.0
             selected_states = []
             all_local_protos = []
-            for i in selected_clients:
-                loss, state, local_protos = results[i]
-                total_loss += loss
-                selected_states.append(state)
-                all_local_protos.append(local_protos)
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                selected_states.append(res["state"])
+                all_local_protos.append(res["protos"])
             self.loss.append(total_loss / num_join_clients)
 
             # 聚合模型参数

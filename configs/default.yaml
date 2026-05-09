@@ -11,7 +11,7 @@ n_class: 0 # 0 表示自动根据数据集选择
 test_ratio: 0.2
 
 # 训练相关 (Training)
-rounds: 200
+rounds: 0  # pFL: 200, gFL: 1000, 0 表示自动调整
 epochs: 10
 lr: 0.01
 momentum: 0.0
@@ -32,8 +32,3 @@ adj_type: "ring"
 edge_p: 0.3 # random / small_world
 k_small_world: 4 # small_world
 m_scale_free: 2 # scale_free
-
-# 评估开关
-do_global_eval: false
-do_local_eval: false
-do_global_on_local_eval: false

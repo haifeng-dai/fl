@@ -13,7 +13,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}"
+    args.file_name = f"{args.common_name}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -70,7 +70,7 @@ def client_worker(params):
         k: model.classifier.state_dict()[k].cpu().detach().clone()
         for k in model.classifier.state_dict().keys()
     }
-    return [avg_loss, body_state, head_state]
+    return {"loss": avg_loss, "body": body_state, "head": head_state}
 
 
 class Server(BaseServer):
@@ -116,13 +116,12 @@ class Server(BaseServer):
             total_loss = 0.0
             new_heads = []
             current_weights = []
-            for i in selected_clients:
-                client_loss, client_body, client_head = results[i]
-                total_loss += client_loss
+            for cid, res in results.items():
+                total_loss += res["loss"]
                 # 将更新后的本地主体结构保存回服务端
-                self.clients_state[i] = client_body
-                new_heads.append(client_head)
-                current_weights.append(self.weights[i])
+                self.clients_state[cid] = res["body"]
+                new_heads.append(res["head"])
+                current_weights.append(self.weights[cid])
 
             self.loss.append(total_loss / num_join_clients)
             norm_weights = [w / sum(current_weights) for w in current_weights]

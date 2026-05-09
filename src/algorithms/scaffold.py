@@ -14,7 +14,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_glr{args.global_lr}"
+    args.file_name = f"{args.common_name}_glr{args.global_lr}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -107,12 +107,12 @@ def client_worker(params):
     avg_loss = total_loss / steps if steps > 0 else 0
 
     # 返回值：损失，模型状态，控制变量差值，新的本地控制变量
-    return [
-        avg_loss,
-        {k: v.cpu().detach().clone() for k, v in current_state.items()},
-        c_delta_dict,
-        c_local_new_dict,
-    ]
+    return {
+        "loss": avg_loss,
+        "state": {k: v.cpu().detach().clone() for k, v in current_state.items()},
+        "delta_c": c_delta_dict,
+        "local_c": c_local_new_dict,
+    }
 
 
 class Server(BaseServer):
@@ -169,15 +169,14 @@ class Server(BaseServer):
             }
 
             selected_states = []
-            for i in selected_clients:
-                client_loss, client_state, client_delta_c, client_c_local = results[i]
-                total_loss += client_loss
-                selected_states.append(client_state)
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                selected_states.append(res["state"])
                 # 累加 delta_c 用于全局控制变量的更新
                 for n in self.param_names:
-                    total_delta_c[n] += client_delta_c[n]
+                    total_delta_c[n] += res["delta_c"][n]
                 # 更新存储在服务端的各个客户端的本地控制变量
-                self.c_local[i] = client_c_local
+                self.c_local[cid] = res["local_c"]
             self.loss.append(total_loss / num_join_clients)
 
             # 聚合模型参数

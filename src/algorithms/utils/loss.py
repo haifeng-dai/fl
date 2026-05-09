@@ -69,17 +69,22 @@ def dist_contrastive_loss(features, prototypes, labels, margin=0.0):
     return ce_loss(-dist, labels)
 
 
-def orthogonality_loss(vectors):
+def orthogonality_loss(features, prototypes=None, labels=None):
     """
-    正交性损失 (Orthogonality Loss)。
-    确保向量组（如原型）在特征空间中互不重叠，防止特征坍缩。
+    通用正交性损失。
+    1. 如果仅传入 features: 确保 features 内部各向量互相正交（防止特征坍缩）。
+    2. 如果传入 features, prototypes 和 labels: 确保每个 feature 仅与其对应类别的 prototype 对齐，与其他 prototype 正交。
     """
-    device = vectors.device
-    num_vectors = vectors.shape[0]
+    device = features.device
+    if prototypes is None:
+        # Case 1: 内部正交 (原逻辑)
+        logits = torch.matmul(features, features.T)
+        target_labels = torch.arange(features.shape[0], device=device)
+    else:
+        # Case 2: 特征-原型正交
+        prototypes = prototypes.to(device)
+        # 计算特征与原型的点积矩阵 [BatchSize, NumClasses]
+        logits = torch.matmul(features, prototypes.T)
+        target_labels = labels
 
-    # 计算自相关矩阵 [N, N]
-    logits = torch.matmul(vectors, vectors.T)
-    # 目标是使对角线元素（自相关）最大
-    labels = torch.arange(num_vectors, device=device)
-
-    return ce_loss(logits, labels)
+    return ce_loss(logits, target_labels)

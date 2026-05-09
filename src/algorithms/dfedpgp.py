@@ -24,33 +24,13 @@ def get_path(args):
         adj_suffix += f"_{args.m_scale_free}"
 
     # 将算法的关键超参加入文件名，便于区分实验
-    args.file_name = f"{args.name_pre}_{adj_suffix}_{args.epochs}_{args.local_v_epochs}_{args.lr_v}_{args.momentum_v}_{args.weight_decay_v}"
+    args.file_name = f"{args.common_name}_{adj_suffix}_{args.local_v_epochs}_{args.lr_v}_{args.momentum_v}_{args.weight_decay_v}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
 def client_worker(params):
     """
     DFedPGP 客户端工作函数：实现解耦更新和梯度推送
-
-    参数结构：
-        params: [
-            client_id,
-            device,
-            body_biased (dict),           # 带偏的特征提取器参数 (U)
-            mu (float),                    # 偏置标量
-            head_state (dict),             # 私有分类头参数 (V)
-            train_set (torch.utils.data.Dataset),
-            model_name,
-            dataset_name,
-            lr_u,                          # 特征提取器学习率
-            lr_v,                          # 分类头学习率
-            batch_size,
-            local_u_epochs,
-            local_v_epochs,
-            feature_dim,
-            momentum,
-            weight_decay,
-        ]
     """
     (
         client_id,
@@ -168,13 +148,13 @@ def client_worker(params):
     shared_keys = [k for k in new_full_state.keys() if k.startswith("extractor.")]
     head_keys = [k for k in new_full_state.keys() if k.startswith("classifier.")]
 
-    return [
-        total_loss / num_batches,  # avg_loss
-        {
+    return {
+        "loss": total_loss / num_batches,  # avg_loss
+        "body": {
             k: new_full_state[k].cpu().detach().clone() for k in shared_keys
         },  # body_shared
-        {k: new_full_state[k].cpu().detach().clone() for k in head_keys},  # head_state
-    ]
+        "head": {k: new_full_state[k].cpu().detach().clone() for k in head_keys},  # head_state
+    }
 
 
 class Server(BaseServer):
@@ -270,11 +250,10 @@ class Server(BaseServer):
 
             # 4. 收集客户端的更新
             total_loss = 0.0
-            for cid in selected_clients:
-                avg_loss, body_shared, head_state = results[cid]
-                total_loss += avg_loss
-                self.client_body[cid] = body_shared
-                self.client_head[cid] = head_state
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                self.client_body[cid] = res["body"]
+                self.client_head[cid] = res["head"]
 
             self.loss.append(total_loss / len(selected_clients))
 

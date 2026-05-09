@@ -15,7 +15,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.alpha_fml}_{args.beta_fml}"
+    args.file_name = f"{args.common_name}_{args.alpha_fml}_{args.beta_fml}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -97,7 +97,12 @@ def client_worker(params):
     local_state = {
         k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()
     }
-    return [avg_loss_l, avg_loss_g, local_state, global_state]
+    return {
+        "loss": avg_loss_l,
+        "loss_global": avg_loss_g,
+        "state": local_state,
+        "state_global": global_state,
+    }
 
 
 class Server(BaseServer):
@@ -149,14 +154,13 @@ class Server(BaseServer):
             selected_states = []
             selected_states_g = []
             current_weights = []
-            for i in selected_clients:
-                client_loss, client_loss_g, client_state, client_state_g = results[i]
-                total_loss += client_loss
-                total_loss_g += client_loss_g
-                selected_states.append(client_state)
-                self.clients_state[i] = client_state
-                selected_states_g.append(client_state_g)
-                current_weights.append(self.weights[i])
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                total_loss_g += res["loss_global"]
+                selected_states.append(res["state"])
+                self.clients_state[cid] = res["state"]
+                selected_states_g.append(res["state_global"])
+                current_weights.append(self.weights[cid])
             self.loss.append(total_loss / num_join_clients)
             self.loss_g.append(total_loss_g / num_join_clients)
             sum_weights = sum(current_weights)

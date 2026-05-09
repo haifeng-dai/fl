@@ -76,9 +76,11 @@ def compute_mh_weights(adj_matrix, device="cpu"):
 
         # 遍历节点 i 的所有邻居（邻接矩阵中非零位置）
         for j in torch.where(adj_matrix[i] > 0)[0].tolist():
+            if i == j:
+                continue
             # 获取邻居 j 的度数
             deg_j = (adj_matrix[j] > 0).sum().item()
-            w_ij = 1.0 / (max(deg_i, deg_j) + 1)
+            w_ij = 1.0 / max(deg_i, deg_j)
             mh_weights[i, j] = w_ij
             self_weight -= w_ij
 
@@ -87,7 +89,7 @@ def compute_mh_weights(adj_matrix, device="cpu"):
     return mh_weights
 
 
-def sinkhorn_knopp(A, epsilon, max_iter=100):
+def sinkhorn_knopp(A, epsilon=1e-3, max_iter=100):
     """将邻接矩阵 W 转化为双随机矩阵 (Doubly Stochastic)"""
     W = A.clone().float()
     for _ in range(max_iter):

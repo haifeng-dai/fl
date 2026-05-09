@@ -13,7 +13,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.epochs_head}"
+    args.file_name = f"{args.common_name}_{args.epochs_head}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -74,16 +74,16 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    return [
-        total_loss / num_batches,  # avg_loss
-        {
+    return {
+        "loss": total_loss / num_batches,  # avg_loss
+        "body": {
             k: v.cpu().detach().clone() for k, v in model.extractor.state_dict().items()
         },  # body_state
-        {
+        "head": {
             k: v.cpu().detach().clone()
             for k, v in model.classifier.state_dict().items()
         },  # head_state
-    ]
+    }
 
 
 class Server(BaseServer):
@@ -128,12 +128,11 @@ class Server(BaseServer):
             total_loss = 0.0
             new_bodies = []
             current_weights = []
-            for i in selected_clients:
-                client_loss, client_body, client_head = results[i]
-                total_loss += client_loss
-                new_bodies.append(client_body)
-                self.client_head_states[i] = client_head
-                current_weights.append(self.weights[i])
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                new_bodies.append(res["body"])
+                self.client_head_states[cid] = res["head"]
+                current_weights.append(self.weights[cid])
 
             self.loss.append(total_loss / num_join_clients)
             norm_weights = [w / sum(current_weights) for w in current_weights]

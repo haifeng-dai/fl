@@ -12,7 +12,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.mu}"
+    args.file_name = f"{args.common_name}_{args.mu}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -75,7 +75,7 @@ def client_worker(params):
 
     avg_loss = total_loss / num_batches
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    return [avg_loss, model_state]
+    return {"loss": avg_loss, "state": model_state}
 
 
 class Server(BaseServer):
@@ -118,11 +118,10 @@ class Server(BaseServer):
             total_loss = 0.0
             selected_states = []
             current_weights = []
-            for i in selected_clients:
-                client_loss, client_state = results[i]
-                total_loss += client_loss
-                selected_states.append(client_state)
-                current_weights.append(self.weights[i])
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                selected_states.append(res["state"])
+                current_weights.append(self.weights[cid])
             self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]

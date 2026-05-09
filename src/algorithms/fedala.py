@@ -14,7 +14,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.name_pre}_{args.eta}_{args.rand_percent}_{args.layer_idx}_{args.ala_threshold}_{args.num_pre_loss}"
+    args.file_name = f"{args.common_name}_{args.eta}_{args.rand_percent}_{args.layer_idx}_{args.ala_threshold}_{args.num_pre_loss}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -246,7 +246,11 @@ def client_worker(params):
     weights_cpu = None
     if ala.weights is not None:
         weights_cpu = [w.cpu().detach().clone() for w in ala.weights]
-    return [avg_loss, model_state, weights_cpu]
+    return {
+        "loss": avg_loss,
+        "state": model_state,
+        "weights": weights_cpu,
+    }
 
 
 class Server(BaseServer):
@@ -304,13 +308,12 @@ class Server(BaseServer):
             total_loss = 0.0
             selected_states = []
             current_weights = []
-            for i in selected_clients:
-                client_loss, client_state, client_weights = results[i]
-                total_loss += client_loss
-                self.clients_state[i] = client_state
-                self.clients_weights[i] = client_weights
-                selected_states.append(client_state)
-                current_weights.append(self.weights[i])
+            for cid, res in results.items():
+                total_loss += res["loss"]
+                self.clients_state[cid] = res["state"]
+                self.clients_weights[cid] = res["weights"]
+                selected_states.append(res["state"])
+                current_weights.append(self.weights[cid])
             self.loss.append(total_loss / num_join_clients)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
