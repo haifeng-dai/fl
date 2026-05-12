@@ -19,6 +19,8 @@ PARAM_MAP = {
     "dense_ratio": "Density",
     "anneal_factor": "Anneal",
     "lr_v": r"$LR_{head}$",
+    "lambda_p": r"$\lambda_p$",
+    "lambda_acl": r"$\lambda_{acl}$",
 }
 
 def get_adj_suffix(args):
@@ -67,7 +69,7 @@ class ResultLoader:
             "fedsa": lambda args: f"_{args['alpha_sa']}_{args['lambda_r']}_{args['lambda_mcl']}_{args['lambda_cc']}",
             "scaffold": lambda args: f"_glr{args['global_lr']}",
             "fedtgp": lambda args: f"_{args['lamda_']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}",
-            "feddpc": lambda args: f"_{args['lamda_']}_{args['head_epochs']}_{args['body_epochs']}_{args['lr_head']}_{args['lr_body']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}_{args['lambda_p']}_{args['lambda_acl']}",
+            "feddpc": lambda args: f"_{args['lamda_']}_{args['head_epochs']}_{args['body_epochs']}_{args['lr_head']}_{args['lr_body']}_{args['server_epochs']}_{args['server_lr']}_{args['lambda_p']}_{args['lambda_acl']}",
             "fml": lambda args: f"_{args['alpha_fml']}_{args['beta_fml']}",
             "lgfedavg": lambda args: "",
             "moon": lambda args: f"_{args['mu']}_{args['tau']}",

@@ -25,44 +25,46 @@ def separation_loss(anchors, tau=0.1):
     L_SEP = log( sum_{j!=i} exp(a_i * a_j^T / tau) / (C-1) )
     """
     C = anchors.shape[0]
-    # 确保输入锚点是归一化的，防止指数溢出
+    # 确保输入锚点是归一化的
     anchors = F.normalize(anchors, p=2, dim=1)
-    # 计算成对点积 (Dot Product): sim_matrix[i, j] = a_i * a_j^T
-    sim_matrix = torch.matmul(anchors, anchors.T)
-    # 指数化
-    exp_sim = torch.exp(sim_matrix / tau)
+    # 计算相似度矩阵并除以温度参数
+    sim_matrix = torch.matmul(anchors, anchors.T) / tau
 
-    # 掩盖对角线（自身相似度），只对 j != i 求和
+    # 掩盖对角线（自身相似度），将其设为负无穷，使 exp(-inf) = 0
     mask = torch.eye(C, device=anchors.device).bool()
-    exp_sim = exp_sim.masked_fill(mask, 0.0)
+    sim_matrix = sim_matrix.masked_fill(mask, float("-inf"))
 
-    # 对 j != i 求和
-    sum_exp = exp_sim.sum(dim=1) / (C - 1)
+    # 使用 logsumexp 计算 log(sum(exp(sim)))
+    # 然后减去 log(C-1) 以实现对 (C-1) 取平均
+    loss_sep = torch.logsumexp(sim_matrix, dim=1) - torch.log(
+        torch.tensor(C - 1, device=anchors.device, dtype=sim_matrix.dtype)
+    )
 
-    return torch.log(sum_exp + 1e-20).mean()
+    return loss_sep.mean()
 
 
-class FedLSAModelWrapper(nn.Module):
+class FedLSAModel(nn.Module):
     """
-    FedLSA 模型包装器：通过 Hook 在 extractor 后挂载 L2 归一化。
-    这样保证外部使用 `model.extractor(x)`（如 evaluate_prototype 中）时，不仅无需额外代码，
-    且天然获取到归一化后的语义锚点特征空间。
+    FedLSA 模型结构。
+    显式组合 Backbone 和 Classifier，并在 extractor 方法中注入 L2 归一化。
     """
 
     def __init__(self, base_model: nn.Module):
         super().__init__()
-        self.extractor = base_model.extractor
-        self.classifier = base_model.classifier
+        # 内部保存原始模块，名称稍作修改以避免与方法名冲突
+        self.backbone = base_model.extractor
+        self.head = base_model.classifier
 
-        # 使用 PyTorch 原生 Hook 拦截输出并归一化，绝对不会污染 state_dict 或网络结构键值
-        self.extractor.register_forward_hook(self._normalize_hook)
+    def extractor(self, x):
+        """实现公式 (4): h = nor(psi(x))"""
+        z = self.backbone(x)
+        return F.normalize(z, p=2, dim=1)
 
-    @staticmethod
-    def _normalize_hook(_module, _input, output):
-        return F.normalize(output, p=2, dim=1)
+    def classifier(self, h):
+        return self.head(h)
 
     def forward(self, x):
-        # 此时 self.extractor() 的返回值已经被 hook 处理过了
+        # 此时 self.extractor() 返回的是归一化后的特征 h
         h = self.extractor(x)
         logits = self.classifier(h)
         return logits
@@ -113,10 +115,11 @@ def client_worker(params):
         feature_dim,
     ) = params
 
-    # 1. 初始化模型（使用 FedLSA 包装器注入归一化）
-    base_model = get_model(model_name, dataset_name, feature_dim)
-    base_model.load_state_dict(model_state)
-    model = FedLSAModelWrapper(base_model).to(device)
+    # 1. 初始化模型
+    raw_model = get_model(model_name, dataset_name, feature_dim)
+    model = FedLSAModel(raw_model)
+    model.load_state_dict(model_state)
+    model.to(device)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
@@ -158,7 +161,13 @@ def client_worker(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
-        self.model = FedLSAModelWrapper(self.model)
+        self.model = FedLSAModel(self.model).to(self.device)
+
+        # 核心：必须同步更新所有客户端的状态字典，以匹配新的 FedLSAModel 结构 (backbone/head)
+        init_state = {
+            k: v.cpu().detach().clone() for k, v in self.model.state_dict().items()
+        }
+        self.clients_state = [init_state for _ in range(self.num_clients)]
 
         # 1. 初始化随机向量 R (可学习)
         # 论文定义: R ∈ R^{C × I}，在 embedding 空间中
@@ -191,7 +200,6 @@ class Server(BaseServer):
             print(f"Selected clients: {selected_clients}")
 
             # 生成下发前的最新当前语义锚点
-            # 注意: 此处必须分离计算图，因为客户端不负责优化 R 或 Theta
             current_anchors = self.get_anchors().detach().cpu()
 
             p = [

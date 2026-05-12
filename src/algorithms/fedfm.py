@@ -138,7 +138,11 @@ class Server(BaseServer):
                 total_loss += res["loss"]
                 selected_states.append(res["state"])
             self.loss.append(total_loss / num_join_clients)
-            self.aggregate(selected_states)
+            # 聚合模型参数
+            weights = [self.weights[i] for i in selected_clients]
+            sum_w = sum(weights)
+            weights = [w / sum_w for w in weights]
+            self.aggregate(selected_states, weights=weights)
 
             # ========== 阶段二：下发聚合后的全局模型，提取对齐锚点 ==========
             global_state = self.model.state_dict()

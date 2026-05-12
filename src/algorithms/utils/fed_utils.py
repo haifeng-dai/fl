@@ -32,7 +32,7 @@ class BaseServer:
 
         # 自适应 Round 调整逻辑
         if self.rounds == 0:
-            self.rounds = 200 if pfl else 1000
+            self.rounds = 100 if pfl else 1000
             args.rounds = self.rounds
             print(
                 f"-> Adaptive Rounds: detected {'PFL' if pfl else 'GFL'} algorithm, setting rounds={self.rounds}"

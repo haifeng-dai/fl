@@ -77,8 +77,8 @@ def client_worker(params):
     return {
         "loss": total_loss / num_batches,
         "state": {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},
-        "protos": local_protos,
-        "counts": local_counts,
+        "protos": local_protos.cpu().detach().clone(),
+        "counts": local_counts.cpu().detach().clone(),
     }
 
 
@@ -132,13 +132,16 @@ class Server(BaseServer):
             self.loss.append(total_loss / num_join_clients)
 
             # 聚合模型参数
-            self.aggregate(selected_states)
-            # 聚合原型向量：按样本计数加权
+            weights = [self.weights[i] for i in selected_clients]
+            sum_w = sum(weights)
+            weights = [w / sum_w for w in weights]
+            self.aggregate(selected_states, weights=weights)
+            # 聚合原型向量：简单平均
             self.global_protos = proto_aggregate(
                 all_local_protos,
-                local_counts_list=all_local_counts,
+                local_counts_list=None,
                 old_global_protos=self.global_protos,
-            ).to(self.device)
+            ).cpu()
 
             self.evaluate()
             print(
