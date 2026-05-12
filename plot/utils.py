@@ -85,7 +85,7 @@ class ResultLoader:
 
         # 支持将 times 也作为基础文件名的一部分
         base_name = f"{kwargs.get('epochs', 10)}_{kwargs.get('batch_size', 64)}_{kwargs.get('lr', 0.01)}"
-        
+
         suffix_gen = self.algo_patterns.get(algo)
         if suffix_gen:
             try: base_name += suffix_gen(kwargs)
@@ -93,7 +93,7 @@ class ResultLoader:
                 print(f"  [Error] Missing parameter {e} for algo {algo}")
                 return None
 
-        if specific_run is not None: 
+        if specific_run is not None:
             # 如果指定了 specific_run，先检查文件是否存在，避免 torch.load 报错
             file_path = os.path.join(folder_path, f"{base_name}_{specific_run}.pt")
             if not os.path.exists(file_path):
@@ -112,8 +112,21 @@ class ResultLoader:
         loaded_data = []
         for idx in run_indices:
             file_path = os.path.join(folder_path, f"{base_name}_{idx}.pt")
+            metrics_path = file_path + ".metrics"
             try:
-                loaded_data.append(torch.load(file_path, map_location="cpu"))
+                if os.path.exists(metrics_path):
+                    # 优先加载轻量化缓存
+                    loaded_data.append(torch.load(metrics_path, map_location="cpu", weights_only=True))
+                else:
+                    # 加载原始大文件并生成缓存
+                    data = torch.load(file_path, map_location="cpu", weights_only=False)
+                    if isinstance(data, dict):
+                        metrics = {k: data[k] for k in ["acc", "loss"] if k in data}
+                        if metrics:
+                            try:
+                                torch.save(metrics, metrics_path)
+                            except: pass
+                    loaded_data.append(data)
             except Exception as e:
                 # 真正的加载错误（如文件损坏）才报错
                 print(f"  [Error] Failed to load {file_path}: {e}")
@@ -151,7 +164,7 @@ def plot_results(results_dict, x_lim, metric="acc", title=None, xlabel="Rounds",
                 display_label = beautify_label(label)
                 plt.plot(y, label=f"{display_label}-Model (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
                 summary.append({"Algorithm": f"{display_label}-Model", "Max": max_val, "Last10": last_10_avg})
-            
+
             pk = "proto" if "proto" in metric_data else "global" if "global" in metric_data else None
             if pk:
                 y = metric_data[pk][0:x_lim]
@@ -201,7 +214,7 @@ def print_summary_table(results_dict, x_lim, metric="acc", label_name="Algorithm
     for label, data in results_dict.items():
         if data is None or metric not in data: continue
         metric_data = data[metric]
-        
+
         m_max, m_last10 = 0.0, 0.0
         p_max, p_last10 = 0.0, 0.0
 
@@ -389,7 +402,7 @@ def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=2
         if not run_results: continue
 
         sample_data = run_results[0]["acc"]
-        
+
         if isinstance(sample_data, list):
             vals = []
             last_vals = []
@@ -414,7 +427,7 @@ def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=2
                     if not y: continue
                     vals.append(max(y))
                     last_vals.append(np.mean(y[-10:]) if len(y) >= 10 else np.mean(y))
-                
+
                 if vals:
                     mean_max, std_max = np.mean(vals), np.std(vals)
                     mean_last, std_last = np.mean(last_vals), np.std(last_vals)
@@ -450,7 +463,7 @@ def print_stats(selected_group, experiments, common_args, loader, x_lim=200):
         # 初始化统计变量
         m_max, m_last, p_max, p_last = "-", "-", "-", "-"
         sample_data = run_results[0]["acc"]
-        
+
         if isinstance(sample_data, list):
             vals, last_vals = [], []
             for run_data in run_results:
@@ -475,7 +488,7 @@ def print_stats(selected_group, experiments, common_args, loader, x_lim=200):
                 if vals:
                     m_max = f"{np.mean(vals):10.4f}"
                     m_last = f"{np.mean(last_vals):10.4f}"
-            
+
             # Proto / Global
             p_key = "proto" if "proto" in sample_data else "global" if "global" in sample_data else None
             if p_key:
