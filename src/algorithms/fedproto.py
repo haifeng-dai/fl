@@ -70,10 +70,16 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
+    # 提取本地原型及样本计数
+    local_protos, local_counts = extract_prototypes(
+        model, loader, num_classes, feature_dim, device, return_counts=True
+    )
+
     return {
         "loss": total_loss / num_batches,
         "state": {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},
-        "protos": extract_prototypes(model, loader, num_classes, feature_dim, device),
+        "protos": local_protos,
+        "counts": local_counts,
     }
 
 
@@ -110,7 +116,9 @@ class Server(BaseServer):
                     self.num_class,
                     self.args.feature_dim,
                     self.args.mu,
-                    self.global_protos.cpu() if self.global_protos is not None else None,
+                    self.global_protos.cpu()
+                    if self.global_protos is not None
+                    else None,
                 ]
                 for i in selected_clients
             ]
@@ -118,23 +126,20 @@ class Server(BaseServer):
 
             total_loss = 0.0
             selected_protos = []
+            selected_counts = []
             for cid, res in results.items():
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
                 selected_protos.append(res["protos"])
+                selected_counts.append(res["counts"])
             self.loss.append(total_loss / num_join_clients)
 
-            # 计算参与客户端的权重
-            current_weights = [self.weights[i] for i in selected_clients]
-            sum_weights = sum(current_weights)
-            norm_weights = [w / sum_weights for w in current_weights]
-
-            # 使用统一的张量聚合函数
+            # 聚合原型向量：按样本计数加权
             self.global_protos = proto_aggregate(
                 selected_protos,
-                weights=norm_weights,
+                local_counts_list=selected_counts,
                 old_global_protos=self.global_protos,
-            ).to(self.device)
+            )
             self.evaluate(protos=self.global_protos)
 
             print(

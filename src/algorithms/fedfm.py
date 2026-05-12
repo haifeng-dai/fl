@@ -10,6 +10,7 @@ from .utils import (
     extract_prototypes,
     get_model,
     mse_loss,
+    proto_aggregate,
 )
 
 
@@ -190,17 +191,10 @@ class Server(BaseServer):
     def aggregate_anchors(self, all_local_anchors, all_local_counts):
         """
         将来自不同客户端的本地锚点按样本数量加权聚合为全局锚点。
+        使用统一的 proto_aggregate 函数实现向量化聚合。
         """
-        # 按样本数加权求和
-        weighted_sum = torch.zeros_like(self.global_anchors)
-        total_counts = torch.zeros(self.num_class, dtype=torch.float32)
-
-        for anchors, counts in zip(all_local_anchors, all_local_counts):
-            for label, proto in anchors.items():
-                n = counts[label]
-                weighted_sum[label] += proto * n
-                total_counts[label] += n
-
-        # 对有贡献的类别取加权平均
-        mask = total_counts > 0
-        self.global_anchors[mask] = weighted_sum[mask] / total_counts[mask].unsqueeze(1)
+        self.global_anchors = proto_aggregate(
+            all_local_anchors,
+            local_counts_list=all_local_counts,
+            old_global_protos=self.global_anchors,
+        )

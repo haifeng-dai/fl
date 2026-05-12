@@ -116,9 +116,9 @@ def client_worker(params):
     avg_loss_ce = total_loss_ce / num_batches
     avg_loss_proto = total_loss_proto / num_batches
 
-    # 收集最新的本地原型 (按类别平均特征向量)
-    local_protos_avg = extract_prototypes(
-        model, loader, num_classes, feature_dim, device
+    # 收集最新的本地原型及样本计数
+    local_protos_avg, local_counts = extract_prototypes(
+        model, loader, num_classes, feature_dim, device, return_counts=True
     )
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
@@ -127,6 +127,7 @@ def client_worker(params):
         "loss_proto": avg_loss_proto,
         "state": model_state,
         "protos": local_protos_avg,
+        "counts": local_counts,
     }
 
 
@@ -190,12 +191,14 @@ class Server(BaseServer):
             total_loss_proto = 0.0
             selected_states = []
             selected_protos = []
+            selected_counts = []
             for cid, res in results.items():
                 total_loss_ce += res["loss"]
                 total_loss_proto += res["loss_proto"]
                 self.clients_state[cid] = res["state"]
                 selected_states.append(res["state"])
                 selected_protos.append(res["protos"])
+                selected_counts.append(res["counts"])
 
             self.loss.append(total_loss_ce / num_join_clients)
             self.loss_proto.append(total_loss_proto / num_join_clients)
@@ -210,7 +213,7 @@ class Server(BaseServer):
                         (p_tensor[label].to(self.device), label.item())
                     )
 
-            self.calculate_gap(selected_protos)
+            self.calculate_gap(selected_protos, selected_counts)
             self.update_tgp(uploaded_protos)
             self.evaluate(protos=self.global_protos)
 
@@ -220,10 +223,14 @@ class Server(BaseServer):
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def calculate_gap(self, protos_per_client):
+    def calculate_gap(self, protos_per_client, counts_per_client):
         """向量化计算类别间的最小间距 (GPU 加速)"""
-        # 使用统一的张量聚合函数获取平均原型
-        all_protos = proto_aggregate(protos_per_client).to(self.device)
+        # 使用统一的张量聚合函数获取按样本计数的平均原型，并用旧原型补全缺失类别
+        all_protos = proto_aggregate(
+            protos_per_client,
+            local_counts_list=counts_per_client,
+            old_global_protos=self.global_protos,
+        ).to(self.device)
         dist_matrix = torch.cdist(all_protos, all_protos, p=2.0)
         dist_matrix.fill_diagonal_(float("inf"))
         self.gap = torch.min(dist_matrix, dim=1)[0]

@@ -13,7 +13,6 @@ from .utils import (
     get_model,
     mse_loss,
     orthogonality_loss,
-    proto_aggregate,
 )
 
 
@@ -197,9 +196,7 @@ class Server(BaseServer):
             feature_dim=self.feature_dim,
             device=self.device,
         ).to(self.device)
-
         self.global_protos = None
-        self.gap = torch.ones(self.num_class, device=self.device) * 1e9
 
         # 初始化指标记录列表
         self.loss_proto = []
@@ -234,7 +231,9 @@ class Server(BaseServer):
                     self.args.lr_head,
                     self.args.lr_body,
                     self.args.lamda_,
-                    self.global_protos.cpu(),
+                    self.global_protos.cpu()
+                    if self.global_protos is not None
+                    else None,
                     self.num_class,
                     self.args.feature_dim,
                     self.args.lambda_p,
@@ -267,7 +266,6 @@ class Server(BaseServer):
                         (p_tensor[label].to(self.device), label.item())
                     )
 
-            self.calculate_gap(selected_protos)
             self.update_pln(uploaded_protos)
             self.evaluate(protos=self.global_protos)
 
@@ -278,38 +276,21 @@ class Server(BaseServer):
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def calculate_gap(self, protos_per_client):
-        """向量化计算类别间的最小间距 (GPU 加速)"""
-        # 使用统一的张量聚合函数获取平均原型
-        all_protos = proto_aggregate(protos_per_client).to(self.device)
-
-        # 计算两两之间的欧氏距离
-        dist_matrix = torch.cdist(all_protos, all_protos, p=2.0)
-
-        # 将对角线(自距离)设为无穷大，防止被误选为最小间距
-        dist_matrix.fill_diagonal_(float("inf"))
-
-        # 获取每个类别的最小间距 [C]
-        self.gap = torch.min(dist_matrix, dim=1)[0]
-
-        min_gap = torch.min(self.gap)
-        print(f"Min gap: {min_gap:.4f}, Max gap: {torch.max(self.gap):.4f}")
-
     def update_pln(self, uploaded_protos):
         self.pln.train()
         optimizer = torch.optim.SGD(self.pln.parameters(), lr=self.args.server_lr)
 
         # 预先生成类别索引张量，避免循环中重复转换
         all_class_ids = torch.arange(self.num_class, device=self.device)
+        proto_loader = DataLoader(
+            uploaded_protos, batch_size=self.args.batch_size, shuffle=True
+        )
 
         epoch_loss = 0.0
         epoch_loss_mse = 0.0
         epoch_loss_ortho = 0.0
         num_batches = 0
         for _ in range(self.args.server_epochs):
-            proto_loader = DataLoader(
-                uploaded_protos, batch_size=self.args.batch_size, shuffle=True
-            )
             for proto_batch, labels_batch in proto_loader:
                 proto_batch = proto_batch.to(self.device)
                 labels_batch = labels_batch.to(self.device, dtype=torch.long)
@@ -366,7 +347,6 @@ class Server(BaseServer):
                 "global_prototypes": self.global_protos,
                 "aux": {
                     "pln_net": self.pln.state_dict(),
-                    "gap": self.gap.cpu(),
                 },
             },
         }

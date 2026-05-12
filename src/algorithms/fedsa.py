@@ -116,16 +116,17 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    # 3. 计算最新的本地原型（按类别平均特征向量）
-    local_anchors_dict = extract_prototypes(
-        model, loader, num_classes, feature_dim, device
+    # 3. 计算最新的本地原型及样本计数
+    local_anchors, local_counts = extract_prototypes(
+        model, loader, num_classes, feature_dim, device, return_counts=True
     )
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     return {
         "loss": total_loss / num_batches,
         "state": model_state,
-        "protos": local_anchors_dict,
+        "protos": local_anchors,
+        "counts": local_counts,
     }
 
 
@@ -183,12 +184,14 @@ class Server(BaseServer):
             total_loss = 0.0
             selected_states = []
             local_anchors_list = []
+            local_counts_list = []
             current_weights = []
             for cid, res in results.items():
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
                 selected_states.append(res["state"])
                 local_anchors_list.append(res["protos"])
+                local_counts_list.append(res["counts"])
                 current_weights.append(self.weights[cid])
                 # 更新服务端缓存的客户端锚点，用于下一轮的边界 (margin) 计算
                 self.clients_anchors[cid] = res["protos"].detach().clone()
@@ -200,7 +203,7 @@ class Server(BaseServer):
             self.model.load_state_dict(param_aggregate(selected_states, norm_weights))
 
             # 2. 聚合各个本地原型以生成全局 P_bar 并更新语义锚点 A_bar (公式 10)
-            self.update_global_anchors(local_anchors_list, norm_weights)
+            self.update_global_anchors(local_anchors_list, local_counts_list)
 
             self.evaluate()
             print(
@@ -208,10 +211,13 @@ class Server(BaseServer):
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def update_global_anchors(self, local_anchors_list, norm_weights):
+    def update_global_anchors(self, local_anchors_list, local_counts_list):
         """对本地原型进行加权聚合，并对语义锚点执行 EMA（指数移动平均）更新。"""
-        # 使用统一的张量聚合函数
-        new_p_bar = proto_aggregate(local_anchors_list, weights=norm_weights)
+        # 使用统一的张量聚合函数，优先使用按类样本计数
+        new_p_bar = proto_aggregate(
+            local_anchors_list,
+            local_counts_list=local_counts_list,
+        )
 
         # 公式 (10): A_t+1 = alpha * A_t + (1 - alpha) * P_bar_t
         mask = torch.norm(new_p_bar, dim=1) > 1e-8

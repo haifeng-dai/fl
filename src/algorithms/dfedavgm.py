@@ -50,9 +50,9 @@ def client_worker(params):
     model.load_state_dict(model_state)
 
     # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-    if optimizer_state is not None:
-        optimizer.load_state_dict(optimizer_state)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr) # , momentum=0.9)
+    # if optimizer_state is not None:
+    #     optimizer.load_state_dict(optimizer_state)
 
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
@@ -76,20 +76,20 @@ def client_worker(params):
     # 4. 整理返回结果
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     # 导出动量状态字典
-    new_optimizer_state = {
-        "state": {
-            k: {
-                mk: mv.cpu().detach().clone() if torch.is_tensor(mv) else mv
-                for mk, mv in v.items()
-            }
-            for k, v in optimizer.state_dict()["state"].items()
-        },
-        "param_groups": optimizer.state_dict()["param_groups"],
-    }
+    # new_optimizer_state = {
+    #     "state": {
+    #         k: {
+    #             mk: mv.cpu().detach().clone() if torch.is_tensor(mv) else mv
+    #             for mk, mv in v.items()
+    #         }
+    #         for k, v in optimizer.state_dict()["state"].items()
+    #     },
+    #     "param_groups": optimizer.state_dict()["param_groups"],
+    # }
     return {
         "loss": avg_loss,
         "state": model_state,
-        "opt_state": new_optimizer_state,
+        "opt_state": None, # new_optimizer_state,
     }
 
 

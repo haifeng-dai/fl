@@ -11,7 +11,7 @@ n_class: 0 # 0 表示自动根据数据集选择
 test_ratio: 0.2
 
 # 训练相关 (Training)
-rounds: 0  # pFL: 200, gFL: 1000, 0 表示自动调整
+rounds: 0 # pFL: 200, gFL: 1000, 0 表示自动调整
 epochs: 10
 lr: 0.01
 momentum: 0.0
@@ -19,7 +19,7 @@ weight_decay: 0.0
 batch_size: 64
 join_ratio: 1.0
 seed: 42
-times: 5
+times: 1
 
 # 资源与框架 (Resources & Ray)
 gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
