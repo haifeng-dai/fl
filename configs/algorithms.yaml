@@ -39,7 +39,7 @@ fedrep:
     epochs_head: 5
 
 fedproto:
-    mu: 1.0
+    mu: 0.1
 
 fedala:
     eta: 1.0
@@ -103,10 +103,18 @@ proxyfl:
 
 dfedup:
     mu: 1.0
-    temp: 1
 
 dfedup1:
-    mu: 0.1
+    mu: 1.0
 
 dfedup2:
+    mu: 1.0
+
+dfedup3:
+    mu: 1.0
+
+dfedup4:
+    mu: 1.0
+
+dfedup5:
     mu: 1.0

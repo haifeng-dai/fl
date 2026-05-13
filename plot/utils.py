@@ -81,10 +81,13 @@ class ResultLoader:
             "pearfl": lambda args: f"_{get_adj_suffix(args)}_{args['lamda']}",
             "dfedavgm": lambda args: f"_{get_adj_suffix(args)}",
             "dfedpgp": lambda args: f"_{get_adj_suffix(args)}_{args['local_v_epochs']}_{args['lr_v']}_{args['momentum_v']}_{args['weight_decay_v']}",
-            "dfedup": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}_{args['temp']}",
+            "proxyfl": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
+            "dfedup": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
             "dfedup1": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
             "dfedup2": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
-            "proxyfl": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
+            "dfedup3": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
+            "dfedup4": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
+            "dfedup5": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
         }
 
     def _average_recursive(self, data_list):
@@ -377,7 +380,7 @@ def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
     print(f"Figure saved to figures/{save_name}")
     plt.show()
 
-def load_plot(selected_group, experiments, common_args, loader, x_lim=200):
+def load_plot(selected_group, experiments, common_args, loader, x_lim=200, do_plot=True):
     """
     加载并绘制对比图，根据数据格式自动识别是单线还是 Model/Proto 分离。
     """
@@ -389,6 +392,10 @@ def load_plot(selected_group, experiments, common_args, loader, x_lim=200):
         if data: results[label] = data
 
     if results:
+        if not do_plot:
+            print_summary_table(results, x_lim, metric="acc")
+            return
+
         # 尝试检查第一个结果的 'acc' 类型来决定绘图函数
         first_res = list(results.values())[0]
         if isinstance(first_res.get("acc"), dict):

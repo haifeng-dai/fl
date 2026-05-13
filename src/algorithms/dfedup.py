@@ -8,10 +8,12 @@ from torch.utils.data import DataLoader
 from .utils import (
     BaseServer,
     ce_loss,
-    cos_contrastive_loss,
     extract_prototypes,
     generate_adjacency_matrix,
     get_model,
+    mse_loss,
+    param_aggregate,
+    pushsum_param_aggregate,
 )
 
 
@@ -24,7 +26,7 @@ def get_path(args):
     elif args.adj_type == "scale_free":
         adj_suffix += f"_{args.m_scale_free}"
 
-    args.file_name = f"{args.common_name}_{adj_suffix}_{args.mu}_{args.temp}"
+    args.file_name = f"{args.common_name}_{adj_suffix}_{args.mu}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -46,7 +48,6 @@ def client_worker(params):
         num_classes,
         consensus_P,
         mu,
-        temp,
     ) = params
 
     # 1. 初始化模型并加载状态
@@ -54,11 +55,41 @@ def client_worker(params):
     model.load_state_dict(model_state)
     consensus_P = consensus_P.to(device)
 
-    # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    # 2. 设置数据加载器与原型标签
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    proto_labels = torch.arange(num_classes, device=device)
 
-    # 3. 本地训练：引入对比损失项
+    # === Phase 1: Classifier Calibration (固定 1 Epoch) ===
+    # 目的：利用共识原型校准分类头的决策边界
+    for param in model.extractor.parameters():
+        param.requires_grad = False
+    for param in model.classifier.parameters():
+        param.requires_grad = True
+
+    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=lr)
+    model.train()
+    for _ in range(epochs):
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            # 本地交叉熵 + 全局原型校准
+            loss_ce_local = ce_loss(model(x), y)
+            p_out = model.classifier(consensus_P)
+            loss_ce_proto = ce_loss(p_out, proto_labels)
+
+            loss = loss_ce_local + mu * loss_ce_proto
+
+            optimizer_head.zero_grad()
+            loss.backward()
+            optimizer_head.step()
+
+    # === Phase 2: Extractor Alignment (执行 epochs 次) ===
+    # 目的：微调特征表示，使其向共识原型靠拢
+    for param in model.classifier.parameters():
+        param.requires_grad = False
+    for param in model.extractor.parameters():
+        param.requires_grad = True
+
+    optimizer_body = torch.optim.SGD(model.extractor.parameters(), lr=lr)
     model.train()
     total_loss, num_batches = 0.0, 0
     for _ in range(epochs):
@@ -68,14 +99,15 @@ def client_worker(params):
             features = model.extractor(x)
             logits = model.classifier(features)
 
-            # 损失组合：交叉熵损失 + 原型对比损失
+            # 损失组合：交叉熵损失 + 原型 MSE 对齐损失
             l_ce = ce_loss(logits, y)
-            l_con = cos_contrastive_loss(features, consensus_P, y, temperature=temp)
+            target_protos = consensus_P[y]
+            l_con = mse_loss(features, target_protos)
             loss = l_ce + mu * l_con
 
-            optimizer.zero_grad()
+            optimizer_body.zero_grad()
             loss.backward()
-            optimizer.step()
+            optimizer_body.step()
 
             total_loss += loss.item()
             num_batches += 1
@@ -111,7 +143,6 @@ class Server(BaseServer):
 
         # 1. 通信拓扑初始化
         adj = generate_adjacency_matrix(args).to(self.device).float()
-        # adj 在 generate_adjacency_matrix 中已经包含了自环 (diagonal=1)
 
         # 预计算混合矩阵 M (列随机，保证 Push-Sum 质量守恒)
         row_sum = adj.sum(dim=1, keepdim=True)
@@ -119,11 +150,14 @@ class Server(BaseServer):
 
         # 2. 初始化各客户端的 Push-Sum 状态缓存与共识原型
         self.S_cache = [
-            torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)
+            torch.zeros(self.num_class, args.feature_dim)
+            for _ in range(self.num_clients)
         ]
         self.W_cache = [torch.zeros(self.num_class, 1) for _ in range(self.num_clients)]
+        self.W_E_cache = torch.ones(self.num_clients, 1)
         self.consensus_P = [
-            torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)
+            torch.zeros(self.num_class, args.feature_dim)
+            for _ in range(self.num_clients)
         ]
 
     def fit(self):
@@ -155,7 +189,6 @@ class Server(BaseServer):
                     self.num_class,
                     self.consensus_P[i],
                     self.args.mu,
-                    self.args.temp,
                 )
 
             params = [get_client_param(i) for i in selected_clients]
@@ -204,6 +237,19 @@ class Server(BaseServer):
                 self.S_cache[i] = S_tensor[i].cpu()
                 self.W_cache[i] = W_tensor[i].cpu()
                 self.consensus_P[i] = consensus[i].cpu()
+
+            # 5. 执行模型 Extractor 的去中心化聚合 (Push-Sum)
+            # 仅聚合特征提取器部分，分类器保持私有以保留个性化
+            new_extractors, self.W_E_cache = pushsum_param_aggregate(
+                self.clients_state,
+                self.W_E_cache,
+                self.M,
+                gossip_rounds=gossip_rounds,
+                prefix="extractor.",
+            )
+
+            for i in range(self.num_clients):
+                self.clients_state[i].update(new_extractors[i])
 
             # 6. 执行评估
             self.evaluate()

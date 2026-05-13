@@ -1,6 +1,6 @@
 import torch
 
-from .aggregate import param_aggregate, proto_aggregate
+from .aggregate import param_aggregate, proto_aggregate, pushsum_param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 from .fed_utils import BaseServer, get_model
 from .loss import (

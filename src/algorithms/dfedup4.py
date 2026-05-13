@@ -55,11 +55,41 @@ def client_worker(params):
     model.load_state_dict(model_state)
     consensus_P = consensus_P.to(device)
 
-    # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    # 2. 设置数据加载器与原型标签
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    proto_labels = torch.arange(num_classes, device=device)
 
-    # 3. 本地训练：联合优化分类器与特征提取器
+    # === Phase 1: Classifier Calibration (固定 1 Epoch) ===
+    # 目的：利用共识原型校准分类头的决策边界
+    for param in model.extractor.parameters():
+        param.requires_grad = False
+    for param in model.classifier.parameters():
+        param.requires_grad = True
+
+    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=lr)
+    model.train()
+    for _ in range(epochs):
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            # 本地交叉熵 + 全局原型校准
+            loss_ce_local = ce_loss(model(x), y)
+            p_out = model.classifier(consensus_P)
+            loss_ce_proto = ce_loss(p_out, proto_labels)
+
+            loss = loss_ce_local + mu * loss_ce_proto
+
+            optimizer_head.zero_grad()
+            loss.backward()
+            optimizer_head.step()
+
+    # === Phase 2: Extractor Alignment (执行 epochs 次) ===
+    # 目的：微调特征表示，使其向共识原型靠拢
+    for param in model.classifier.parameters():
+        param.requires_grad = False
+    for param in model.extractor.parameters():
+        param.requires_grad = True
+
+    optimizer_body = torch.optim.SGD(model.extractor.parameters(), lr=lr)
     model.train()
     total_loss, num_batches = 0.0, 0
     for _ in range(epochs):
@@ -75,9 +105,9 @@ def client_worker(params):
             l_con = mse_loss(features, target_protos)
             loss = l_ce + mu * l_con
 
-            optimizer.zero_grad()
+            optimizer_body.zero_grad()
             loss.backward()
-            optimizer.step()
+            optimizer_body.step()
 
             total_loss += loss.item()
             num_batches += 1
@@ -208,18 +238,18 @@ class Server(BaseServer):
                 self.W_cache[i] = W_tensor[i].cpu()
                 self.consensus_P[i] = consensus[i].cpu()
 
-            # 5. 执行模型 Extractor 的去中心化聚合 (Push-Sum)
-            # 仅聚合特征提取器部分，分类器保持私有以保留个性化
-            new_extractors, self.W_E_cache = pushsum_param_aggregate(
+            # 5. 执行模型 Classifier 的去中心化聚合 (Push-Sum)
+            # 消融实验：仅聚合分类器，特征提取器保持私有
+            new_classifiers, self.W_E_cache = pushsum_param_aggregate(
                 self.clients_state,
                 self.W_E_cache,
                 self.M,
                 gossip_rounds=gossip_rounds,
-                prefix="extractor.",
+                prefix="classifier.",
             )
 
             for i in range(self.num_clients):
-                self.clients_state[i].update(new_extractors[i])
+                self.clients_state[i].update(new_classifiers[i])
 
             # 6. 执行评估
             self.evaluate()

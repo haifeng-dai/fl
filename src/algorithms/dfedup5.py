@@ -46,25 +46,34 @@ def client_worker(params):
         epochs,
         feature_dim,
         num_classes,
+        consensus_P,
+        mu,
     ) = params
 
     # 1. 初始化模型并加载状态
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
+    consensus_P = consensus_P.to(device)
 
     # 2. 设置优化器与数据加载器
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # 3. 本地训练：仅执行基础交叉熵训练（消融掉原型对齐）
+    # 3. 本地训练：引入对比损失项
     model.train()
     total_loss, num_batches = 0.0, 0
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
 
-            logits = model(x)
-            loss = ce_loss(logits, y)
+            features = model.extractor(x)
+            logits = model.classifier(features)
+
+            # 损失组合：交叉熵损失 + 原型 MSE 对齐损失
+            l_ce = ce_loss(logits, y)
+            target_protos = consensus_P[y]
+            l_con = mse_loss(features, target_protos)
+            loss = l_ce + mu * l_con
 
             optimizer.zero_grad()
             loss.backward()
@@ -73,12 +82,24 @@ def client_worker(params):
             total_loss += loss.item()
             num_batches += 1
 
-    # 4. 整理返回结果（不含原型状态量）
+    # 4. 提取本地最新原型并转换为 Push-Sum 状态量 (S 和 W)
+    local_protos, local_counts = extract_prototypes(
+        model, loader, num_classes, feature_dim, device, return_counts=True
+    )
+
+    # 向量化计算置信度驱动的 Push-Sum 初始值
+    confidence = torch.log(1 + local_counts.unsqueeze(-1))
+    S = confidence * local_protos
+    W = confidence
+
+    # 5. 整理返回结果（严格遵守 GEMINI.md 规约）
     new_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
 
     return {
         "loss": total_loss / num_batches,
         "state": new_state,
+        "S": S.cpu().detach().clone(),
+        "W": W.cpu().detach().clone(),
     }
 
 
@@ -97,8 +118,17 @@ class Server(BaseServer):
         row_sum = adj.sum(dim=1, keepdim=True)
         self.M = (adj / row_sum).t().to(self.device)
 
-        # 2. 初始化 Extractor 的 Push-Sum 权重
+        # 2. 初始化各客户端的 Push-Sum 状态缓存与共识原型
+        self.S_cache = [
+            torch.zeros(self.num_class, args.feature_dim)
+            for _ in range(self.num_clients)
+        ]
+        self.W_cache = [torch.zeros(self.num_class, 1) for _ in range(self.num_clients)]
         self.W_E_cache = torch.ones(self.num_clients, 1)
+        self.consensus_P = [
+            torch.zeros(self.num_class, args.feature_dim)
+            for _ in range(self.num_clients)
+        ]
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -127,6 +157,8 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.feature_dim,
                     self.num_class,
+                    self.consensus_P[i],
+                    self.args.mu,
                 )
 
             params = [get_client_param(i) for i in selected_clients]
@@ -139,25 +171,54 @@ class Server(BaseServer):
             for cid, res in results.items():
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
+                self.S_cache[cid] = res["S"]
+                self.W_cache[cid] = res["W"]
 
             self.loss.append(total_loss / num_join_clients)
 
-            # 4. 执行模型 Extractor 的去中心化聚合 (Push-Sum)
-            # 根据配置执行多轮 Gossip (默认为 1)
+            # 4. 执行全图 Gossip
+            S = torch.stack([self.S_cache[i] for i in range(self.num_clients)]).to(
+                self.device
+            )
+            W = torch.stack([self.W_cache[i] for i in range(self.num_clients)]).to(
+                self.device
+            )
+
+            S_flat = S.view(self.num_clients, -1)
+            W_flat = W.view(self.num_clients, -1)
+
+            # 根据配置执行多轮 Gossip (默认为 1，如果 args 中没有则取 1)
             gossip_rounds = getattr(self.args, "gossip_rounds", 1)
-            # 仅聚合特征提取器部分，分类器保持私有以保留个性化
-            new_extractors, self.W_E_cache = pushsum_param_aggregate(
+            for _ in range(gossip_rounds):
+                S_flat = torch.mm(self.M, S_flat)
+                W_flat = torch.mm(self.M, W_flat)
+
+            # 5. 计算并写回共识原型
+            # S_flat: [N, C*D], W_flat: [N, C*1] -> 这里 W_flat 展开其实是 [N, C]
+            # 修正 W_flat 的形状以匹配 S_flat 的块结构
+            W_tensor = W_flat.view(self.num_clients, self.num_class, 1)
+            S_tensor = S_flat.view(
+                self.num_clients, self.num_class, self.args.feature_dim
+            )
+
+            consensus = S_tensor / (W_tensor + 1e-12)
+
+            for i in range(self.num_clients):
+                self.S_cache[i] = S_tensor[i].cpu()
+                self.W_cache[i] = W_tensor[i].cpu()
+                self.consensus_P[i] = consensus[i].cpu()
+
+            # 5. 执行全量模型的去中心化聚合 (Push-Sum)
+            # 消融实验：不设 prefix，全量聚合特征提取器和分类器
+            new_states, self.W_E_cache = pushsum_param_aggregate(
                 self.clients_state,
                 self.W_E_cache,
                 self.M,
                 gossip_rounds=gossip_rounds,
-                prefix="extractor.",
             )
+            self.clients_state = new_states
 
-            for i in range(self.num_clients):
-                self.clients_state[i].update(new_extractors[i])
-
-            # 5. 执行评估
+            # 6. 执行评估
             self.evaluate()
 
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")

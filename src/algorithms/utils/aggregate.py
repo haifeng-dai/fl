@@ -70,3 +70,74 @@ def proto_aggregate(
         new_global_protos[missing_mask] = old_global_protos[missing_mask]
 
     return new_global_protos
+
+
+def pushsum_param_aggregate(
+    state_dicts: list[dict[str, torch.Tensor]],
+    weights: torch.Tensor,
+    M: torch.Tensor,
+    gossip_rounds: int = 1,
+    prefix: str = None,
+):
+    """
+    使用矩阵运算形式的 Push-Sum 机制聚合模型参数字典列表。
+
+    Args:
+        state_dicts: 客户端参数字典列表 (state_dict)
+        weights: 初始权重张量 [N, 1]
+        M: 混合矩阵 [N, N] (列随机)
+        gossip_rounds: 迭代轮数
+        prefix: 仅聚合以该前缀开头的键（例如 'extractor.'），为 None 则聚合全部
+
+    Returns:
+        new_state_dicts: 聚合后的参数字典列表
+        new_weights: 演化后的权重张量 [N, 1]
+    """
+    num_clients = len(state_dicts)
+    if num_clients == 0:
+        return [], weights
+
+    # 1. 过滤并记录参数结构
+    target_keys = [
+        k for k in state_dicts[0].keys() if prefix is None or k.startswith(prefix)
+    ]
+
+    param_info = []
+    total_size = 0
+    for k in target_keys:
+        shape = state_dicts[0][k].shape
+        size = state_dicts[0][k].numel()
+        param_info.append((k, shape, total_size, total_size + size))
+        total_size += size
+
+    # 2. 扁平化所有客户端参数到矩阵 [N, total_size]
+    device = M.device
+    # 使用 float32 保证精度与 param_aggregate 一致
+    S_flat = torch.zeros(num_clients, total_size, device=device, dtype=torch.float32)
+    for i in range(num_clients):
+        vec = torch.cat([state_dicts[i][k].view(-1) for k in target_keys])
+        S_flat[i] = vec.to(device)
+
+    W_flat = weights.to(device).view(num_clients, 1).to(torch.float32)
+
+    # 3. 矩阵形式执行多轮 Push-Sum 迭代
+    with torch.no_grad():
+        for _ in range(gossip_rounds):
+            S_flat = torch.mm(M, S_flat)
+            W_flat = torch.mm(M, W_flat)
+
+    # 4. 计算共识值 (S / W)
+    consensus_flat = S_flat / (W_flat + 1e-12)
+
+    # 5. 恢复参数形状并返回
+    consensus_flat = consensus_flat.cpu()
+    W_flat = W_flat.cpu()
+
+    new_state_dicts = []
+    for i in range(num_clients):
+        client_state = {}
+        for k, shape, start, end in param_info:
+            client_state[k] = consensus_flat[i, start:end].view(shape).clone()
+        new_state_dicts.append(client_state)
+
+    return new_state_dicts, W_flat
