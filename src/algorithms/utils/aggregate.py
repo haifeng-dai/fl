@@ -98,9 +98,16 @@ def pushsum_param_aggregate(
         return [], weights
 
     # 1. 过滤并记录参数结构
-    target_keys = [
-        k for k in state_dicts[0].keys() if prefix is None or k.startswith(prefix)
-    ]
+    if isinstance(prefix, str):
+        target_keys = [k for k in state_dicts[0].keys() if k.startswith(prefix)]
+    elif isinstance(prefix, (list, tuple)):
+        target_keys = [
+            k for k in state_dicts[0].keys() 
+            if any(k.startswith(p) for p in prefix)
+        ]
+    else:
+        target_keys = list(state_dicts[0].keys())
+
 
     param_info = []
     total_size = 0

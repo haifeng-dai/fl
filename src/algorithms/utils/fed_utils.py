@@ -137,7 +137,7 @@ class BaseServer:
         # 根据 max_workers_per_gpu 计算 Ray 需要的显存比例 (1/n)
         ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
 
-        remote_worker = worker.options(num_gpus=ray_gpu_fraction)
+        remote_worker = worker.options(num_gpus=ray_gpu_fraction, scheduling_strategy="SPREAD")
         futures = [remote_worker.remote(client_worker, p) for p in parameters]
         results_list = ray.get(futures)
         return {parameters[i][0]: results_list[i] for i in range(len(parameters))}

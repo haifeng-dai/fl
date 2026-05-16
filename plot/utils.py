@@ -83,11 +83,6 @@ class ResultLoader:
             "dfedpgp": lambda args: f"_{get_adj_suffix(args)}_{args['local_v_epochs']}_{args['lr_v']}_{args['momentum_v']}_{args['weight_decay_v']}",
             "proxyfl": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
             "dfedup": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
-            "dfedup1": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
-            "dfedup2": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
-            "dfedup3": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
-            "dfedup4": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
-            "dfedup5": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
         }
 
     def _average_recursive(self, data_list):
@@ -123,6 +118,12 @@ class ResultLoader:
 
         # 添加算法特定的后缀以实现严格参数匹配
         suffix_gen = self.algo_patterns.get(algo)
+
+        # 动态匹配逻辑：对于 dfedup 的各种消融实验版本，自动匹配基础模式
+        # 增加 .lower() 确保匹配鲁棒性
+        if not suffix_gen and algo.lower().startswith("dfedup"):
+            suffix_gen = self.algo_patterns.get("dfedup")
+
         if suffix_gen:
             base_name += suffix_gen(kwargs)
 
@@ -213,7 +214,7 @@ def plot_results(results_dict, x_lim, metric="acc", title=None, xlabel="Rounds",
     print(f"Figure saved to figures/{save_name}")
 
     # Print summary table
-    print(f"\nSummary of {metric.upper()}:")
+    print(f"Summary of {metric.upper()}:")
     print("-" * 65)
     print(f"{'Algorithm':<20} | {'Max Acc':>15} | {'Last 10 Avg':>15}")
     print("-" * 65)
@@ -227,7 +228,7 @@ def plot_results(results_dict, x_lim, metric="acc", title=None, xlabel="Rounds",
 
 def print_summary_table(results_dict, x_lim, metric="acc", label_name="Algorithm"):
     """Prints a consolidated summary table for model and prototype metrics."""
-    print(f"\nSummary of {metric.upper()}:")
+    print(f"Summary of {metric.upper()}:")
 
     display_label_name = beautify_label(label_name)
     header = f"{display_label_name:<20} | {'Model Max':>12} | {'Model Last10':>12} | {'Proto Max':>12} | {'Proto Last10':>12}"
@@ -409,7 +410,7 @@ def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=2
     """
     加载并统计多轮实验的均值和标准差。
     """
-    print(f"\nSummary of ALL RUNS (Mean ± Std):")
+    print(f"Summary of ALL RUNS (Mean ± Std):")
     header = f"{'Algorithm':<25} | {'Max Acc':>20} | {'Last 10 Avg':>20}"
     print("-" * 75)
     print(header)
@@ -467,7 +468,7 @@ def print_stats(selected_group, experiments, common_args, loader, x_lim=200):
     """
     加载并打印多轮实验的均值汇总（Model 和 Proto 分列显示）。
     """
-    print(f"\nSummary of Performance (Mean over runs):")
+    print(f"Summary of Performance (Mean over runs):")
     # 表头：Algorithm | Model Max | Model Last | Proto Max | Proto Last
     header = f"{'Algorithm':<25} | {'M-Max':>10} | {'M-Last':>10} | {'P-Max':>10} | {'P-Last':>10}"
     print("-" * 85)
