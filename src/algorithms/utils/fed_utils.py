@@ -32,7 +32,7 @@ class BaseServer:
 
         # 自适应 Round 调整逻辑
         if self.rounds == 0:
-            self.rounds = 100 if pfl else 1000
+            self.rounds = 500 if pfl else 1000
             args.rounds = self.rounds
             print(
                 f"-> Adaptive Rounds: detected {'PFL' if pfl else 'GFL'} algorithm, setting rounds={self.rounds}"
@@ -60,8 +60,16 @@ class BaseServer:
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
         # 1. 解析 GPU 资源
-        gpu_ids = [int(i) for i in args.gpus.split(",")]
-        self.device = gpu_ids[-1]  # 用于 Driver 进程评估
+        if isinstance(args.gpus, int):
+            gpu_ids = [args.gpus]
+        elif isinstance(args.gpus, str) and args.gpus.strip():
+            gpu_ids = [int(i) for i in args.gpus.split(",") if i.strip()]
+        else:
+            gpu_ids = [0]
+        # 由于 CUDA_VISIBLE_DEVICES 会将指定 GPU 编号映射为连续的 0 到 N-1，
+        # 故 Server 使用的 GPU 设备索引应为本地可见的最后一个，即 len(gpu_ids) - 1
+        dev_idx = len(gpu_ids) - 1
+        self.device = torch.device(f"cuda:{dev_idx}" if torch.cuda.is_available() and dev_idx >= 0 else "cpu")
 
         # 2. 强制设备映射：在 Ray Worker 环境中逻辑显卡始终映射为 cuda:0
         dev_str = "cuda:0" if torch.cuda.is_available() else "cpu"

@@ -11,7 +11,7 @@ n_class: 0 # 0 表示自动根据数据集选择
 test_ratio: 0.2
 
 # 训练相关 (Training)
-rounds: 0 # pFL: 100, gFL: 1000, 0 表示自动调整
+rounds: 1000 # pFL: 500, gFL: 1000, 0 表示自动调整
 epochs: 1
 lr: 0.01
 momentum: 0.0

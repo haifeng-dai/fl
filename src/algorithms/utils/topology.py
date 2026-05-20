@@ -53,40 +53,24 @@ def generate_adjacency_matrix(args):
 
 def compute_mh_weights(adj_matrix, device="cpu"):
     """
-    计算 Metropolis-Hastings (MH) 混合权重矩阵。
-
-    基于邻接矩阵的度数信息，为每个节点计算到所有节点的权重。
-    每个节点 i 的权重向量 mh_weights[i] 定义了其如何聚合所有节点的参数。
-
-    参数：
-        adj_matrix: 邻接矩阵，形状为 [N, N]
-        device: 计算设备
-
-    返回：
-        mh_weights: MH 权重矩阵，形状为 [N, N]
+    计算 Metropolis-Hastings (MH) 混合权重矩阵 (向量化版本)。
     """
     n = adj_matrix.shape[0]
-    adj_matrix = adj_matrix.to(device)
-    mh_weights = torch.zeros(n, n, device=device)
+    adj = adj_matrix.to(device).float()
 
-    for i in range(n):
-        # 获取节点 i 的度数（邻接矩阵第 i 行的非零元素个数）
-        deg_i = (adj_matrix[i] > 0).sum().item()
-        self_weight = 1.0
+    # 1. 计算度数 d_i (包含自环)
+    deg = (adj > 0).sum(dim=1).float()
 
-        # 遍历节点 i 的所有邻居（邻接矩阵中非零位置）
-        for j in torch.where(adj_matrix[i] > 0)[0].tolist():
-            if i == j:
-                continue
-            # 获取邻居 j 的度数
-            deg_j = (adj_matrix[j] > 0).sum().item()
-            w_ij = 1.0 / max(deg_i, deg_j)
-            mh_weights[i, j] = w_ij
-            self_weight -= w_ij
+    # 2. 计算所有 pair 的 1 / max(d_i, d_j)
+    max_deg = torch.max(deg.view(n, 1), deg.view(1, n))
+    W = adj / max_deg
 
-        mh_weights[i, i] = self_weight
+    # 3. 修正对角线：W_ii = 1 - sum_{j!=i} W_ij
+    W.fill_diagonal_(0.0)
+    diag_weights = torch.diag(1.0 - W.sum(dim=1))
+    W = W + diag_weights
 
-    return mh_weights
+    return W
 
 
 def sinkhorn_knopp(A, epsilon=1e-3, max_iter=100):

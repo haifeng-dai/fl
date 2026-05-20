@@ -32,7 +32,7 @@ def get_path(args):
 
 def client_worker(params):
     """
-    DFedUP11 Worker: 联合训练 + S/W 原型提取。
+    DFedUP Worker: 联合训练 + S/W 原型提取。
     """
     (
         _,

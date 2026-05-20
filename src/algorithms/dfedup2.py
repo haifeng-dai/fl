@@ -1,5 +1,4 @@
 import os
-import time
 
 import numpy as np
 import torch
@@ -8,12 +7,11 @@ from torch.utils.data import DataLoader
 from .utils import (
     BaseServer,
     ce_loss,
+    compute_mh_weights,
     extract_prototypes,
     generate_adjacency_matrix,
     get_model,
     mse_loss,
-    param_aggregate,
-    pushsum_param_aggregate,
 )
 
 
@@ -32,7 +30,7 @@ def get_path(args):
 
 def client_worker(params):
     """
-    DFedUP Worker: 执行本地模型训练、对比损失计算及原型提取。
+    DFedUP12 Worker: 联合训练 + S/W 原型提取。
     """
     (
         _,
@@ -46,74 +44,81 @@ def client_worker(params):
         epochs,
         feature_dim,
         num_classes,
+        consensus_P,
+        mu,
     ) = params
 
-    # 1. 初始化模型并加载状态
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
+    consensus_P = consensus_P.to(device)
 
-    # 2. 设置优化器与数据加载器
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # 3. 本地训练：仅执行基础交叉熵训练（消融掉原型对齐）
     model.train()
     total_loss, num_batches = 0.0, 0
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
+            features = model.extractor(x)
+            logits = model.classifier(features)
 
-            logits = model(x)
-            loss = ce_loss(logits, y)
+            l_ce = ce_loss(logits, y)
+            target_protos = consensus_P[y]
+            l_con = mse_loss(features, target_protos)
+            loss = l_ce + mu * l_con
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
             total_loss += loss.item()
             num_batches += 1
 
-    # 4. 整理返回结果（不含原型状态量）
+    local_protos, local_counts = extract_prototypes(
+        model, loader, num_classes, feature_dim, device, return_counts=True
+    )
+    confidence = torch.log(1 + local_counts.unsqueeze(-1))
+    S = confidence * local_protos
+    W = confidence
+
     new_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
 
     return {
-        "loss": total_loss / num_batches,
+        "loss": total_loss / max(1, num_batches),
         "state": new_state,
+        "S": S.cpu().detach().clone(),
+        "W": W.cpu().detach().clone(),
     }
 
 
 class Server(BaseServer):
-    """
-    DFedUP Server: 管理去中心化原型共识的演化。
-    """
-
     def __init__(self, args):
         super().__init__(pfl=True, args=args)
-
-        # 1. 通信拓扑初始化
         adj = generate_adjacency_matrix(args).to(self.device).float()
 
-        # 预计算混合矩阵 M (列随机，保证 Push-Sum 质量守恒)
-        row_sum = adj.sum(dim=1, keepdim=True)
-        self.M = (adj / row_sum).t().to(self.device)
+        # 全部采用双随机矩阵 (MH Weights) 进行普通平均聚合
+        self.M_avg = compute_mh_weights(adj, device=self.device)
 
-        # 2. 初始化 Extractor 的 Push-Sum 权重
-        self.W_E_cache = torch.ones(self.num_clients, 1)
+        self.S_cache = [
+            torch.zeros(self.num_class, args.feature_dim)
+            for _ in range(self.num_clients)
+        ]
+        self.W_cache = [torch.zeros(self.num_class, 1) for _ in range(self.num_clients)]
+        self.consensus_P = [
+            torch.zeros(self.num_class, args.feature_dim)
+            for _ in range(self.num_clients)
+        ]
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
         num_join_clients = max(1, num_join_clients)
 
         for r in range(self.rounds):
-            t0 = time.time()
-            print(f"\n--- DFedUP Round {r + 1}/{self.rounds} ---")
-
+            print(f"\n--- DFedUP12 Round {r + 1}/{self.rounds} ---")
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
             )
-            print(f"Selected clients: {selected_clients}")
 
-            # 1. 准备客户端参数
             def get_client_param(i):
                 return (
                     i,
@@ -127,41 +132,87 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.feature_dim,
                     self.num_class,
+                    self.consensus_P[i],
+                    self.args.mu,
                 )
 
             params = [get_client_param(i) for i in selected_clients]
-
-            # 2. 启动 Ray 远程训练
             results = self.run_clients(client_worker, params)
 
-            # 3. 回收状态并更新缓存
             total_loss = 0.0
             for cid, res in results.items():
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
-
+                self.S_cache[cid] = res["S"]
+                self.W_cache[cid] = res["W"]
             self.loss.append(total_loss / num_join_clients)
 
-            # 4. 执行模型 Extractor 的去中心化聚合 (Push-Sum)
-            # 根据配置执行多轮 Gossip (默认为 1)
             gossip_rounds = getattr(self.args, "gossip_rounds", 1)
-            # 仅聚合特征提取器部分，分类器保持私有以保留个性化
-            new_extractors, self.W_E_cache = pushsum_param_aggregate(
-                self.clients_state,
-                self.W_E_cache,
-                self.M,
-                gossip_rounds=gossip_rounds,
-                prefix="extractor.",
+
+            # 1. 原型 (S, W): 普通平均聚合
+            S = torch.stack([self.S_cache[i] for i in range(self.num_clients)]).to(
+                self.device
             )
+            W = torch.stack([self.W_cache[i] for i in range(self.num_clients)]).to(
+                self.device
+            )
+            S_flat, W_flat = S.view(self.num_clients, -1), W.view(self.num_clients, -1)
+
+            for _ in range(gossip_rounds):
+                S_flat, W_flat = (
+                    torch.mm(self.M_avg, S_flat),
+                    torch.mm(self.M_avg, W_flat),
+                )
+
+            W_tensor = W_flat.view(self.num_clients, self.num_class, 1)
+            S_tensor = S_flat.view(
+                self.num_clients, self.num_class, self.args.feature_dim
+            )
+            consensus = S_tensor / (W_tensor + 1e-12)
 
             for i in range(self.num_clients):
-                self.clients_state[i].update(new_extractors[i])
+                self.S_cache[i], self.W_cache[i], self.consensus_P[i] = (
+                    S_tensor[i].cpu(),
+                    W_tensor[i].cpu(),
+                    consensus[i].cpu(),
+                )
 
-            # 5. 执行评估
+            # 2. Extractor: 普通平均聚合
+            target_prefix = "extractor."
+            target_keys = [
+                k for k in self.clients_state[0].keys() if k.startswith(target_prefix)
+            ]
+            if target_keys:
+                param_info = []
+                total_size = 0
+                for k in target_keys:
+                    shape = self.clients_state[0][k].shape
+                    size = self.clients_state[0][k].numel()
+                    param_info.append((k, shape, total_size, total_size + size))
+                    total_size += size
+
+                S_flat_params = torch.zeros(
+                    self.num_clients, total_size, device=self.device
+                )
+                for i in range(self.num_clients):
+                    vec = torch.cat(
+                        [self.clients_state[i][k].view(-1) for k in target_keys]
+                    )
+                    S_flat_params[i] = vec.to(self.device)
+
+                with torch.no_grad():
+                    for _ in range(gossip_rounds):
+                        S_flat_params = torch.mm(self.M_avg, S_flat_params)
+
+                S_flat_params = S_flat_params.cpu()
+                for i in range(self.num_clients):
+                    for k, shape, start, end in param_info:
+                        self.clients_state[i][k] = (
+                            S_flat_params[i, start:end].view(shape).clone()
+                        )
+
             self.evaluate()
-
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
-            print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
         f = {

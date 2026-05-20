@@ -3,16 +3,18 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
     ce_loss,
+    compute_mh_weights,
+    evaluate_prototype,
     extract_prototypes,
     generate_adjacency_matrix,
     get_model,
     mse_loss,
-    param_aggregate,
 )
 
 
@@ -31,7 +33,7 @@ def get_path(args):
 
 def client_worker(params):
     """
-    DFedUP Worker: 执行本地模型训练、对比损失计算及原型提取。
+    DFedUP11 Worker: 联合训练 + S/W 原型提取。
     """
     (
         _,
@@ -49,114 +51,84 @@ def client_worker(params):
         mu,
     ) = params
 
-    # 1. 初始化模型并加载状态
+    # 1. 初始化模型
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
     consensus_P = consensus_P.to(device)
 
-    # 2. 设置数据加载器与原型标签
+    # 2. 设置优化器与数据加载器
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
-    proto_labels = torch.arange(num_classes, device=device)
 
-    # === Phase 1: Classifier Calibration (固定 1 Epoch) ===
-    # 目的：利用共识原型校准分类头的决策边界
-    for param in model.extractor.parameters():
-        param.requires_grad = False
-    for param in model.classifier.parameters():
-        param.requires_grad = True
-
-    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=lr)
-    model.train()
-    for _ in range(epochs):
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            # 本地交叉熵 + 全局原型校准
-            loss_ce_local = ce_loss(model(x), y)
-            p_out = model.classifier(consensus_P)
-            loss_ce_proto = ce_loss(p_out, proto_labels)
-
-            loss = loss_ce_local + mu * loss_ce_proto
-
-            optimizer_head.zero_grad()
-            loss.backward()
-            optimizer_head.step()
-
-    # === Phase 2: Extractor Alignment (执行 epochs 次) ===
-    # 目的：微调特征表示，使其向共识原型靠拢
-    for param in model.classifier.parameters():
-        param.requires_grad = False
-    for param in model.extractor.parameters():
-        param.requires_grad = True
-
-    optimizer_body = torch.optim.SGD(model.extractor.parameters(), lr=lr)
+    # 3. 本地训练：联合优化
     model.train()
     total_loss, num_batches = 0.0, 0
     for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-
             features = model.extractor(x)
             logits = model.classifier(features)
 
-            # 损失组合：交叉熵损失 + 原型 MSE 对齐损失
             l_ce = ce_loss(logits, y)
             target_protos = consensus_P[y]
             l_con = mse_loss(features, target_protos)
             loss = l_ce + mu * l_con
 
-            optimizer_body.zero_grad()
+            optimizer.zero_grad()
             loss.backward()
-            optimizer_body.step()
+            optimizer.step()
 
             total_loss += loss.item()
             num_batches += 1
 
-    # 4. 提取本地最新原型并转换为 Push-Sum 状态量 (S 和 W)
+    # 4. 提取本地最新原型 (S 和 W)
     local_protos, local_counts = extract_prototypes(
         model, loader, num_classes, feature_dim, device, return_counts=True
     )
-
-    # 向量化计算置信度驱动的 Push-Sum 初始值
     confidence = torch.log(1 + local_counts.unsqueeze(-1))
     S = confidence * local_protos
     W = confidence
 
-    # 5. 整理返回结果（严格遵守 GEMINI.md 规约）
     new_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
 
     return {
-        "loss": total_loss / num_batches,
+        "loss": total_loss / max(1, num_batches),
         "state": new_state,
         "S": S.cpu().detach().clone(),
         "W": W.cpu().detach().clone(),
+        "counts": local_counts.cpu().detach().clone(),
     }
 
 
 class Server(BaseServer):
-    """
-    DFedUP Server: 管理去中心化原型共识的演化。
-    """
-
     def __init__(self, args):
         super().__init__(pfl=True, args=args)
-
-        # 1. 通信拓扑初始化
+        # 生成静态物理拓扑邻接矩阵
         adj = generate_adjacency_matrix(args).to(self.device).float()
+        self.adj = adj
 
-        # 预计算混合矩阵 M (列随机，保证 Push-Sum 质量守恒)
-        row_sum = adj.sum(dim=1, keepdim=True)
-        self.M = (adj / row_sum).t().to(self.device)
+        # 1. 计算静态 Metropolis-Hastings 双随机矩阵 (恒满足行和为 1、列和为 1 且对称)
+        self.M_avg = compute_mh_weights(adj, device=self.device)
 
-        # 2. 初始化各客户端的 Push-Sum 状态缓存与共识原型
+        # 状态缓存 (已彻底移除 W_params 虚拟权重依赖)
         self.S_cache = [
             torch.zeros(self.num_class, args.feature_dim)
             for _ in range(self.num_clients)
         ]
         self.W_cache = [torch.zeros(self.num_class, 1) for _ in range(self.num_clients)]
+        self.counts_cache = [
+            torch.zeros(self.num_class) for _ in range(self.num_clients)
+        ]
         self.consensus_P = [
             torch.zeros(self.num_class, args.feature_dim)
             for _ in range(self.num_clients)
         ]
+
+        # 每个客户端追踪自身 GSD 的历史 EMA（P2P 触发基准）
+        self.local_gsd_ema = torch.full((self.num_clients, 1), 0.5, device=self.device)
+        self.eta = 0.9
+        self.num_triggered_log: list[int] = []
+        self.triggered_ids_log: list[list[int]] = []
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -164,14 +136,11 @@ class Server(BaseServer):
 
         for r in range(self.rounds):
             t0 = time.time()
-            print(f"\n--- DFedUP Round {r + 1}/{self.rounds} ---")
-
+            print(f"\n--- DFedUP3 Round {r + 1}/{self.rounds} ---")
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
             )
-            print(f"Selected clients: {selected_clients}")
 
-            # 1. 准备客户端参数
             def get_client_param(i):
                 return (
                     i,
@@ -190,62 +159,216 @@ class Server(BaseServer):
                 )
 
             params = [get_client_param(i) for i in selected_clients]
-
-            # 2. 启动 Ray 远程训练
             results = self.run_clients(client_worker, params)
 
-            # 3. 回收状态并更新缓存
             total_loss = 0.0
             for cid, res in results.items():
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
-                self.S_cache[cid] = res["S"]
-                self.W_cache[cid] = res["W"]
+
+                # 接力缓存法核心：如果某类别在本轮本地训练中没有样本计数，继承上一轮结束时的值而不是清零！
+                counts = res["counts"]
+                S_local = res["S"]
+                W_local = res["W"]
+                for c in range(self.num_class):
+                    if counts[c] > 0:
+                        self.S_cache[cid][c] = S_local[c]
+                        self.W_cache[cid][c] = W_local[c]
+                self.counts_cache[cid] = counts
 
             self.loss.append(total_loss / num_join_clients)
 
-            # 4. 执行全图 Gossip
+            gossip_rounds = getattr(self.args, "gossip_rounds", 1)
+
+            # 1. 计算 Gossip 前的本地原型 local_P
             S = torch.stack([self.S_cache[i] for i in range(self.num_clients)]).to(
                 self.device
             )
             W = torch.stack([self.W_cache[i] for i in range(self.num_clients)]).to(
                 self.device
             )
+            local_P = S / (W + 1e-12)
 
-            S_flat = S.view(self.num_clients, -1)
-            W_flat = W.view(self.num_clients, -1)
+            # 2. 计算各客户端本轮的本地 GSD
+            all_gsds = []
+            for i in range(self.num_clients):
+                weights = self.counts_cache[i].to(self.device)
+                total_n = weights.sum()
+                if total_n > 0:
+                    probs = weights / total_n
+                    norm_local = torch.norm(local_P[i], dim=-1)
+                    norm_consensus = torch.norm(
+                        self.consensus_P[i].to(self.device), dim=-1
+                    )
+                    valid_mask = (norm_local > 1e-8) & (norm_consensus > 1e-8)
 
-            # 根据配置执行多轮 Gossip (默认为 1，如果 args 中没有则取 1)
-            gossip_rounds = getattr(self.args, "gossip_rounds", 1)
+                    cos_sim = torch.zeros(self.num_class, device=self.device)
+                    if valid_mask.any():
+                        cos_sim[valid_mask] = F.cosine_similarity(
+                            local_P[i][valid_mask],
+                            self.consensus_P[i].to(self.device)[valid_mask],
+                            dim=-1,
+                        )
+                    gsd = (probs * (1.0 - cos_sim)).sum()
+                else:
+                    gsd = torch.tensor(1.0, device=self.device)
+                all_gsds.append(gsd)
+
+            # 将 GSD 装载为列向量进行 Gossip
+            D = torch.stack(all_gsds).to(self.device).view(self.num_clients, 1)
+
+            # 3. 搭载 Gossip (S, W, D): 普通平均聚合 (using M_avg)
+            S_flat, W_flat = S.view(self.num_clients, -1), W.view(self.num_clients, -1)
             for _ in range(gossip_rounds):
-                S_flat = torch.mm(self.M, S_flat)
-                W_flat = torch.mm(self.M, W_flat)
+                S_flat = torch.mm(self.M_avg, S_flat)
+                W_flat = torch.mm(self.M_avg, W_flat)
+                D = torch.mm(self.M_avg, D)
 
-            # 5. 计算并写回共识原型
-            # S_flat: [N, C*D], W_flat: [N, C*1] -> 这里 W_flat 展开其实是 [N, C]
-            # 修正 W_flat 的形状以匹配 S_flat 的块结构
+            # 提取更新后的原型共识
             W_tensor = W_flat.view(self.num_clients, self.num_class, 1)
             S_tensor = S_flat.view(
                 self.num_clients, self.num_class, self.args.feature_dim
             )
-
             consensus = S_tensor / (W_tensor + 1e-12)
 
             for i in range(self.num_clients):
-                self.S_cache[i] = S_tensor[i].cpu()
-                self.W_cache[i] = W_tensor[i].cpu()
-                self.consensus_P[i] = consensus[i].cpu()
+                self.S_cache[i], self.W_cache[i], self.consensus_P[i] = (
+                    S_tensor[i].cpu(),
+                    W_tensor[i].cpu(),
+                    consensus[i].cpu(),
+                )
 
-            # 6. 执行评估
-            self.evaluate()
+            # 4. 基于每个客户端自身 GSD 历史 EMA 的 P2P 自适应触发
+            local_trigger = torch.zeros(
+                self.num_clients, dtype=torch.bool, device=self.device
+            )
+            if r == 0:
+                # 第一轮强制全员触发（热身，不污染 EMA）
+                local_trigger.fill_(True)
+                for i in range(self.num_clients):
+                    print(
+                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
+                    )
+            elif r == 1:
+                # 第二轮全员触发（过渡），同时初始化 local_gsd_ema = GSD_i
+                local_trigger.fill_(True)
+                for i in range(self.num_clients):
+                    self.local_gsd_ema[i] = all_gsds[i]
+                    print(
+                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
+                    )
+            else:
+                for i in range(self.num_clients):
+                    # 更新 local_gsd_ema（追踪 GSD_i 自身历史）
+                    self.local_gsd_ema[i] = (
+                        self.eta * self.local_gsd_ema[i]
+                        + (1.0 - self.eta) * all_gsds[i]
+                    )
 
-            print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
+                    current_gamma = self.local_gsd_ema[i]
+
+                    print(
+                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma: {current_gamma.item():.6f}"
+                    )
+
+                    if all_gsds[i] > current_gamma or self.counts_cache[i].sum() == 0:
+                        local_trigger[i] = True
+
+            # 邻域扩展激活（被激活链路双向开启，保持活跃子图无向对称）
+            trigger_mask = local_trigger.clone()
+            for i in range(self.num_clients):
+                if local_trigger[i]:
+                    neighbors = torch.where(self.adj[:, i] > 0)[0]
+                    for nb in neighbors:
+                        trigger_mask[nb.item()] = True
+
+            triggered_ids = torch.where(trigger_mask)[0].tolist()
+            num_triggered = len(triggered_ids)
+            print(
+                f"Event Triggered: {num_triggered}/{self.num_clients} clients will sync parameters (triggered clients: {triggered_ids})."
+            )
+            self.num_triggered_log.append(num_triggered)
+            self.triggered_ids_log.append(triggered_ids)
+
+            # 5. Extractor: 静态 MH 权重重定向局部双随机 Gossip 聚合 —— 核心突破点
+            target_prefix = "extractor."
+            target_keys = [
+                k for k in self.clients_state[0].keys() if k.startswith(target_prefix)
+            ]
+
+            if target_keys:
+                new_states = [{} for _ in range(self.num_clients)]
+                for i in range(self.num_clients):
+                    # 如果当前节点静默，它本轮不聚合任何邻居的参数，自环保持 100% (直接继承)
+                    if not trigger_mask[i]:
+                        for k in target_keys:
+                            new_states[i][k] = (
+                                self.clients_state[i][k].cpu().detach().clone()
+                            )
+                        continue
+
+                    # 如果当前节点活跃，它识别活跃邻居与静默邻居进行双随机累加
+                    neighbors = torch.where(self.adj[i] > 0)[0].tolist()
+                    physical_neighbors = [int(nb) for nb in neighbors if nb != i]
+
+                    active_neighbors = [
+                        nb for nb in physical_neighbors if trigger_mask[nb]
+                    ]
+                    silent_neighbors = [
+                        nb for nb in physical_neighbors if not trigger_mask[nb]
+                    ]
+
+                    # 动态本地吸纳重定向：自环权重 W_ii = 静态自环权重 + 所有静默邻居的静态权重
+                    W_ii = self.M_avg[i, i].clone()
+                    for k in silent_neighbors:
+                        W_ii += self.M_avg[i, k]
+
+                    for k in target_keys:
+                        # 混合自己的参数
+                        val = W_ii * self.clients_state[i][k].to(self.device)
+                        # 混合活跃物理邻居参数 (直接使用静态 MH 权重)
+                        for nb in active_neighbors:
+                            weight = self.M_avg[i, nb]
+                            val += weight * self.clients_state[nb][k].to(self.device)
+                        new_states[i][k] = val.cpu().detach().clone()
+
+                # 更新模型状态
+                for i in range(self.num_clients):
+                    self.clients_state[i].update(new_states[i])
+
+            self.evaluate(protos=self.consensus_P)
+            print(
+                f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%, Proto Acc: {self.acc_proto[-1]:.2f}%"
+            )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+
+    def evaluate(self, model_states=None, protos=None):
+        super().evaluate(model_states=model_states, protos=None)
+        if protos is not None:
+            p_accs = []
+            target_states = (
+                model_states if model_states is not None else self.clients_state
+            )
+            self.model.to(self.device)
+            for i in range(self.num_clients):
+                self.model.load_state_dict(target_states[i])
+                client_proto = protos[i].to(self.device)
+                p_accs.append(
+                    evaluate_prototype(
+                        self.model, client_proto, self.test_set[i], self.device
+                    )
+                )
+            p_acc = sum(p_accs) / len(p_accs) if p_accs else 0.0
+            self.acc_proto.append(p_acc)
+            self.model.cpu()
 
     def save(self):
         f = {
             "acc": self.acc,
             "loss": self.loss,
+            "acc_proto": self.acc_proto,
+            "num_triggered": self.num_triggered_log,
+            "triggered_ids": self.triggered_ids_log,
             "state_dict": self.clients_state,
             "consensus_P": self.consensus_P,
         }

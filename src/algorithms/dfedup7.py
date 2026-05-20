@@ -13,6 +13,7 @@ from .utils import (
     generate_adjacency_matrix,
     get_model,
     mse_loss,
+    pushsum_param_aggregate,
 )
 
 
@@ -31,7 +32,7 @@ def get_path(args):
 
 def client_worker(params):
     """
-    DFedUP10 Worker: 联合训练 + S/W 原型提取。
+    DFedUP7 Worker: 联合训练 + S/W 原型提取，支持样本计数返回。
     """
     (
         _,
@@ -49,16 +50,13 @@ def client_worker(params):
         mu,
     ) = params
 
-    # 1. 初始化模型
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
     consensus_P = consensus_P.to(device)
 
-    # 2. 设置优化器与数据加载器
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
-    # 3. 本地训练：联合优化
     model.train()
     total_loss, num_batches = 0.0, 0
     for _ in range(epochs):
@@ -75,11 +73,9 @@ def client_worker(params):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
             total_loss += loss.item()
             num_batches += 1
 
-    # 4. 提取本地最新原型 (S 和 W)
     local_protos, local_counts = extract_prototypes(
         model, loader, num_classes, feature_dim, device, return_counts=True
     )
@@ -94,26 +90,29 @@ def client_worker(params):
         "state": new_state,
         "S": S.cpu().detach().clone(),
         "W": W.cpu().detach().clone(),
+        "counts": local_counts.cpu().detach().clone(),
     }
 
 
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(pfl=True, args=args)
-        # 生成拓扑邻接矩阵
         adj = generate_adjacency_matrix(args).to(self.device).float()
 
-        # 1. 用于原型 Push-Sum 的列随机矩阵
+        # 1. 用于 Extractor Push-Sum 的列随机矩阵
         row_sum = adj.sum(dim=1, keepdim=True)
         self.M_ps = (adj / row_sum).t().to(self.device)
 
-        # 2. 用于 Extractor 普通平均聚合的双随机矩阵 (MH Weights)
+        # 2. 用于原型普通平均的双随机矩阵 (MH Weights)
         self.M_avg = compute_mh_weights(adj, device=self.device)
 
-        # 状态缓存
         self.S_cache = [torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)]
         self.W_cache = [torch.zeros(self.num_class, 1) for _ in range(self.num_clients)]
         self.consensus_P = [torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)]
+        self.counts_cache = [torch.zeros(self.num_class) for _ in range(self.num_clients)]
+
+        # Extractor Push-Sum 权重
+        self.W_params = torch.ones(self.num_clients, 1)
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
@@ -121,7 +120,7 @@ class Server(BaseServer):
 
         for r in range(self.rounds):
             t0 = time.time()
-            print(f"\n--- DFedUP10 Round {r + 1}/{self.rounds} ---")
+            print(f"\n--- DFedUP7 Round {r + 1}/{self.rounds} ---")
             selected_clients = np.random.choice(self.num_clients, num_join_clients, replace=False)
 
             def get_client_param(i):
@@ -139,21 +138,31 @@ class Server(BaseServer):
             for cid, res in results.items():
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
-                self.S_cache[cid] = res["S"]
-                self.W_cache[cid] = res["W"]
-
+                
+                # 虚拟历史权重锚定法核心：如果某类别在本轮本地训练中没有样本计数，赋予小权重 w_virtual，并以上一轮的共识原型为锚点
+                counts = res["counts"]
+                S_local = res["S"]
+                W_local = res["W"]
+                for c in range(self.num_class):
+                    if counts[c] > 0:
+                        self.S_cache[cid][c] = S_local[c]
+                        self.W_cache[cid][c] = W_local[c]
+                    else:
+                        w_virtual = 0.1
+                        self.W_cache[cid][c] = torch.tensor([w_virtual])
+                        self.S_cache[cid][c] = w_virtual * self.consensus_P[cid][c]
+                self.counts_cache[cid] = counts
             self.loss.append(total_loss / num_join_clients)
 
-            # --- 聚合逻辑 ---
             gossip_rounds = getattr(self.args, "gossip_rounds", 1)
 
-            # 1. 原型 (S, W): Push-Sum 聚合
+            # 1. 原型 (S, W): 普通平均聚合 (using M_avg)
             S = torch.stack([self.S_cache[i] for i in range(self.num_clients)]).to(self.device)
             W = torch.stack([self.W_cache[i] for i in range(self.num_clients)]).to(self.device)
             S_flat, W_flat = S.view(self.num_clients, -1), W.view(self.num_clients, -1)
 
             for _ in range(gossip_rounds):
-                S_flat, W_flat = torch.mm(self.M_ps, S_flat), torch.mm(self.M_ps, W_flat)
+                S_flat, W_flat = torch.mm(self.M_avg, S_flat), torch.mm(self.M_avg, W_flat)
 
             W_tensor = W_flat.view(self.num_clients, self.num_class, 1)
             S_tensor = S_flat.view(self.num_clients, self.num_class, self.args.feature_dim)
@@ -162,31 +171,13 @@ class Server(BaseServer):
             for i in range(self.num_clients):
                 self.S_cache[i], self.W_cache[i], self.consensus_P[i] = S_tensor[i].cpu(), W_tensor[i].cpu(), consensus[i].cpu()
 
-            # 2. Extractor: 普通平均聚合 (Gossip with M_avg)
-            target_prefix = "extractor."
-            target_keys = [k for k in self.clients_state[0].keys() if k.startswith(target_prefix)]
-            if target_keys:
-                param_info = []
-                total_size = 0
-                for k in target_keys:
-                    shape = self.clients_state[0][k].shape
-                    size = self.clients_state[0][k].numel()
-                    param_info.append((k, shape, total_size, total_size + size))
-                    total_size += size
-
-                S_flat_params = torch.zeros(self.num_clients, total_size, device=self.device)
-                for i in range(self.num_clients):
-                    vec = torch.cat([self.clients_state[i][k].view(-1) for k in target_keys])
-                    S_flat_params[i] = vec.to(self.device)
-
-                with torch.no_grad():
-                    for _ in range(gossip_rounds):
-                        S_flat_params = torch.mm(self.M_avg, S_flat_params)
-
-                S_flat_params = S_flat_params.cpu()
-                for i in range(self.num_clients):
-                    for k, shape, start, end in param_info:
-                        self.clients_state[i][k] = S_flat_params[i, start:end].view(shape).clone()
+            # 2. Extractor: Push-Sum 聚合 (using M_ps)
+            new_states, self.W_params = pushsum_param_aggregate(
+                self.clients_state, self.W_params, self.M_ps,
+                gossip_rounds=gossip_rounds, prefix="extractor."
+            )
+            for i in range(self.num_clients):
+                self.clients_state[i].update(new_states[i])
 
             self.evaluate()
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")

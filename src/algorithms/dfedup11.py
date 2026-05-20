@@ -14,7 +14,6 @@ from .utils import (
     generate_adjacency_matrix,
     get_model,
     mse_loss,
-    pushsum_param_aggregate,
 )
 
 
@@ -51,13 +50,16 @@ def client_worker(params):
         mu,
     ) = params
 
+    # 1. 初始化模型
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
     consensus_P = consensus_P.to(device)
 
+    # 2. 设置优化器与数据加载器
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
+    # 3. 本地训练：联合优化
     model.train()
     total_loss, num_batches = 0.0, 0
     for _ in range(epochs):
@@ -74,9 +76,11 @@ def client_worker(params):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
             total_loss += loss.item()
             num_batches += 1
 
+    # 4. 提取本地最新原型 (S 和 W)
     local_protos, local_counts = extract_prototypes(
         model, loader, num_classes, feature_dim, device, return_counts=True
     )
@@ -98,22 +102,18 @@ def client_worker(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(pfl=True, args=args)
+        # 生成静态物理拓扑邻接矩阵
         adj = generate_adjacency_matrix(args).to(self.device).float()
+        self.adj = adj
 
-        # 1. 用于 Extractor Push-Sum 的列随机矩阵
-        row_sum = adj.sum(dim=1, keepdim=True)
-        self.M_ps = (adj / row_sum).t().to(self.device)
-
-        # 2. 用于原型普通平均的双随机矩阵 (MH Weights)
+        # 1. 计算静态 Metropolis-Hastings 双随机矩阵 (恒满足行和为 1、列和为 1 且对称)
         self.M_avg = compute_mh_weights(adj, device=self.device)
 
+        # 状态缓存 (已彻底移除 W_params 虚拟权重依赖)
         self.S_cache = [torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)]
         self.W_cache = [torch.zeros(self.num_class, 1) for _ in range(self.num_clients)]
         self.counts_cache = [torch.zeros(self.num_class) for _ in range(self.num_clients)]
         self.consensus_P = [torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)]
-
-        # Extractor Push-Sum 权重
-        self.W_params = torch.ones(self.num_clients, 1)
 
         # 移动平均的 GSD 追踪
         self.historical_gsd_ema = torch.full((self.num_clients, 1), 0.5, device=self.device)
@@ -125,7 +125,7 @@ class Server(BaseServer):
 
         for r in range(self.rounds):
             t0 = time.time()
-            print(f"\n--- DFedUP5 Round {r + 1}/{self.rounds} ---")
+            print(f"\n--- DFedUP11 Round {r + 1}/{self.rounds} ---")
             selected_clients = np.random.choice(self.num_clients, num_join_clients, replace=False)
 
             def get_client_param(i):
@@ -143,8 +143,8 @@ class Server(BaseServer):
             for cid, res in results.items():
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
-                
-                # 虚拟历史权重锚定法核心：如果某类别在本轮本地训练中没有样本计数，赋予小权重 w_virtual，并以上一轮的共识原型为锚点
+
+                # 接力缓存法核心：如果某类别在本轮本地训练中没有样本计数，继承上一轮结束时的值而不是清零！
                 counts = res["counts"]
                 S_local = res["S"]
                 W_local = res["W"]
@@ -152,11 +152,8 @@ class Server(BaseServer):
                     if counts[c] > 0:
                         self.S_cache[cid][c] = S_local[c]
                         self.W_cache[cid][c] = W_local[c]
-                    else:
-                        w_virtual = 0.1
-                        self.W_cache[cid][c] = torch.tensor([w_virtual])
-                        self.S_cache[cid][c] = w_virtual * self.consensus_P[cid][c]
                 self.counts_cache[cid] = counts
+
             self.loss.append(total_loss / num_join_clients)
 
             gossip_rounds = getattr(self.args, "gossip_rounds", 1)
@@ -166,14 +163,13 @@ class Server(BaseServer):
             W = torch.stack([self.W_cache[i] for i in range(self.num_clients)]).to(self.device)
             local_P = S / (W + 1e-12)
 
-            # 2. 计算各客户端本轮的本地 GSD (基于上一轮的共识原型 self.consensus_P)
+            # 2. 计算各客户端本轮的本地 GSD
             all_gsds = []
             for i in range(self.num_clients):
                 weights = self.counts_cache[i].to(self.device)
                 total_n = weights.sum()
                 if total_n > 0:
                     probs = weights / total_n
-                    # 安全余弦相似度计算
                     norm_local = torch.norm(local_P[i], dim=-1)
                     norm_consensus = torch.norm(self.consensus_P[i].to(self.device), dim=-1)
                     valid_mask = (norm_local > 1e-8) & (norm_consensus > 1e-8)
@@ -185,14 +181,13 @@ class Server(BaseServer):
                             self.consensus_P[i].to(self.device)[valid_mask],
                             dim=-1
                         )
-                    # GSD 为加权余弦距离
                     gsd = (probs * (1.0 - cos_sim)).sum()
                 else:
-                    gsd = torch.tensor(1.0, device=self.device) # 无样本时默认设为最大漂移以触发同步
+                    gsd = torch.tensor(1.0, device=self.device)
                 all_gsds.append(gsd)
 
-            # 将分歧度向量搭载至 Gossip
-            D = torch.stack(all_gsds).view(self.num_clients, 1)
+            # 将 GSD 装载为列向量进行 Gossip
+            D = torch.stack(all_gsds).to(self.device).view(self.num_clients, 1)
 
             # 3. 搭载 Gossip (S, W, D): 普通平均聚合 (using M_avg)
             S_flat, W_flat = S.view(self.num_clients, -1), W.view(self.num_clients, -1)
@@ -210,40 +205,67 @@ class Server(BaseServer):
                 self.S_cache[i], self.W_cache[i], self.consensus_P[i] = S_tensor[i].cpu(), W_tensor[i].cpu(), consensus[i].cpu()
 
             # 4. 提取 Gossip 后每个客户端对全网平均 GSD 的估计值并做 EMA 和同步控制
-            trigger_mask = torch.zeros(self.num_clients, dtype=torch.bool, device=self.device)
-            # D_est 即 Gossip 后的估计向量 D
+            local_trigger = torch.zeros(self.num_clients, dtype=torch.bool, device=self.device)
             D_est = D
             for i in range(self.num_clients):
                 # EMA 均值更新
                 self.historical_gsd_ema[i] = self.eta * self.historical_gsd_ema[i] + (1.0 - self.eta) * D_est[i]
-                # 动态阈值: 均值的 80%
                 current_gamma = self.historical_gsd_ema[i] * 0.8
 
-                # 调试信息打印
                 print(f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Est Avg GSD: {D_est[i].item():.6f} | EMA: {self.historical_gsd_ema[i].item():.6f} | Gamma: {current_gamma.item():.6f}")
 
-                # 判定触发
                 if all_gsds[i] > current_gamma or self.counts_cache[i].sum() == 0:
-                    trigger_mask[i] = True
+                    local_trigger[i] = True
+
+            # 邻域扩展激活（被激活链路双向开启，保持活跃子图无向对称）
+            trigger_mask = local_trigger.clone()
+            for i in range(self.num_clients):
+                if local_trigger[i]:
+                    neighbors = torch.where(self.adj[:, i] > 0)[0]
+                    for nb in neighbors:
+                        trigger_mask[nb.item()] = True
 
             triggered_ids = torch.where(trigger_mask)[0].tolist()
             num_triggered = len(triggered_ids)
             print(f"Event Triggered: {num_triggered}/{self.num_clients} clients will sync parameters (triggered clients: {triggered_ids}).")
 
-            # 5. Extractor: 动态质量守恒 Push-Sum 聚合
-            M_dynamic = self.M_ps.clone()
-            for j in range(self.num_clients):
-                if not trigger_mask[j]:
-                    # 截留逻辑：不向外发送质量，全部流回自己
-                    M_dynamic[:, j] = 0.0
-                    M_dynamic[j, j] = 1.0
+            # 5. Extractor: 静态 MH 权重重定向局部双随机 Gossip 聚合 —— 核心突破点
+            target_prefix = "extractor."
+            target_keys = [k for k in self.clients_state[0].keys() if k.startswith(target_prefix)]
 
-            new_states, self.W_params = pushsum_param_aggregate(
-                self.clients_state, self.W_params, M_dynamic,
-                gossip_rounds=gossip_rounds, prefix="extractor."
-            )
-            for i in range(self.num_clients):
-                self.clients_state[i].update(new_states[i])
+            if target_keys:
+                new_states = [{} for _ in range(self.num_clients)]
+                for i in range(self.num_clients):
+                    # 如果当前节点静默，它本轮不聚合任何邻居的参数，自环保持 100% (直接继承)
+                    if not trigger_mask[i]:
+                        for k in target_keys:
+                            new_states[i][k] = self.clients_state[i][k].cpu().detach().clone()
+                        continue
+
+                    # 如果当前节点活跃，它识别活跃邻居与静默邻居进行双随机累加
+                    neighbors = torch.where(self.adj[i] > 0)[0].tolist()
+                    physical_neighbors = [int(nb) for nb in neighbors if nb != i]
+
+                    active_neighbors = [nb for nb in physical_neighbors if trigger_mask[nb]]
+                    silent_neighbors = [nb for nb in physical_neighbors if not trigger_mask[nb]]
+
+                    # 动态本地吸纳重定向：自环权重 W_ii = 静态自环权重 + 所有静默邻居的静态权重
+                    W_ii = self.M_avg[i, i].clone()
+                    for k in silent_neighbors:
+                        W_ii += self.M_avg[i, k]
+
+                    for k in target_keys:
+                        # 混合自己的参数
+                        val = W_ii * self.clients_state[i][k].to(self.device)
+                        # 混合活跃物理邻居参数 (直接使用静态 MH 权重)
+                        for nb in active_neighbors:
+                            weight = self.M_avg[i, nb]
+                            val += weight * self.clients_state[nb][k].to(self.device)
+                        new_states[i][k] = val.cpu().detach().clone()
+
+                # 更新模型状态
+                for i in range(self.num_clients):
+                    self.clients_state[i].update(new_states[i])
 
             self.evaluate()
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")

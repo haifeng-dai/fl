@@ -14,7 +14,6 @@ from .utils import (
     generate_adjacency_matrix,
     get_model,
     mse_loss,
-    pushsum_param_aggregate,
 )
 
 
@@ -33,7 +32,7 @@ def get_path(args):
 
 def client_worker(params):
     """
-    DFedUP11 Worker: 联合训练 + S/W 原型提取。
+    DFedUP10 Worker: 联合训练 + S/W 原型提取。
     """
     (
         _,
@@ -51,13 +50,16 @@ def client_worker(params):
         mu,
     ) = params
 
+    # 1. 初始化模型
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(model_state)
     consensus_P = consensus_P.to(device)
 
+    # 2. 设置优化器与数据加载器
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
+    # 3. 本地训练：联合优化
     model.train()
     total_loss, num_batches = 0.0, 0
     for _ in range(epochs):
@@ -65,7 +67,7 @@ def client_worker(params):
             x, y = x.to(device), y.to(device)
             features = model.extractor(x)
             logits = model.classifier(features)
-
+            
             l_ce = ce_loss(logits, y)
             target_protos = consensus_P[y]
             l_con = mse_loss(features, target_protos)
@@ -74,9 +76,11 @@ def client_worker(params):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
             total_loss += loss.item()
             num_batches += 1
 
+    # 4. 提取本地最新原型 (S 和 W)
     local_protos, local_counts = extract_prototypes(
         model, loader, num_classes, feature_dim, device, return_counts=True
     )
@@ -98,22 +102,33 @@ def client_worker(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(pfl=True, args=args)
+        # 生成拓扑邻接矩阵
         adj = generate_adjacency_matrix(args).to(self.device).float()
-
-        # 1. 用于 Extractor Push-Sum 的列随机矩阵
-        row_sum = adj.sum(dim=1, keepdim=True)
-        self.M_ps = (adj / row_sum).t().to(self.device)
-
-        # 2. 用于原型普通平均的双随机矩阵 (MH Weights)
+        self.adj = adj
+        
+        # 1. 用于 Extractor 普通平均和原型聚合的 Metropolis-Hastings 双随机矩阵
         self.M_avg = compute_mh_weights(adj, device=self.device)
-
+        
+        # 2. 初始化本地公告牌缓存 (Memory Buffer) —— 范式一核心
+        # 为每个客户端缓存其物理邻居的 Extractor 参数 (保存在 CPU 以节约 GPU 显存)
+        self.B_extractor = {}
+        target_prefix = "extractor."
+        for i in range(self.num_clients):
+            neighbors = torch.where(self.adj[i] > 0)[0].tolist()
+            self.B_extractor[i] = {
+                int(nb): {
+                    k: v.cpu().detach().clone()
+                    for k, v in self.clients_state[nb].items()
+                    if k.startswith(target_prefix)
+                }
+                for nb in neighbors if nb != i
+            }
+        
+        # 状态缓存
         self.S_cache = [torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)]
         self.W_cache = [torch.zeros(self.num_class, 1) for _ in range(self.num_clients)]
         self.counts_cache = [torch.zeros(self.num_class) for _ in range(self.num_clients)]
         self.consensus_P = [torch.zeros(self.num_class, args.feature_dim) for _ in range(self.num_clients)]
-
-        # Extractor Push-Sum 权重
-        self.W_params = torch.ones(self.num_clients, 1)
 
         # 移动平均的 GSD 追踪
         self.historical_gsd_ema = torch.full((self.num_clients, 1), 0.5, device=self.device)
@@ -125,14 +140,14 @@ class Server(BaseServer):
 
         for r in range(self.rounds):
             t0 = time.time()
-            print(f"\n--- DFedUP5 Round {r + 1}/{self.rounds} ---")
+            print(f"\n--- DFedUP10 Round {r + 1}/{self.rounds} ---")
             selected_clients = np.random.choice(self.num_clients, num_join_clients, replace=False)
 
             def get_client_param(i):
                 return (
-                    i, self.client_gpu[i], self.clients_state[i],
-                    self.train_sets[i], self.args.model, self.args.dataset,
-                    self.args.lr, self.args.batch_size, self.args.epochs,
+                    i, self.client_gpu[i], self.clients_state[i], 
+                    self.train_sets[i], self.args.model, self.args.dataset, 
+                    self.args.lr, self.args.batch_size, self.args.epochs, 
                     self.args.feature_dim, self.num_class, self.consensus_P[i], self.args.mu
                 )
 
@@ -144,7 +159,7 @@ class Server(BaseServer):
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
                 
-                # 虚拟历史权重锚定法核心：如果某类别在本轮本地训练中没有样本计数，赋予小权重 w_virtual，并以上一轮的共识原型为锚点
+                # 接力缓存法核心：如果某类别在本轮本地训练中没有样本计数，继承上一轮结束时的值而不是清零！
                 counts = res["counts"]
                 S_local = res["S"]
                 W_local = res["W"]
@@ -152,11 +167,8 @@ class Server(BaseServer):
                     if counts[c] > 0:
                         self.S_cache[cid][c] = S_local[c]
                         self.W_cache[cid][c] = W_local[c]
-                    else:
-                        w_virtual = 0.1
-                        self.W_cache[cid][c] = torch.tensor([w_virtual])
-                        self.S_cache[cid][c] = w_virtual * self.consensus_P[cid][c]
                 self.counts_cache[cid] = counts
+            
             self.loss.append(total_loss / num_join_clients)
 
             gossip_rounds = getattr(self.args, "gossip_rounds", 1)
@@ -166,14 +178,13 @@ class Server(BaseServer):
             W = torch.stack([self.W_cache[i] for i in range(self.num_clients)]).to(self.device)
             local_P = S / (W + 1e-12)
 
-            # 2. 计算各客户端本轮的本地 GSD (基于上一轮的共识原型 self.consensus_P)
+            # 2. 计算各客户端本轮的本地 GSD
             all_gsds = []
             for i in range(self.num_clients):
                 weights = self.counts_cache[i].to(self.device)
                 total_n = weights.sum()
                 if total_n > 0:
                     probs = weights / total_n
-                    # 安全余弦相似度计算
                     norm_local = torch.norm(local_P[i], dim=-1)
                     norm_consensus = torch.norm(self.consensus_P[i].to(self.device), dim=-1)
                     valid_mask = (norm_local > 1e-8) & (norm_consensus > 1e-8)
@@ -185,14 +196,13 @@ class Server(BaseServer):
                             self.consensus_P[i].to(self.device)[valid_mask],
                             dim=-1
                         )
-                    # GSD 为加权余弦距离
                     gsd = (probs * (1.0 - cos_sim)).sum()
                 else:
-                    gsd = torch.tensor(1.0, device=self.device) # 无样本时默认设为最大漂移以触发同步
+                    gsd = torch.tensor(1.0, device=self.device)
                 all_gsds.append(gsd)
 
-            # 将分歧度向量搭载至 Gossip
-            D = torch.stack(all_gsds).view(self.num_clients, 1)
+            # 将 GSD 装载为列向量进行 Gossip
+            D = torch.stack(all_gsds).to(self.device).view(self.num_clients, 1)
 
             # 3. 搭载 Gossip (S, W, D): 普通平均聚合 (using M_avg)
             S_flat, W_flat = S.view(self.num_clients, -1), W.view(self.num_clients, -1)
@@ -210,40 +220,62 @@ class Server(BaseServer):
                 self.S_cache[i], self.W_cache[i], self.consensus_P[i] = S_tensor[i].cpu(), W_tensor[i].cpu(), consensus[i].cpu()
 
             # 4. 提取 Gossip 后每个客户端对全网平均 GSD 的估计值并做 EMA 和同步控制
-            trigger_mask = torch.zeros(self.num_clients, dtype=torch.bool, device=self.device)
-            # D_est 即 Gossip 后的估计向量 D
+            local_trigger = torch.zeros(self.num_clients, dtype=torch.bool, device=self.device)
             D_est = D
             for i in range(self.num_clients):
                 # EMA 均值更新
                 self.historical_gsd_ema[i] = self.eta * self.historical_gsd_ema[i] + (1.0 - self.eta) * D_est[i]
-                # 动态阈值: 均值的 80%
-                current_gamma = self.historical_gsd_ema[i] * 0.8
+                # 引入 0.05 噪声过滤器下限
+                current_gamma = torch.clamp(self.historical_gsd_ema[i] * 0.8, min=0.05)
 
-                # 调试信息打印
                 print(f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Est Avg GSD: {D_est[i].item():.6f} | EMA: {self.historical_gsd_ema[i].item():.6f} | Gamma: {current_gamma.item():.6f}")
 
-                # 判定触发
                 if all_gsds[i] > current_gamma or self.counts_cache[i].sum() == 0:
-                    trigger_mask[i] = True
+                    local_trigger[i] = True
+
+            # 邻域扩展激活：一旦有节点触发，唤醒其物理通信入边邻居
+            trigger_mask = local_trigger.clone()
+            for i in range(self.num_clients):
+                if local_trigger[i]:
+                    neighbors = torch.where(self.adj[:, i] > 0)[0]
+                    for nb in neighbors:
+                        trigger_mask[nb.item()] = True
 
             triggered_ids = torch.where(trigger_mask)[0].tolist()
             num_triggered = len(triggered_ids)
             print(f"Event Triggered: {num_triggered}/{self.num_clients} clients will sync parameters (triggered clients: {triggered_ids}).")
 
-            # 5. Extractor: 动态质量守恒 Push-Sum 聚合
-            M_dynamic = self.M_ps.clone()
-            for j in range(self.num_clients):
-                if not trigger_mask[j]:
-                    # 截留逻辑：不向外发送质量，全部流回自己
-                    M_dynamic[:, j] = 0.0
-                    M_dynamic[j, j] = 1.0
-
-            new_states, self.W_params = pushsum_param_aggregate(
-                self.clients_state, self.W_params, M_dynamic,
-                gossip_rounds=gossip_rounds, prefix="extractor."
-            )
+            # 5. Extractor: 搭载公告牌缓存的行随机 Gossip (Memory-buffered Row-Stochastic Gossip)
+            target_prefix = "extractor."
+            
+            # (1) 只要邻居触发，就把邻居当前的 Extractor 参数更新到本地的 Buffer 缓存中 (保存在 CPU)
             for i in range(self.num_clients):
-                self.clients_state[i].update(new_states[i])
+                for nb in self.B_extractor[i].keys():
+                    if trigger_mask[nb]:
+                        self.B_extractor[i][nb] = {
+                            k: v.cpu().detach().clone()
+                            for k, v in self.clients_state[nb].items()
+                            if k.startswith(target_prefix)
+                        }
+
+            # (2) 混合参数：使用 Metropolis-Hastings 双随机矩阵，混合自己当前的参数与本地缓存的邻居历史参数
+            target_keys = [k for k in self.clients_state[0].keys() if k.startswith(target_prefix)]
+            if target_keys:
+                new_states = [{} for _ in range(self.num_clients)]
+                for i in range(self.num_clients):
+                    neighbors = list(self.B_extractor[i].keys())
+                    for k in target_keys:
+                        # 混合自己当前参数
+                        val = self.M_avg[i, i] * self.clients_state[i][k].to(self.device)
+                        # 混合缓存中邻居的历史参数
+                        for nb in neighbors:
+                            weight = self.M_avg[i, nb]
+                            val += weight * self.B_extractor[i][nb][k].to(self.device)
+                        new_states[i][k] = val.cpu().detach().clone()
+                
+                # 更新模型状态
+                for i in range(self.num_clients):
+                    self.clients_state[i].update(new_states[i])
 
             self.evaluate()
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")

@@ -121,11 +121,13 @@ def pushsum_param_aggregate(
     device = M.device
     # 使用 float32 保证精度与 param_aggregate 一致
     S_flat = torch.zeros(num_clients, total_size, device=device, dtype=torch.float32)
+    W_flat = weights.to(device).view(num_clients, 1).to(torch.float32)
+
     for i in range(num_clients):
         vec = torch.cat([state_dicts[i][k].view(-1) for k in target_keys])
-        S_flat[i] = vec.to(device)
-
-    W_flat = weights.to(device).view(num_clients, 1).to(torch.float32)
+        # 核心修复：输入参数是物理参数 theta，需要转换为“质量” S = theta * w 参与 Gossip
+        # 否则如果 w < 1，每一轮聚合都会导致参数值被错误地放大 1/w 倍，最终导致 NaN
+        S_flat[i] = vec.to(device) * W_flat[i]
 
     # 3. 矩阵形式执行多轮 Push-Sum 迭代
     with torch.no_grad():
