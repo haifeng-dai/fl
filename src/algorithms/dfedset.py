@@ -53,6 +53,7 @@ def client_worker(params):
         consensus_P,
         lambda_sa,
         lambda_so,
+        confidence_mode,
     ) = params
 
     # 1. 初始化模型
@@ -90,7 +91,12 @@ def client_worker(params):
     local_protos, local_counts = extract_prototypes(
         model, loader, num_classes, feature_dim, device, return_counts=True
     )
-    confidence = torch.log(1 + local_counts.unsqueeze(-1))
+    if confidence_mode == "count":
+        confidence = local_counts.unsqueeze(-1).float()
+    elif confidence_mode == "none":
+        confidence = torch.ones_like(local_counts.unsqueeze(-1))
+    else:
+        confidence = torch.log(1 + local_counts.unsqueeze(-1))
     S = confidence * local_protos
     W = confidence
 
@@ -132,6 +138,7 @@ class Server(BaseServer):
         # 每个客户端追踪自身 GSD 的历史 EMA（P2P 触发基准）
         self.local_gsd_ema = torch.full((self.num_clients, 1), 0.5, device=self.device)
         self.eta = self.args.eta
+        self.gsd_log: list[list[float]] = []
         self.num_triggered_log: list[int] = []
         self.triggered_ids_log: list[list[int]] = []
 
@@ -145,6 +152,10 @@ class Server(BaseServer):
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
             )
+
+            ablate = getattr(self.args, "ablate", {})
+            confidence_mode = ablate.get("confidence", "log")
+            trigger_mode = ablate.get("trigger", "adaptive")
 
             def get_client_param(i):
                 return (
@@ -162,6 +173,7 @@ class Server(BaseServer):
                     self.consensus_P[i],
                     self.args.lambda_sa,
                     self.args.lambda_so,
+                    confidence_mode,
                 )
 
 
@@ -181,6 +193,9 @@ class Server(BaseServer):
                     if counts[c] > 0:
                         self.S_cache[cid][c] = S_local[c]
                         self.W_cache[cid][c] = W_local[c]
+                    elif not ablate.get("relay", True):
+                        self.S_cache[cid][c].zero_()
+                        self.W_cache[cid][c].zero_()
                 self.counts_cache[cid] = counts
 
             self.loss.append(total_loss / num_join_clients)
@@ -220,6 +235,7 @@ class Server(BaseServer):
                 all_gsds.append(gsd)
 
             # 将 GSD 装载为列向量进行 Gossip
+            self.gsd_log.append([g.item() for g in all_gsds])
             D = torch.stack(all_gsds).to(self.device).view(self.num_clients, 1)
 
             # 3. 搭载 Gossip (S, W, D): 普通平均聚合 (using M_avg)
@@ -242,41 +258,66 @@ class Server(BaseServer):
                     consensus[i].cpu(),
                 )
 
-            # 4. 基于每个客户端自身 GSD 历史 EMA 的 P2P 自适应触发
+            # 4. 触发机制：自适应 / 全局阈值 / 全触发
             local_trigger = torch.zeros(
                 self.num_clients, dtype=torch.bool, device=self.device
             )
-            if r == 0:
-                # 第一轮强制全员触发（热身，不污染 EMA）
+            if trigger_mode == "all":
                 local_trigger.fill_(True)
-                for i in range(self.num_clients):
-                    print(
-                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
-                    )
-            elif r == 1:
-                # 第二轮全员触发（过渡），同时初始化 local_gsd_ema = GSD_i
-                local_trigger.fill_(True)
-                for i in range(self.num_clients):
-                    self.local_gsd_ema[i] = all_gsds[i]
-                    print(
-                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
-                    )
+                print("  [Ablation] All clients force triggered.")
+            elif trigger_mode == "global":
+                gamma_global = getattr(self.args, "gamma_global")
+                if r == 0:
+                    local_trigger.fill_(True)
+                    for i in range(self.num_clients):
+                        print(
+                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
+                        )
+                elif r == 1:
+                    local_trigger.fill_(True)
+                    for i in range(self.num_clients):
+                        self.local_gsd_ema[i] = all_gsds[i]
+                        print(
+                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
+                        )
+                else:
+                    for i in range(self.num_clients):
+                        self.local_gsd_ema[i] = (
+                            self.eta * self.local_gsd_ema[i]
+                            + (1.0 - self.eta) * all_gsds[i]
+                        )
+                        print(
+                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma Global: {gamma_global:.6f}"
+                        )
+                        if all_gsds[i] > gamma_global or self.counts_cache[i].sum() == 0:
+                            local_trigger[i] = True
             else:
-                for i in range(self.num_clients):
-                    # 更新 local_gsd_ema（追踪 GSD_i 自身历史）
-                    self.local_gsd_ema[i] = (
-                        self.eta * self.local_gsd_ema[i]
-                        + (1.0 - self.eta) * all_gsds[i]
-                    )
-
-                    current_gamma = self.local_gsd_ema[i]
-
-                    print(
-                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma: {current_gamma.item():.6f}"
-                    )
-
-                    if all_gsds[i] > current_gamma or self.counts_cache[i].sum() == 0:
-                        local_trigger[i] = True
+                # "adaptive"（默认）
+                if r == 0:
+                    local_trigger.fill_(True)
+                    for i in range(self.num_clients):
+                        print(
+                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
+                        )
+                elif r == 1:
+                    local_trigger.fill_(True)
+                    for i in range(self.num_clients):
+                        self.local_gsd_ema[i] = all_gsds[i]
+                        print(
+                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
+                        )
+                else:
+                    for i in range(self.num_clients):
+                        self.local_gsd_ema[i] = (
+                            self.eta * self.local_gsd_ema[i]
+                            + (1.0 - self.eta) * all_gsds[i]
+                        )
+                        current_gamma = self.local_gsd_ema[i]
+                        print(
+                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma: {current_gamma.item():.6f}"
+                        )
+                        if all_gsds[i] > current_gamma or self.counts_cache[i].sum() == 0:
+                            local_trigger[i] = True
 
             # 邻域扩展激活（被激活链路双向开启，保持活跃子图无向对称）
             trigger_mask = local_trigger.clone()
@@ -302,39 +343,53 @@ class Server(BaseServer):
 
             if target_keys:
                 new_states = [{} for _ in range(self.num_clients)]
-                for i in range(self.num_clients):
-                    # 如果当前节点静默，它本轮不聚合任何邻居的参数，自环保持 100% (直接继承)
-                    if not trigger_mask[i]:
+
+                if not ablate.get("aggregator", True):
+                    # —— Plain 朴素平均 ——
+                    for i in range(self.num_clients):
+                        if not trigger_mask[i]:
+                            for k in target_keys:
+                                new_states[i][k] = (
+                                    self.clients_state[i][k].cpu().detach().clone()
+                                )
+                            continue
+                        neighbors = torch.where(self.adj[i] > 0)[0].tolist()
+                        active_nbs = [nb for nb in neighbors if trigger_mask[nb]]
                         for k in target_keys:
-                            new_states[i][k] = (
-                                self.clients_state[i][k].cpu().detach().clone()
+                            val = sum(
+                                self.clients_state[nb][k].to(self.device)
+                                for nb in active_nbs
                             )
-                        continue
+                            new_states[i][k] = (val / len(active_nbs)).cpu().detach().clone()
+                else:
+                    # —— Redirect 重定向（当前行为）——
+                    for i in range(self.num_clients):
+                        if not trigger_mask[i]:
+                            for k in target_keys:
+                                new_states[i][k] = (
+                                    self.clients_state[i][k].cpu().detach().clone()
+                                )
+                            continue
 
-                    # 如果当前节点活跃，它识别活跃邻居与静默邻居进行双随机累加
-                    neighbors = torch.where(self.adj[i] > 0)[0].tolist()
-                    physical_neighbors = [int(nb) for nb in neighbors if nb != i]
+                        neighbors = torch.where(self.adj[i] > 0)[0].tolist()
+                        physical_neighbors = [int(nb) for nb in neighbors if nb != i]
+                        active_neighbors = [
+                            nb for nb in physical_neighbors if trigger_mask[nb]
+                        ]
+                        silent_neighbors = [
+                            nb for nb in physical_neighbors if not trigger_mask[nb]
+                        ]
 
-                    active_neighbors = [
-                        nb for nb in physical_neighbors if trigger_mask[nb]
-                    ]
-                    silent_neighbors = [
-                        nb for nb in physical_neighbors if not trigger_mask[nb]
-                    ]
+                        W_ii = self.M_avg[i, i].clone()
+                        for k in silent_neighbors:
+                            W_ii += self.M_avg[i, k]
 
-                    # 动态本地吸纳重定向：自环权重 W_ii = 静态自环权重 + 所有静默邻居的静态权重
-                    W_ii = self.M_avg[i, i].clone()
-                    for k in silent_neighbors:
-                        W_ii += self.M_avg[i, k]
-
-                    for k in target_keys:
-                        # 混合自己的参数
-                        val = W_ii * self.clients_state[i][k].to(self.device)
-                        # 混合活跃物理邻居参数 (直接使用静态 MH 权重)
-                        for nb in active_neighbors:
-                            weight = self.M_avg[i, nb]
-                            val += weight * self.clients_state[nb][k].to(self.device)
-                        new_states[i][k] = val.cpu().detach().clone()
+                        for k in target_keys:
+                            val = W_ii * self.clients_state[i][k].to(self.device)
+                            for nb in active_neighbors:
+                                weight = self.M_avg[i, nb]
+                                val += weight * self.clients_state[nb][k].to(self.device)
+                            new_states[i][k] = val.cpu().detach().clone()
 
                 # 更新模型状态
                 for i in range(self.num_clients):
@@ -372,6 +427,7 @@ class Server(BaseServer):
         f = {
             "acc": {"model": self.acc, "proto": self.acc_proto},
             "loss": self.loss,
+            "gsd": self.gsd_log,
             "num_triggered": self.num_triggered_log,
             "triggered_ids": self.triggered_ids_log,
             "state_dict": self.clients_state,

@@ -1,10 +1,10 @@
 # 全局默认配置 (Global Defaults)
 
 # 数据相关 (Data)
-dataset: "cifar100"
+dataset: "cifar10"
 model: "cnn"
 feature_dim: 512
-num_clients: 100
+num_clients: 10
 partition: "dirichlet"
 alpha: 0.1
 n_class: 0 # 0 表示自动根据数据集选择
@@ -23,7 +23,7 @@ times: 1
 
 # 资源与框架 (Resources & Ray)
 gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
-max_workers_per_gpu: 10
+max_workers_per_gpu: 3
 test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)
 
 # 去中心化网络拓扑 (Network Topology)

@@ -102,6 +102,12 @@ proxyfl:
     mu: 0.01
 
 dfedset:
-    lambda_sa: [0.01, 0.1, 1.0, 10.0, 100.0]
+    lambda_sa: 10.0
     eta: 0.9
     lambda_so: 0.1
+    ablate:
+        relay: true                # false → 无中继，无样本类别直接清零
+        aggregator: true           # false → 朴素平均（非重定向）
+        confidence: "log"          # "count" → 原始样本量  |  "none" → 无置信度
+        trigger: "adaptive"        # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
+        gamma_global: 0.05         # trigger="global" 时使用的固定 GSD 阈值
