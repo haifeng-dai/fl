@@ -22,9 +22,9 @@ def client_worker(params):
         _,
         device,
         model_state,
-        grad_prev,  # 本地梯度历史记录 (nabla L_k(w^{t-1}))
-        global_model_vector,  # 展平后的全局模型参数向量
         train_set,
+        grad_prev,
+        global_model_vector,
         model_name,
         dataset_name,
         lr,
@@ -124,9 +124,9 @@ class Server(BaseServer):
                     i,
                     self.client_gpu[i],
                     self.model.state_dict(),
+                    self.train_sets[i],
                     self.local_grads[i],
                     global_model_vector,
-                    self.train_sets[i],
                     self.args.model,
                     self.args.dataset,
                     self.args.lr,

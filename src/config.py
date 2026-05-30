@@ -26,16 +26,13 @@ def get_config():
         description="Federated Learning Framework", add_help=False
     )
     base_parser.add_argument(
-        "-ab", "--ablation", type=str, default=None,
+        "-a", "--algo", type=str, default=None, help="Algorithm name"
+    )
+    base_parser.add_argument(
+        "-b", "--ablation", type=str, default=None,
     )
     base_parser.add_argument(
         "-t", "--test", action="store_true", help="Enable test mode"
-    )
-    base_parser.add_argument(
-        "--ablation",
-        type=str,
-        default=None,
-        help="Comma-separated ablation fields, e.g. trigger or relay,trigger",
     )
 
     # 解析命令行参数
