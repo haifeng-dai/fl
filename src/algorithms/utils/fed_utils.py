@@ -1,3 +1,4 @@
+import gc
 import os
 
 import ray
@@ -20,6 +21,8 @@ def worker(worker_func, params):
         p_list[1] = torch.device("cuda:0")
     else:
         p_list[1] = torch.device("cpu")
+
+    p_list[3] = ray.get(p_list[3])
 
     return worker_func(tuple(p_list))
 
@@ -52,6 +55,7 @@ class BaseServer:
             n_classes=args.n_class,
             pfl=self.pfl,
         )
+        self.train_set_refs = [ray.put(ds) for ds in self.train_sets.values()]
 
         total_samples = sum(train_counts.values())
         self.weights = [
@@ -69,7 +73,9 @@ class BaseServer:
         # 由于 CUDA_VISIBLE_DEVICES 会将指定 GPU 编号映射为连续的 0 到 N-1，
         # 故 Server 使用的 GPU 设备索引应为本地可见的最后一个，即 len(gpu_ids) - 1
         dev_idx = len(gpu_ids) - 1
-        self.device = torch.device(f"cuda:{dev_idx}" if torch.cuda.is_available() and dev_idx >= 0 else "cpu")
+        self.device = torch.device(
+            f"cuda:{dev_idx}" if torch.cuda.is_available() and dev_idx >= 0 else "cpu"
+        )
 
         # 2. 强制设备映射：在 Ray Worker 环境中逻辑显卡始终映射为 cuda:0
         dev_str = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -87,6 +93,7 @@ class BaseServer:
         """
         智能评估接口：自动在全局评估与个性化评估之间切换。
         """
+        global_backup = None
         if self.pfl:
             global_backup = {
                 k: v.cpu().clone() for k, v in self.model.state_dict().items()
@@ -145,10 +152,26 @@ class BaseServer:
         # 根据 max_workers_per_gpu 计算 Ray 需要的显存比例 (1/n)
         ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
 
-        remote_worker = worker.options(num_gpus=ray_gpu_fraction, scheduling_strategy="SPREAD")
-        futures = [remote_worker.remote(client_worker, p) for p in parameters]
+        optimized_parameters = []
+        for p in parameters:
+            p_list = list(p)
+            cid = p_list[0]
+            p_list[3] = self.train_set_refs[cid]
+            optimized_parameters.append(tuple(p_list))
+
+        remote_worker = worker.options(
+            num_gpus=ray_gpu_fraction, scheduling_strategy="SPREAD"
+        )
+        futures = [remote_worker.remote(client_worker, p) for p in optimized_parameters]
         results_list = ray.get(futures)
-        return {parameters[i][0]: results_list[i] for i in range(len(parameters))}
+
+        results_map = {
+            parameters[i][0]: results_list[i] for i in range(len(parameters))
+        }
+        del futures
+        del results_list
+        gc.collect()
+        return results_map
 
     def deal_save(self, f):
         """将实验结果字典持久化到磁盘"""

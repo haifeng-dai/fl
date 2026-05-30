@@ -32,6 +32,7 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
     test_datasets = {}
     train_counts = {}
 
+    data = {}
     for i in range(num_clients):
         data_path = os.path.join(part_dir, f"client_{i}.pt")
         data = torch.load(data_path, weights_only=False)
