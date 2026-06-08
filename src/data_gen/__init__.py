@@ -151,7 +151,20 @@ def prepare_data(args):
         module = importlib.import_module(f"src.data_gen.process_{dataset_name}")
         module.process(raw_dir)
 
-    # 2. 准备分区文件夹名
+    # 1. 加载数据以获取 num_classes
+    data = torch.load(raw_path, weights_only=False)
+    X, Y = data["x"], data["y"]
+    tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(
+        Y.numpy(), args.test_ratio
+    )
+
+    # 2. 自适应 n_class（针对 pathological partition）
+    if args.n_class == 0:
+        args.n_class = max(2, -(-num_classes // num_clients))
+        print(f"-> Adaptive n_class: dataset has {num_classes} classes, "
+              f"{num_clients} clients, setting n_class={args.n_class}")
+
+    # 3. 准备分区文件夹名
     if partition_method == "iid":
         part_str = f"iid_n{num_clients}"
     elif partition_method == "dirichlet":
@@ -168,15 +181,8 @@ def prepare_data(args):
         return
 
     print(f"-> Partitioning data ({part_str})...")
-    data = torch.load(raw_path, weights_only=False)
-    X, Y = data["x"], data["y"]
 
-    # 1. 首先按类别划分训练和测试索引
-    tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(
-        Y.numpy(), args.test_ratio
-    )
-
-    # 2. 执行分区逻辑
+    # 4. 执行分区逻辑
     if partition_method == "iid":
         cli_tr_idx, cli_te_idx = iid_partition(
             tr_idx_by_cls, te_idx_by_cls, num_clients

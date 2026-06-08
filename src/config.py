@@ -135,11 +135,13 @@ def _apply_ablation(configs, ablation_str):
                 ablate_dict[field] = val
                 name_parts.append(f"{field}_{val}")
         cfg.ablate = ablate_dict
-        cfg.ablate_name = "_".join(name_parts)
         support_params = {"gamma_global"}
         for k, v in ablate_cfg.items():
             if k in support_params:
                 setattr(cfg, k, v)
+                if k == "gamma_global" and ablate_dict.get("trigger") == "global":
+                    name_parts.append(f"{k}_{v}")
+        cfg.ablate_name = "_".join(name_parts)
     return configs
 
 

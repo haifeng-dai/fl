@@ -5,7 +5,7 @@ dataset: "cifar10"
 model: "cnn"
 feature_dim: 512
 num_clients: 10
-partition: "dirichlet"
+partition: "dirichlet" # dirichlet pathological
 alpha: 0.1
 n_class: 0 # 0 表示自动根据数据集选择
 test_ratio: 0.2
@@ -19,11 +19,11 @@ weight_decay: 0.0
 batch_size: 64
 join_ratio: 1.0
 seed: 42
-times: 1
+times: 5
 
 # 资源与框架 (Resources & Ray)
-gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
-max_workers_per_gpu: 3
+gpus: "2" # 使用的物理 GPU 编号，逗号分隔
+max_workers_per_gpu: 10
 test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)
 
 # 去中心化网络拓扑 (Network Topology)

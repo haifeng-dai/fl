@@ -101,13 +101,18 @@ dfedpgp:
 proxyfl:
     mu: 0.01
 
+efhc:
+    event_r: 250
+    bandwidth_mean: 5000
+    bandwidth_std: 0.0
+
 dfedset:
-    lambda_sa: 10.0
+    lambda_sa: 50.0 # [1.0, 5.0, 10.0, 20.0, 50.0]
     eta: 0.9
-    lambda_so: 0.1
+    lambda_so: [0.01, 0.05, 0.1, 0.5, 1.0]
     ablate:
-        relay: true                # false → 无中继，无样本类别直接清零
-        aggregator: true           # false → 朴素平均（非重定向）
-        confidence: "log"          # "count" → 原始样本量  |  "none" → 无置信度
-        trigger: "adaptive"        # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
-        gamma_global: 0.05         # trigger="global" 时使用的固定 GSD 阈值
+        relay: true # false → 无中继，无样本类别直接清零
+        aggregator: true # false → 朴素平均（非重定向）
+        confidence: "none" # "count" → 原始样本量  |  "none" → 无置信度
+        trigger: "global" # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
+        gamma_global: 0.01 # trigger="global" 时使用的固定 GSD 阈值

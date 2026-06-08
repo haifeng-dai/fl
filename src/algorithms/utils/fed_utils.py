@@ -190,12 +190,20 @@ def get_model(model_name, dataset_name, feature_dim=512):
         n_class = 10
     elif dataset_name == "cifar10":
         n_class = 10
+    elif dataset_name == "cinic10":
+        n_class = 10
     elif dataset_name == "cifar100":
         n_class = 100
     elif dataset_name == "flowers102":
         n_class = 102
     elif dataset_name == "tiny_imagenet":
         n_class = 200
+    elif dataset_name == "svhn":
+        n_class = 10
+    elif dataset_name == "femnist":
+        n_class = 62
+    elif dataset_name == "emnist":
+        n_class = 47
     elif dataset_name == "har" or dataset_name == "har_feat":
         n_class = 6
     else:
@@ -205,7 +213,7 @@ def get_model(model_name, dataset_name, feature_dim=512):
         3
         if (
             "cifar" in dataset_name
-            or dataset_name in ["tiny_imagenet", "flowers102", "cars", "gtsrb"]
+            or dataset_name in ["tiny_imagenet", "flowers102", "cars", "gtsrb", "cinic10", "svhn"]
         )
         else 1
     )

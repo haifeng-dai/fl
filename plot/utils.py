@@ -109,6 +109,9 @@ class ResultLoader:
             "dfedset": lambda args: (
                 f"_{get_adj_suffix(args)}_{args.get('lambda_sa', args.get('mu'))}_{args['eta']}_{args.get('lambda_so', args.get('lambda_cos'))}"
             ),
+            "efhc": lambda args: (
+                f"_{get_adj_suffix(args)}_r{args['event_r']}_bw{args['bandwidth_mean']}"
+            ),
         }
 
     def _average_recursive(self, data_list):
@@ -129,7 +132,7 @@ class ResultLoader:
             return res
         return first
 
-    def load(self, algo, dataset, partition, num_clients, specific_run=None, **kwargs):
+    def load(self, algo, dataset, partition, num_clients, specific_run=None, ablate_name=None, **kwargs):
         folder_name = f"{dataset}_{partition}_{num_clients}"
         if partition == "dirichlet":
             folder_name += f"_{kwargs['alpha']}"
@@ -138,6 +141,8 @@ class ResultLoader:
 
         # 结果目录路径：算法 / 数据集 /
         folder_path = os.path.join(self.base_dir, algo, folder_name)
+        if ablate_name:
+            folder_path = os.path.join(folder_path, ablate_name)
 
         if not os.path.exists(folder_path):
             if specific_run is None or specific_run == 0:
