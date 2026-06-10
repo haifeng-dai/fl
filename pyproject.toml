@@ -5,7 +5,6 @@ description = "A Federated Learning Framework powered by Ray"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "ipykernel>=7.2.0",
     "kagglehub>=1.0.0",
     "matplotlib>=3.10.8",
     "networkx>=3.6.1",

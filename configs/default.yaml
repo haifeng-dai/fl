@@ -1,7 +1,7 @@
 # 全局默认配置 (Global Defaults)
 
 # 数据相关 (Data)
-dataset: "cifar10"
+dataset: "cinic10"
 model: "cnn"
 feature_dim: 512
 num_clients: 10
@@ -22,13 +22,13 @@ seed: 42
 times: 5
 
 # 资源与框架 (Resources & Ray)
-gpus: "2" # 使用的物理 GPU 编号，逗号分隔
-max_workers_per_gpu: 10
+gpus: "2,3" # 使用的物理 GPU 编号，逗号分隔
+max_workers_per_gpu: 5
 test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)
 
 # 去中心化网络拓扑 (Network Topology)
 # ring, complete, random, small_world, scale_free, star
 adj_type: "ring"
-edge_p: 0.3 # random / small_world
+edge_p: 0.1 # random / small_world
 k_small_world: 4 # small_world
 m_scale_free: 2 # scale_free
