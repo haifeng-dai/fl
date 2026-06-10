@@ -121,6 +121,10 @@ class Server(BaseServer):
         # 1. 计算静态 Metropolis-Hastings 双随机矩阵 (恒满足行和为 1、列和为 1 且对称)
         self.M_avg = compute_mh_weights(adj, device=self.device)
 
+        # 列随机矩阵 M_ps（仅 aggregator="pushsum" 模式使用）
+        row_sum = self.adj.sum(dim=1, keepdim=True)
+        self.M_ps = (self.adj / row_sum).t().to(self.device)
+
         # 状态缓存
         self.S_cache = [
             torch.zeros(self.num_class, args.feature_dim)
@@ -169,6 +173,7 @@ class Server(BaseServer):
             ablate = getattr(self.args, "ablate", {})
             confidence_mode = ablate.get("confidence", "log")
             trigger_mode = ablate.get("trigger", "adaptive")
+            agg_mode = ablate.get("aggregator", "redirect")
 
             def get_client_param(i):
                 return (
@@ -345,11 +350,12 @@ class Server(BaseServer):
 
             # 邻域扩展激活（被激活链路双向开启，保持活跃子图无向对称）
             trigger_mask = local_trigger.clone()
-            for i in range(self.num_clients):
-                if local_trigger[i]:
-                    neighbors = torch.where(self.adj[:, i] > 0)[0]
-                    for nb in neighbors:
-                        trigger_mask[int(nb.item())] = True
+            if agg_mode != "pushsum":
+                for i in range(self.num_clients):
+                    if local_trigger[i]:
+                        neighbors = torch.where(self.adj[:, i] > 0)[0]
+                        for nb in neighbors:
+                            trigger_mask[int(nb.item())] = True
 
             triggered_ids = torch.where(trigger_mask)[0].tolist()
             num_triggered = len(triggered_ids)
@@ -360,36 +366,43 @@ class Server(BaseServer):
             self.triggered_ids_log.append(triggered_ids)
 
             # 5. Extractor: 矩阵化 Flatten → torch.mm → Unflatten 聚合
-            if self.extractor_keys:
-                agg_mode = ablate.get("aggregator", True)
+            if self.extractor_keys and self.extractor_total_size > 0:
+                if agg_mode == "pushsum":
+                    # ===== Push-Sum 列随机聚合 =====
+                    M_dynamic = self.M_ps.clone()
+                    for j in range(self.num_clients):
+                        if not trigger_mask[j]:
+                            M_dynamic[:, j] = 0.0
+                            M_dynamic[j, j] = 1.0
+                    flat = torch.zeros(
+                        self.num_clients, self.extractor_total_size, device=self.device
+                    )
+                    for i in range(self.num_clients):
+                        offset = 0
+                        for k, _, start, end in self.extractor_param_info:
+                            n = end - start
+                            t = self.clients_state[i][k].to(self.device, non_blocking=True)
+                            flat[i, offset:offset + n].copy_(t.reshape(-1))
+                            offset += n
 
-                # 构造重定向权重矩阵 W_redirect [N, N]
-                W_redirect = torch.zeros(self.num_clients, self.num_clients)
-                for i in range(self.num_clients):
-                    if not trigger_mask[i]:
-                        W_redirect[i, i] = 1.0
-                        continue
-                    neighbors = torch.where(self.adj[i] > 0)[0].tolist()
-                    physical = [int(nb) for nb in neighbors if nb != i]
-                    active = [nb for nb in physical if trigger_mask[nb]]
-                    silent = [nb for nb in physical if not trigger_mask[nb]]
-
-                    if not agg_mode:
-                        # —— Plain 朴素平均 ——
-                        group = active + [i]
-                        w = 1.0 / len(group)
-                        for nb in group:
-                            W_redirect[i, nb] = w
-                    else:
-                        # —— Redirect 重定向 ——
+                    new_flat = torch.mm(M_dynamic.to(self.device), flat)
+                else:
+                    # ===== Redirect 重定向（默认） =====
+                    W_redirect = torch.zeros(self.num_clients, self.num_clients)
+                    for i in range(self.num_clients):
+                        if not trigger_mask[i]:
+                            W_redirect[i, i] = 1.0
+                            continue
+                        neighbors = torch.where(self.adj[i] > 0)[0].tolist()
+                        physical = [int(nb) for nb in neighbors if nb != i]
+                        active = [nb for nb in physical if trigger_mask[nb]]
+                        silent = [nb for nb in physical if not trigger_mask[nb]]
                         W_redirect[i, i] = float(self.M_avg[i, i])
                         for nb in silent:
                             W_redirect[i, i] += float(self.M_avg[i, nb])
                         for nb in active:
                             W_redirect[i, nb] = float(self.M_avg[i, nb])
 
-                # Flatten → mm → Unflatten
-                if self.extractor_total_size > 0:
                     flat = torch.zeros(
                         self.num_clients, self.extractor_total_size, device=self.device
                     )
@@ -403,12 +416,12 @@ class Server(BaseServer):
 
                     new_flat = torch.mm(W_redirect.to(self.device), flat)
 
-                    for i in range(self.num_clients):
-                        for k, shape, start, end in self.extractor_param_info:
-                            n = end - start
-                            self.clients_state[i][k] = (
-                                new_flat[i, start:end].view(shape).cpu().clone()
-                            )
+                for i in range(self.num_clients):
+                    for k, shape, start, end in self.extractor_param_info:
+                        n = end - start
+                        self.clients_state[i][k] = (
+                            new_flat[i, start:end].view(shape).cpu().clone()
+                        )
 
             self.evaluate(protos=self.consensus_P)
             print(

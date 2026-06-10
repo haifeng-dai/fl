@@ -59,6 +59,7 @@ def init_ray(args):
 
     ray.init(
         num_gpus=num_gpus,
+        num_cpus=max(num_gpus, 1) * args.max_workers_per_gpu + 4,
         ignore_reinit_error=True,
         logging_level=logging.ERROR,
         runtime_env=runtime_env,
