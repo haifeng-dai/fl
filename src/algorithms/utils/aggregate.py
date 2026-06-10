@@ -150,3 +150,62 @@ def pushsum_param_aggregate(
         new_state_dicts.append(client_state)
 
     return new_state_dicts, W_flat
+
+
+def flattened_matrix_aggregate(
+    state_dicts: list[dict[str, torch.Tensor]],
+    weight_matrix: torch.Tensor,
+    device: torch.device,
+) -> list[dict[str, torch.Tensor]]:
+    """
+    GPU 矩阵化聚合：S' = W @ S，与 CPU param_aggregate 逐比特一致。
+
+    精确复制 CPU param_aggregate 的 add_(alpha=w) 逻辑在 GPU 上执行，
+    确保与 CPU 版本输出完全一致。
+
+    Args:
+        state_dicts: N 个客户端 CPU 参数字典列表
+        weight_matrix: [N, N] 权重矩阵（已在 device 上）
+        device: 计算设备
+
+    Returns:
+        N 个 CPU 上的聚合后参数字典列表
+    """
+    N = len(state_dicts)
+    if N == 0:
+        return []
+
+    keys = list(state_dicts[0].keys())
+    total_size = sum(state_dicts[0][k].numel() for k in keys)
+
+    # 1. Flatten → [N, total_size] on GPU
+    S_flat = torch.zeros(N, total_size, device=device, dtype=torch.float32)
+    for i in range(N):
+        offset = 0
+        for k in keys:
+            t = state_dicts[i][k].to(device, non_blocking=True)
+            n = t.numel()
+            S_flat[i, offset:offset + n].copy_(t.reshape(-1))
+            offset += n
+
+    # 2. 逐客户端累加：new[i] = sum_j W[i,j] * S_flat[j]
+    # 使用 add_(alpha=w) 匹配 CPU param_aggregate 的逐比特行为
+    Wd = weight_matrix.to(device)
+    new_flat = torch.zeros(N, total_size, device=device, dtype=torch.float32)
+    for i in range(N):
+        for j in range(N):
+            new_flat[i].add_(S_flat[j], alpha=Wd[i, j].item())
+
+    # 3. Unflatten → CPU dicts
+    new_dicts = []
+    for i in range(N):
+        d = {}
+        offset = 0
+        for k in keys:
+            shape = state_dicts[0][k].shape
+            n = state_dicts[0][k].numel()
+            d[k] = new_flat[i, offset:offset + n].view(shape).cpu()
+            offset += n
+        new_dicts.append(d)
+
+    return new_dicts

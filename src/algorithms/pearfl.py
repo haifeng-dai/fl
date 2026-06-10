@@ -9,6 +9,7 @@ from .utils import (
     BaseServer,
     ce_loss,
     extract_prototypes,
+    flattened_matrix_aggregate,
     generate_adjacency_matrix,
     get_model,
     mse_loss,
@@ -256,20 +257,13 @@ class Server(BaseServer):
 
     def aggregate_models(self):
         """
-        模型参数聚合：使用双随机矩阵 W 进行去中心化聚合
+        模型参数聚合（GPU 矩阵化版本）：S' = W @ flatten(S)
+
+        W 为双随机矩阵，W[i,j] = 0 表示非邻居，等价于邻居加权平均。
         """
-        new_clients_state = []
-        for i in range(self.num_clients):
-            # 找到节点 i 的所有邻居索引及其在 W 中的权重
-            neighbor_indices = torch.where(self.W[i] > 0)[0].tolist()
-            neighbor_weights = [self.W[i, j].item() for j in neighbor_indices]
-            neighbor_states = [self.clients_state[j] for j in neighbor_indices]
-
-            # 执行去中心化聚合更新本地模型状态
-            new_state = self.weighted_aggregate(neighbor_states, neighbor_weights)
-            new_clients_state.append(new_state)
-
-        self.clients_state = new_clients_state
+        state_list = list(self.clients_state)
+        new_state_list = flattened_matrix_aggregate(state_list, self.W, self.device)
+        self.clients_state = new_state_list
 
         # 更新全局 model 供 evaluate() 全局统计使用
         avg_state = self.weighted_aggregate(self.clients_state, self.weights)

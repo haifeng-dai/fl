@@ -7,9 +7,9 @@ import torch
 from .utils import (
     BaseServer,
     ce_loss,
+    flattened_matrix_aggregate,
     generate_adjacency_matrix,
     get_model,
-    param_aggregate,
 )
 
 
@@ -270,32 +270,20 @@ class Server(BaseServer):
     def aggregate(self):
         """
         执行基于 Push-Sum 的去中心化聚合。
-
-        使用 param_aggregate 逐个客户端聚合邻居状态：
-        1. 混合共享模型参数 body
-        2. 混合标量权重 mu
-        3. 注意：私有头 head 保持个性化，不参与混合
+        主体参数用 GPU 矩阵乘法加速，mu 标量保持 CPU 精度。
         """
-        new_client_body = {}
+        body_list = [self.client_body[j] for j in range(self.num_clients)]
+        new_body_list = flattened_matrix_aggregate(body_list, self.M, self.device)
+        self.client_body = {i: new_body_list[i] for i in range(self.num_clients)}
+
+        # Mu 聚合保持 CPU float64（与原有精度一致）
         new_client_mu = {}
-
         for i in range(self.num_clients):
-            # 获取节点 i 的权重向量 (M 的第 i 行)
-            # M = (A/d)^T，所以 M[i, j] 表示节点 j 发送给节点 i 的权重
             weights = self.M[i].tolist()
-
-            # 1. 聚合共享体参数 (Body)
-            all_bodies = [self.client_body[j] for j in range(self.num_clients)]
-            new_client_body[i] = param_aggregate(all_bodies, weights)
-
-            # 2. 聚合标量权重 (Mu)
             mu_val = 0.0
             for j in range(self.num_clients):
                 mu_val += weights[j] * self.client_mu[j]
             new_client_mu[i] = mu_val
-
-        # 更新服务器端维护的状态池
-        self.client_body = new_client_body
         self.client_mu = new_client_mu
 
     def update_clients_state(self):

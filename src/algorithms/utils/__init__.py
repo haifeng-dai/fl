@@ -1,6 +1,6 @@
 import torch
 
-from .aggregate import param_aggregate, proto_aggregate
+from .aggregate import flattened_matrix_aggregate, param_aggregate, proto_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 from .fed_utils import BaseServer, get_model
 from .loss import (
@@ -14,6 +14,7 @@ from .loss import (
 from .topology import compute_mh_weights, generate_adjacency_matrix, sinkhorn_knopp
 
 __all__ = [
+    "flattened_matrix_aggregate",
     "param_aggregate",
     "proto_aggregate",
     "compare_model_parameters",

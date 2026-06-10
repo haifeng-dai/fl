@@ -8,10 +8,10 @@ from .utils import (
     BaseServer,
     ce_loss,
     evaluate_model,
+    flattened_matrix_aggregate,
     generate_adjacency_matrix,
     get_model,
     kl_loss,
-    param_aggregate,
 )
 
 
@@ -127,7 +127,7 @@ class Server(BaseServer):
         self.acc_p = []
         # 使用通用的邻接矩阵生成函数并进行行归一化处理
         # 必须归一化以防止在去中心化聚合时权重累加导致梯度爆炸 (NaN)
-        A = generate_adjacency_matrix(args)
+        A = generate_adjacency_matrix(args).to(self.device)
         self.adj_matrix = A / A.sum(dim=1, keepdim=True)
 
     def fit(self):
@@ -143,23 +143,17 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # 1. 为每个客户端执行邻居聚合
-            # 每个客户端根据拓扑邻接矩阵聚合其邻居的模型参数
+            # 预计算所有客户端的聚合代理状态（GPU 矩阵乘法）
+            proxy_list = [self.client_states_p[i] for i in range(self.num_clients)]
+            agg_proxy_list = flattened_matrix_aggregate(
+                proxy_list, self.adj_matrix, self.device
+            )
+
             def get_client_param(i):
-                # 识别当前客户端相连的邻居及其权重分布
-                neighbor_indices = torch.where(self.adj_matrix[i] > 0)[0].tolist()
-                neighbor_weights = self.adj_matrix[i, neighbor_indices].tolist()
-
-                # 执行本地模型聚合运算
-                neighbor_states = [self.client_states_p[j] for j in neighbor_indices]
-                aggregated_proxy_state = param_aggregate(
-                    neighbor_states, neighbor_weights
-                )
-
                 return [
                     i,
                     self.client_gpu[i],
-                    aggregated_proxy_state,
+                    agg_proxy_list[i],
                     self.train_sets[i],
                     self.clients_state[i],
                     self.args.model,

@@ -142,6 +142,19 @@ class Server(BaseServer):
         self.num_triggered_log: list[int] = []
         self.triggered_ids_log: list[list[int]] = []
 
+        # 预计算 extractor 参数 flatten 映射（矩阵聚合用）
+        self.extractor_keys = [
+            k for k in self.clients_state[0].keys() if k.startswith("extractor.")
+        ]
+        self.extractor_param_info = []
+        total = 0
+        for k in self.extractor_keys:
+            shape = self.clients_state[0][k].shape
+            n = self.clients_state[0][k].numel()
+            self.extractor_param_info.append((k, shape, total, total + n))
+            total += n
+        self.extractor_total_size = total
+
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
         num_join_clients = max(1, num_join_clients)
@@ -235,8 +248,9 @@ class Server(BaseServer):
                 all_gsds.append(gsd)
 
             # 将 GSD 装载为列向量进行 Gossip
-            self.gsd_log.append([g.item() for g in all_gsds])
-            D = torch.stack(all_gsds).to(self.device).view(self.num_clients, 1)
+            gsd_tensor = torch.stack(all_gsds)  # 一次性 stack，去掉冗余 .to(device)
+            self.gsd_log.append(gsd_tensor.tolist())  # 批量 CPU 同步，替代逐个 .item()
+            D = gsd_tensor.view(self.num_clients, 1)
 
             # 3. 搭载 Gossip (S, W, D): 普通平均聚合 (using M_avg)
             S_flat, W_flat = S.view(self.num_clients, -1), W.view(self.num_clients, -1)
@@ -269,55 +283,65 @@ class Server(BaseServer):
                 gamma_global = getattr(self.args, "gamma_global")
                 if r == 0:
                     local_trigger.fill_(True)
-                    for i in range(self.num_clients):
-                        print(
-                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
-                        )
+                    lines = [
+                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
+                        for i in range(self.num_clients)
+                    ]
+                    print("\n".join(lines))
                 elif r == 1:
                     local_trigger.fill_(True)
+                    lines = []
                     for i in range(self.num_clients):
                         self.local_gsd_ema[i] = all_gsds[i]
-                        print(
+                        lines.append(
                             f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
                         )
+                    print("\n".join(lines))
                 else:
+                    lines = []
                     for i in range(self.num_clients):
                         self.local_gsd_ema[i] = (
                             self.eta * self.local_gsd_ema[i]
                             + (1.0 - self.eta) * all_gsds[i]
                         )
-                        print(
+                        lines.append(
                             f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma Global: {gamma_global:.6f}"
                         )
                         if all_gsds[i] > gamma_global or self.counts_cache[i].sum() == 0:
                             local_trigger[i] = True
+                    print("\n".join(lines))
             else:
                 # "adaptive"（默认）
                 if r == 0:
                     local_trigger.fill_(True)
-                    for i in range(self.num_clients):
-                        print(
-                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
-                        )
+                    lines = [
+                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
+                        for i in range(self.num_clients)
+                    ]
+                    print("\n".join(lines))
                 elif r == 1:
                     local_trigger.fill_(True)
+                    lines = []
                     for i in range(self.num_clients):
                         self.local_gsd_ema[i] = all_gsds[i]
-                        print(
+                        lines.append(
                             f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
                         )
+                    print("\n".join(lines))
                 else:
+                    lines = []
                     for i in range(self.num_clients):
                         self.local_gsd_ema[i] = (
                             self.eta * self.local_gsd_ema[i]
                             + (1.0 - self.eta) * all_gsds[i]
                         )
                         current_gamma = self.local_gsd_ema[i]
-                        print(
+                        lines.append(
                             f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma: {current_gamma.item():.6f}"
                         )
                         if all_gsds[i] > current_gamma or self.counts_cache[i].sum() == 0:
                             local_trigger[i] = True
+                    print("\n".join(lines))
 
             # 邻域扩展激活（被激活链路双向开启，保持活跃子图无向对称）
             trigger_mask = local_trigger.clone()
@@ -325,7 +349,7 @@ class Server(BaseServer):
                 if local_trigger[i]:
                     neighbors = torch.where(self.adj[:, i] > 0)[0]
                     for nb in neighbors:
-                        trigger_mask[nb.item()] = True
+                        trigger_mask[int(nb.item())] = True
 
             triggered_ids = torch.where(trigger_mask)[0].tolist()
             num_triggered = len(triggered_ids)
@@ -335,73 +359,62 @@ class Server(BaseServer):
             self.num_triggered_log.append(num_triggered)
             self.triggered_ids_log.append(triggered_ids)
 
-            # 5. Extractor: 静态 MH 权重重定向局部双随机 Gossip 聚合 —— 核心突破点
-            target_prefix = "extractor."
-            target_keys = [
-                k for k in self.clients_state[0].keys() if k.startswith(target_prefix)
-            ]
+            # 5. Extractor: 矩阵化 Flatten → torch.mm → Unflatten 聚合
+            if self.extractor_keys:
+                agg_mode = ablate.get("aggregator", True)
 
-            if target_keys:
-                new_states = [{} for _ in range(self.num_clients)]
-
-                if not ablate.get("aggregator", True):
-                    # —— Plain 朴素平均 ——
-                    for i in range(self.num_clients):
-                        if not trigger_mask[i]:
-                            for k in target_keys:
-                                new_states[i][k] = (
-                                    self.clients_state[i][k].cpu().detach().clone()
-                                )
-                            continue
-                        neighbors = torch.where(self.adj[i] > 0)[0].tolist()
-                        active_nbs = [nb for nb in neighbors if trigger_mask[nb]]
-                        for k in target_keys:
-                            val = sum(
-                                self.clients_state[nb][k].to(self.device)
-                                for nb in active_nbs
-                            )
-                            new_states[i][k] = (val / len(active_nbs)).cpu().detach().clone()
-                else:
-                    # —— Redirect 重定向（当前行为）——
-                    for i in range(self.num_clients):
-                        if not trigger_mask[i]:
-                            for k in target_keys:
-                                new_states[i][k] = (
-                                    self.clients_state[i][k].cpu().detach().clone()
-                                )
-                            continue
-
-                        neighbors = torch.where(self.adj[i] > 0)[0].tolist()
-                        physical_neighbors = [int(nb) for nb in neighbors if nb != i]
-                        active_neighbors = [
-                            nb for nb in physical_neighbors if trigger_mask[nb]
-                        ]
-                        silent_neighbors = [
-                            nb for nb in physical_neighbors if not trigger_mask[nb]
-                        ]
-
-                        W_ii = self.M_avg[i, i].clone()
-                        for k in silent_neighbors:
-                            W_ii += self.M_avg[i, k]
-
-                        for k in target_keys:
-                            val = W_ii * self.clients_state[i][k].to(self.device)
-                            for nb in active_neighbors:
-                                weight = self.M_avg[i, nb]
-                                val += weight * self.clients_state[nb][k].to(self.device)
-                            new_states[i][k] = val.cpu().detach().clone()
-
-                # 更新模型状态
+                # 构造重定向权重矩阵 W_redirect [N, N]
+                W_redirect = torch.zeros(self.num_clients, self.num_clients)
                 for i in range(self.num_clients):
-                    self.clients_state[i].update(new_states[i])
+                    if not trigger_mask[i]:
+                        W_redirect[i, i] = 1.0
+                        continue
+                    neighbors = torch.where(self.adj[i] > 0)[0].tolist()
+                    physical = [int(nb) for nb in neighbors if nb != i]
+                    active = [nb for nb in physical if trigger_mask[nb]]
+                    silent = [nb for nb in physical if not trigger_mask[nb]]
+
+                    if not agg_mode:
+                        # —— Plain 朴素平均 ——
+                        group = active + [i]
+                        w = 1.0 / len(group)
+                        for nb in group:
+                            W_redirect[i, nb] = w
+                    else:
+                        # —— Redirect 重定向 ——
+                        W_redirect[i, i] = float(self.M_avg[i, i])
+                        for nb in silent:
+                            W_redirect[i, i] += float(self.M_avg[i, nb])
+                        for nb in active:
+                            W_redirect[i, nb] = float(self.M_avg[i, nb])
+
+                # Flatten → mm → Unflatten
+                if self.extractor_total_size > 0:
+                    flat = torch.zeros(
+                        self.num_clients, self.extractor_total_size, device=self.device
+                    )
+                    for i in range(self.num_clients):
+                        offset = 0
+                        for k, _, start, end in self.extractor_param_info:
+                            n = end - start
+                            t = self.clients_state[i][k].to(self.device, non_blocking=True)
+                            flat[i, offset:offset + n].copy_(t.reshape(-1))
+                            offset += n
+
+                    new_flat = torch.mm(W_redirect.to(self.device), flat)
+
+                    for i in range(self.num_clients):
+                        for k, shape, start, end in self.extractor_param_info:
+                            n = end - start
+                            self.clients_state[i][k] = (
+                                new_flat[i, start:end].view(shape).cpu().clone()
+                            )
 
             self.evaluate(protos=self.consensus_P)
             print(
                 f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%, Proto Acc: {self.acc_proto[-1]:.2f}%"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
-            del results
-            gc.collect()
 
     def evaluate(self, model_states=None, protos=None):
         super().evaluate(model_states=model_states, protos=None)

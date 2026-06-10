@@ -8,9 +8,9 @@ from .utils import (
     BaseServer,
     ce_loss,
     compute_mh_weights,
+    flattened_matrix_aggregate,
     generate_adjacency_matrix,
     get_model,
-    param_aggregate,
 )
 
 
@@ -109,19 +109,12 @@ class Server(BaseServer):
         self.opt_states = [None for _ in range(self.num_clients)]
 
     def aggregate_mh(self):
-        """执行分布式聚合：根据 MH 权重矩阵聚合所有客户端的参数"""
-        new_client_states = {}
-
-        for i in range(self.num_clients):
-            # 获取所有客户端的状态
-            all_states = [self.clients_state[j] for j in range(self.num_clients)]
-            # 获取客户端 i 的权重向量
-            weights = self.mh_weights[i].tolist()
-
-            # 使用 param_aggregate 进行聚合
-            new_client_states[i] = param_aggregate(all_states, weights)
-
-        self.clients_state = new_client_states
+        """执行分布式聚合（GPU 矩阵化版本）：S' = MH_weights @ S"""
+        state_list = [self.clients_state[j] for j in range(self.num_clients)]
+        new_state_list = flattened_matrix_aggregate(
+            state_list, self.mh_weights, self.device
+        )
+        self.clients_state = {i: new_state_list[i] for i in range(self.num_clients)}
 
     def fit(self):
         num_join_clients = int(self.num_clients * self.args.join_ratio)
