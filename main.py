@@ -66,30 +66,27 @@ def run_experiment(args, t):
 
 
 def main():
-    # 1. 环境初始化：加载系统配置与运行时环境
+    # 1. 环境初始化
     src.setup_runtime_env()
     configs = src.get_config()
 
-    # 2. 初始化全局 Ray 资源（以第一个配置的 GPU 设定为准）
-    src.init_ray(configs[0])
+    # 遍历配置列表，依次执行实验任务
+    for cfg_idx, args in enumerate(configs):
+        # 1. 实验分割线（主控制台可见）
+        print(
+            f"\n{'#' * 40}\n# Running Task {cfg_idx + 1}/{len(configs)}: {args.algo}\n{'#' * 40}"
+        )
 
-    try:
-        # 遍历配置列表，依次执行实验任务
-        for cfg_idx, args in enumerate(configs):
-            # 1. 实验分割线（主控制台可见）
-            print(
-                f"\n{'#' * 40}\n# Running Task {cfg_idx + 1}/{len(configs)}: {args.algo}\n{'#' * 40}"
-            )
+        # 2. 初始化实验保存路径
+        src.get_pre_name(args)
 
-            # 2. 初始化实验保存路径
-            src.get_pre_name(args)
-
-            # 3. 循环执行多次实验：只需传入 args 对象和当前索引 t
-            for t in range(args.times):
+        # 3. 循环执行多次实验：只需传入 args 对象和当前索引 t
+        for t in range(args.times):
+            src.init_ray(args)
+            try:
                 run_experiment(args, t)
-    finally:
-        # 确保无论实验是否成功，最后都关闭 Ray 集群释放资源
-        src.shutdown_ray()
+            finally:
+                src.shutdown_ray()
 
 
 if __name__ == "__main__":

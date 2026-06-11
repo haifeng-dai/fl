@@ -65,7 +65,7 @@ def get_config():
 
     # 如果开启测试模式，自动强制缩减实验规模以实现“极速测试”
     if config_dict.get("test") == 1:
-        config_dict["rounds"] = 5
+        config_dict["rounds"] = 3
         config_dict["epochs"] = 2
         config_dict["times"] = 2
         print(

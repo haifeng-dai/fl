@@ -86,8 +86,8 @@ l2c:
     prune_num: 0
 
 dispfl:
-    dense_ratio: 0.75
-    anneal_factor: 0.3
+    dense_ratio: 0.5
+    anneal_factor: 0.5
 
 pearfl:
     lamda: 0.1

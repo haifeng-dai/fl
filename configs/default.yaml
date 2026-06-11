@@ -1,10 +1,10 @@
 # 全局默认配置 (Global Defaults)
 
 # 数据相关 (Data)
-dataset: "cinic10"
+dataset: "cifar10" # cifar10, cifar100, cinic10, tinyimagenet, mnist, fashionmnist, emnist
 model: "cnn"
 feature_dim: 512
-num_clients: 10
+num_clients: 20
 partition: "dirichlet" # dirichlet pathological
 alpha: 0.1
 n_class: 0 # 0 表示自动根据数据集选择
@@ -22,7 +22,7 @@ seed: 42
 times: 5
 
 # 资源与框架 (Resources & Ray)
-gpus: "2,3" # 使用的物理 GPU 编号，逗号分隔
+gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
 max_workers_per_gpu: 5
 test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)
 

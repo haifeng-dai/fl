@@ -37,15 +37,15 @@ def load_data(dataset_name, partition, num_clients, alpha=0.5, n_classes=2, pfl=
         data_path = os.path.join(part_dir, f"client_{i}.pt")
         data = torch.load(data_path, weights_only=False)
 
-        # 加载训练集并开启共享内存 (消除多进程 IPC 序列化开销)
-        train_x = data["train"]["x"].share_memory_()
-        train_y = data["train"]["y"].share_memory_()
+        # 加载训练集并消除多进程 IPC 序列化开销（Ray 独立处理，不使用 PyTorch 共享内存）
+        train_x = data["train"]["x"]
+        train_y = data["train"]["y"]
         train_datasets[i] = TensorDataset(train_x, train_y)
         train_counts[i] = len(train_x)
 
-        # 加载测试集并开启共享内存
-        test_x = data["test"]["x"].share_memory_()
-        test_y = data["test"]["y"].share_memory_()
+        # 加载测试集
+        test_x = data["test"]["x"]
+        test_y = data["test"]["y"]
         test_datasets[i] = TensorDataset(test_x, test_y)
 
     num_class = data["num_classes"]

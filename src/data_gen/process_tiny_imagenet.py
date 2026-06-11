@@ -1,6 +1,5 @@
 import os
 import zipfile
-from collections import defaultdict
 
 import requests
 import torch

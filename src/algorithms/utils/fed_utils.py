@@ -1,4 +1,3 @@
-import gc
 import os
 
 import ray
@@ -168,9 +167,6 @@ class BaseServer:
         results_map = {
             parameters[i][0]: results_list[i] for i in range(len(parameters))
         }
-        del futures
-        del results_list
-        gc.collect()
         return results_map
 
     def deal_save(self, f):

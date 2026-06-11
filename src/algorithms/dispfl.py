@@ -25,9 +25,10 @@ def get_path(args):
         adj_suffix += f"_{args.m_scale_free}"
 
     # 将算法的关键超参加入文件名
+    erk_scale = getattr(args, "erk_power_scale", 1.0)
     args.file_name = (
         f"{args.common_name}_{adj_suffix}"
-        f"_{args.dense_ratio}_{args.anneal_factor}"
+        f"_{args.dense_ratio}_{args.anneal_factor}_{erk_scale}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
@@ -206,27 +207,32 @@ class Server(BaseServer):
             for k, mask in self.client_masks[cid].items():
                 self.clients_state[cid][k] = self.clients_state[cid][k].mul_(mask)
 
+        # 4. 保存初始掩码作为上一轮掩码（供首轮聚合使用）
+        self.prev_masks = {
+            i: {k: v.clone() for k, v in self.client_masks[i].items()}
+            for i in range(self.num_clients)
+        }
+
     def _calculate_erk_sparsities(self, states, density):
         """
-        计算 Erdos-Renyi Kernel (ERK) 稀疏度分布
-        公式: P_l = epsilon * (n_in + n_out) / (n_in * n_out)
+        计算 DisPFL 原始 ERK 稀疏度分布
+        公式: P_l = sum(shape) / prod(shape)
         """
+        trainable_keys = {
+            k for k, v in self.model.named_parameters() if v.requires_grad
+        }
         raw_probabilities = {}
         total_params = 0
         for k, v in states.items():
-            if "weight" in k or "bias" in k:
-                n_param = v.numel()
-                total_params += n_param
-                # 计算 ERK 特征值: (n_in + n_out) / (n_in * n_out)
-                # 对于 4D 卷积 [out, in, h, w]，n_in = in*h*w, n_out = out
-                if len(v.shape) == 4:
-                    n_out, n_in_h_w = v.shape[0], np.prod(v.shape[1:])
-                    raw_probabilities[k] = (n_in_h_w + n_out) / (n_in_h_w * n_out)
-                elif len(v.shape) == 2:
-                    n_out, n_in = v.shape
-                    raw_probabilities[k] = (n_in + n_out) / (n_in * n_out)
-                else:
-                    raw_probabilities[k] = 1.0 / n_param
+            if k not in trainable_keys:
+                continue
+            n_param = v.numel()
+            total_params += n_param
+            raw_probabilities[k] = np.sum(v.shape) / np.prod(v.shape)
+
+        erk_power_scale = getattr(self.args, "erk_power_scale", 1.0)
+        for k in raw_probabilities:
+            raw_probabilities[k] **= erk_power_scale
 
         # 迭代寻找 epsilon 使得总密度符合目标
         epsilon = 0.0
@@ -257,11 +263,11 @@ class Server(BaseServer):
                 prob = 1.0 if k in dense_layers else raw_probabilities[k] * epsilon
                 sparsities[k] = 1.0 - prob
             else:
-                sparsities[k] = 0.0 # BN层等不稀疏
+                sparsities[k] = 0.0
         return sparsities
 
     def _init_masks(self, states, sparsities):
-        """根据分层稀疏度初始化掩码"""
+        """根据分层稀疏度初始化掩码（randperm 精确选取）"""
         masks = {}
         for k, v in states.items():
             if k in sparsities:
@@ -271,9 +277,14 @@ class Server(BaseServer):
                 elif s >= 1:
                     masks[k] = torch.zeros_like(v)
                 else:
-                    # 随机生成掩码
-                    mask = torch.rand(v.shape) > s
-                    masks[k] = mask.float()
+                    dense_numel = int((1.0 - s) * v.numel())
+                    if dense_numel <= 0:
+                        masks[k] = torch.zeros_like(v)
+                    else:
+                        mask = torch.zeros(v.numel())
+                        perm = torch.randperm(v.numel())[:dense_numel]
+                        mask[perm] = 1.0
+                        masks[k] = mask.view(v.shape).float()
         return masks
 
     def fit(self):
@@ -285,13 +296,16 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- DisPFL Round {r + 1}/{self.rounds} ---")
 
-            # 1. 随机选择参与的客户端
+            # 1. 去中心化聚合（用上一轮掩码）
+            self.aggregate(round_masks=self.prev_masks)
+
+            # 2. 随机选择参与的客户端
             selected_clients = np.random.choice(
                 self.num_clients, num_join_clients, replace=False
             )
             print(f"Selected clients: {selected_clients}")
 
-            # 2. 为每个选中的客户端准备参数
+            # 3. 为每个选中的客户端准备参数（用聚合后的模型）
             def get_client_param(i):
                 return [
                     i,
@@ -312,10 +326,10 @@ class Server(BaseServer):
 
             params = [get_client_param(i) for i in selected_clients]
 
-            # 3. 启动客户端并行训练
+            # 4. 启动客户端并行训练 + 掩码搜索
             results = self.run_clients(client_worker, params)
 
-            # 4. 收集客户端的更新
+            # 5. 收集客户端的更新
             total_loss = 0.0
             for cid, res in results.items():
                 total_loss += res["loss"]
@@ -324,22 +338,27 @@ class Server(BaseServer):
 
             self.loss.append(total_loss / len(selected_clients))
 
-            # 5. 执行去中心化聚合
-            self.aggregate()
+            # 6. 保存本轮掩码供下一轮聚合使用
+            self.prev_masks = {
+                i: {k: v.clone() for k, v in self.client_masks[i].items()}
+                for i in range(self.num_clients)
+            }
 
-            # 6. 评估模型
+            # 7. 评估模型
             self.evaluate()
 
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
-    def aggregate(self):
+    def aggregate(self, round_masks=None):
         """
         去中心化聚合：依据掩码交集进行稀疏聚合
 
         每个客户端从邻居（通过邻接矩阵 A 定义）处聚合参数，
         仅在两个参数都被掩码的位置更新值。
         """
+        if round_masks is None:
+            round_masks = self.client_masks
         new_client_states = {i: {} for i in range(self.num_clients)}
 
         for k in self.clients_state[0].keys():
@@ -353,34 +372,28 @@ class Server(BaseServer):
             orig_shape = layer_stacked.shape[1:]
             layer_flat = layer_stacked.view(self.num_clients, -1)
 
-            # 判断该层是否具有掩码（DisPFL 逻辑：只有 weight/bias 有 mask）
-            if k in self.client_masks[0]:
-                mask_stacked = torch.stack(
-                    [
-                        self.client_masks[i][k].to(self.device)
-                        for i in range(self.num_clients)
-                    ]
-                )
-                mask_flat = mask_stacked.view(self.num_clients, -1)
+            mask_stacked = torch.stack(
+                [
+                    round_masks[i][k].to(self.device)
+                    for i in range(self.num_clients)
+                ]
+            )
+            mask_flat = mask_stacked.view(self.num_clients, -1)
 
-                # 邻域覆盖计数: CountM = A @ M
-                count_mask_flat = torch.mm(self.A, mask_flat)
+            # 邻域覆盖计数: CountM = A @ M
+            count_mask_flat = torch.mm(self.A, mask_flat)
 
-                # 邻域加权和: SumW = A @ (S * M)
-                sum_w_flat = torch.mm(self.A, layer_flat * mask_flat)
+            # 邻域加权和: SumW = A @ (S * M)
+            sum_w_flat = torch.mm(self.A, layer_flat * mask_flat)
 
-                # 计算平均并应用当前客户端的掩码限制
-                # 避免零除：count_mask_flat 为 0 的位置结果为 0
-                denom = torch.where(
-                    count_mask_flat > 0,
-                    count_mask_flat,
-                    torch.ones_like(count_mask_flat),
-                )
-                new_layer_flat = (sum_w_flat / denom) * mask_flat
-            else:
-                # 非掩码参数（如 BN 层）：直接根据邻居数量求均值
-                neighbor_counts = self.A.sum(dim=1, keepdim=True)
-                new_layer_flat = torch.mm(self.A, layer_flat) / neighbor_counts
+            # 计算平均并应用当前客户端的掩码限制
+            # 避免零除：count_mask_flat 为 0 的位置结果为 0
+            denom = torch.where(
+                count_mask_flat > 0,
+                count_mask_flat,
+                torch.ones_like(count_mask_flat),
+            )
+            new_layer_flat = (sum_w_flat / denom) * mask_flat
 
             new_layer = new_layer_flat.view(self.num_clients, *orig_shape)
             for i in range(self.num_clients):
