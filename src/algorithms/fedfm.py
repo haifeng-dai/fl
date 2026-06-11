@@ -11,11 +11,12 @@ from .utils import (
     get_model,
     mse_loss,
     proto_aggregate,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.mu}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.mu)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

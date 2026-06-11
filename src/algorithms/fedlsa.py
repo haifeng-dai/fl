@@ -11,11 +11,12 @@ from .utils import (
     ce_loss,
     cos_contrastive_loss,
     get_model,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.lambda_com}_{args.alpha_sep}_{args.server_epochs}_{args.server_lr}_{args.tau}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.lambda_com)}_{_fmt_num(args.alpha_sep)}_{_fmt_num(args.server_epochs)}_{_fmt_num(args.server_lr)}_{_fmt_num(args.tau)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

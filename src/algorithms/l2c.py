@@ -12,6 +12,7 @@ from .utils import (
     ce_loss,
     generate_adjacency_matrix,
     get_model,
+    _fmt_num,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,17 +22,17 @@ def get_path(args):
     """生成日志文件路径，包含拓扑参数和元学习超参数"""
     adj_suffix = f"{args.adj_type}"
     if args.adj_type == "random":
-        adj_suffix += f"_{args.edge_p}"
+        adj_suffix += f"_{_fmt_num(args.edge_p)}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{args.k_small_world}_{args.edge_p}"
+        adj_suffix += f"_{_fmt_num(args.k_small_world)}_{_fmt_num(args.edge_p)}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{args.m_scale_free}"
+        adj_suffix += f"_{_fmt_num(args.m_scale_free)}"
 
     # 将算法的关键超参加入文件名
     args.file_name = (
         f"{args.common_name}_{adj_suffix}"
-        f"_{args.val_ratio}_{args.lr_alpha}"
-        f"_{args.prune_round}_{args.prune_num}"
+        f"_{_fmt_num(args.val_ratio)}_{_fmt_num(args.lr_alpha)}"
+        f"_{_fmt_num(args.prune_round)}_{_fmt_num(args.prune_num)}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 

@@ -10,11 +10,12 @@ from .utils import (
     get_model,
     kl_loss,
     mse_loss,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.lr_g}_{args.energy}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.lr_g)}_{_fmt_num(args.energy)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

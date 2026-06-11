@@ -11,17 +11,18 @@ from .utils import (
     flattened_matrix_aggregate,
     generate_adjacency_matrix,
     get_model,
+    _fmt_num,
 )
 
 
 def get_path(args):
     adj_suffix = f"{args.adj_type}"
     if args.adj_type == "random":
-        adj_suffix += f"_{args.edge_p}"
+        adj_suffix += f"_{_fmt_num(args.edge_p)}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{args.k_small_world}_{args.edge_p}"
+        adj_suffix += f"_{_fmt_num(args.k_small_world)}_{_fmt_num(args.edge_p)}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{args.m_scale_free}"
+        adj_suffix += f"_{_fmt_num(args.m_scale_free)}"
 
     args.file_name = f"{args.common_name}_{adj_suffix}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")

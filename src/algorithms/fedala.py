@@ -10,11 +10,12 @@ from .utils import (
     BaseServer,
     ce_loss,
     get_model,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.eta}_{args.rand_percent}_{args.layer_idx}_{args.ala_threshold}_{args.num_pre_loss}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.eta)}_{_fmt_num(args.rand_percent)}_{_fmt_num(args.layer_idx)}_{_fmt_num(args.ala_threshold)}_{_fmt_num(args.num_pre_loss)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

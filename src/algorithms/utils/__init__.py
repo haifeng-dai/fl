@@ -32,7 +32,15 @@ __all__ = [
     "kl_loss",
     "extract_prototypes",
     "orthogonality_loss",
+    "_fmt_num",
 ]
+
+
+def _fmt_num(x):
+    """数值统一转字符串：整数不保留 .0，浮点数保留原样"""
+    if isinstance(x, float) and x == int(x):
+        return str(int(x))
+    return str(x)
 
 
 def compare_model_parameters(params1: dict, params2: dict) -> bool:

@@ -88,6 +88,7 @@ l2c:
 dispfl:
     dense_ratio: 0.5
     anneal_factor: 0.5
+    erk_power_scale: 1.0
 
 pearfl:
     lamda: 0.1
@@ -107,12 +108,47 @@ efhc:
     bandwidth_std: 0.0
 
 dfedset:
-    lambda_sa: 10 # [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-    eta: 0.9
-    lambda_so: 0.1 # [0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
+    lambda_sa:
+        # - 0
+        # - 10
+        - 20
+        # - 30
+        # - 40
+        # - 50
+        # - 60
+        # - 70
+        # - 80
+        # - 90
+        # - 100
+    eta:
+        # - 0.5
+        - 0.9
+        # - 0.99
+        # - 0.999
+    lambda_so:
+        # - 0
+        # - 1
+        # - 2
+        # - 3
+        # - 4
+        - 5
+        # - 6
+        # - 7
+        # - 8
+        # - 9
+        # - 10
     ablate:
         relay: true # false → 无中继，无样本类别直接清零
-        aggregator: "pushsum" # "redirect"(默认) | "pushsum" → 单向 Push-Sum 聚合
-        confidence: "count" # "count" → 原始样本量  |  "none" → 无置信度
-        trigger: "global" # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
-        gamma_global: 0.005 # trigger="global" 时使用的固定 GSD 阈值
+        aggregator: # "redirect"(默认) | "pushsum" → 单向 Push-Sum 聚合
+            - pushsum
+            # - redirect
+        confidence: # "count" → 原始样本量  |  "none" → 无置信度
+            - none
+            # - count
+        trigger: # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
+            - global
+            # - all
+        gamma_global: # trigger="global" 时使用的固定 GSD 阈值
+            - 0.001
+            # - 0.005
+            # - 0.01

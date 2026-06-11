@@ -8,11 +8,12 @@ from .utils import (
     BaseServer,
     ce_loss,
     get_model,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.mu}_{args.tau}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.mu)}_{_fmt_num(args.tau)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

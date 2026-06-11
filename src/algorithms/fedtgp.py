@@ -14,11 +14,12 @@ from .utils import (
     get_model,
     mse_loss,
     proto_aggregate,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.lamda_}_{args.server_epochs}_{args.server_lr}_{args.margin_threshold}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.lamda_)}_{_fmt_num(args.server_epochs)}_{_fmt_num(args.server_lr)}_{_fmt_num(args.margin_threshold)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

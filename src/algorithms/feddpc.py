@@ -13,11 +13,12 @@ from .utils import (
     get_model,
     mse_loss,
     orthogonality_loss,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.lamda_}_{args.head_epochs}_{args.body_epochs}_{args.lr_head}_{args.lr_body}_{args.server_epochs}_{args.server_lr}_{args.lambda_p}_{args.lambda_acl}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.lamda_)}_{_fmt_num(args.head_epochs)}_{_fmt_num(args.body_epochs)}_{_fmt_num(args.lr_head)}_{_fmt_num(args.lr_body)}_{_fmt_num(args.server_epochs)}_{_fmt_num(args.server_lr)}_{_fmt_num(args.lambda_p)}_{_fmt_num(args.lambda_acl)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

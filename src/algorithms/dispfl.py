@@ -11,6 +11,7 @@ from .utils import (
     ce_loss,
     generate_adjacency_matrix,
     get_model,
+    _fmt_num,
 )
 
 
@@ -18,17 +19,16 @@ def get_path(args):
     """生成日志文件路径，包含拓扑参数和稀疏化参数"""
     adj_suffix = f"{args.adj_type}"
     if args.adj_type == "random":
-        adj_suffix += f"_{args.edge_p}"
+        adj_suffix += f"_{_fmt_num(args.edge_p)}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{args.k_small_world}_{args.edge_p}"
+        adj_suffix += f"_{_fmt_num(args.k_small_world)}_{_fmt_num(args.edge_p)}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{args.m_scale_free}"
+        adj_suffix += f"_{_fmt_num(args.m_scale_free)}"
 
     # 将算法的关键超参加入文件名
-    erk_scale = getattr(args, "erk_power_scale", 1.0)
     args.file_name = (
         f"{args.common_name}_{adj_suffix}"
-        f"_{args.dense_ratio}_{args.anneal_factor}_{erk_scale}"
+        f"_{_fmt_num(args.dense_ratio)}_{_fmt_num(args.anneal_factor)}_{_fmt_num(args.erk_power_scale)}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
@@ -230,7 +230,7 @@ class Server(BaseServer):
             total_params += n_param
             raw_probabilities[k] = np.sum(v.shape) / np.prod(v.shape)
 
-        erk_power_scale = getattr(self.args, "erk_power_scale", 1.0)
+        erk_power_scale = self.args.erk_power_scale
         for k in raw_probabilities:
             raw_probabilities[k] **= erk_power_scale
 

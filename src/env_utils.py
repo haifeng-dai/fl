@@ -31,7 +31,7 @@ def init_ray(args):
     num_gpus = len(gpu_ids)
 
     resource_msg = f"GPUs: {num_gpus} ({gpus_str})" if num_gpus > 0 else "CPU Only"
-    print(f"-> Initializing Ray Framework (Mandatory) | {resource_msg}")
+    print(f"-> Initializing Ray Framework | {resource_msg}")
 
     # 1. 在初始化前设置全局可见设备，让 Ray 仅管理这些卡
     os.environ["CUDA_VISIBLE_DEVICES"] = gpus_str

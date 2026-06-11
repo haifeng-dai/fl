@@ -14,11 +14,12 @@ from .utils import (
     mse_loss,
     param_aggregate,
     proto_aggregate,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.alpha_sa}_{args.lambda_r}_{args.lambda_mcl}_{args.lambda_cc}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.alpha_sa)}_{_fmt_num(args.lambda_r)}_{_fmt_num(args.lambda_mcl)}_{_fmt_num(args.lambda_cc)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

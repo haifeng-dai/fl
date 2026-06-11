@@ -4,6 +4,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+os.makedirs("figures", exist_ok=True)
+
+
+def _fmt_num(x):
+    """数值统一转字符串，整数不保留 .0"""
+    if isinstance(x, float) and x == int(x):
+        return str(int(x))
+    return str(x)
+
+
 PARAM_MAP = {
     "lamda_": r"$\lambda$",
     "lambda_": r"$\lambda$",
@@ -18,6 +28,7 @@ PARAM_MAP = {
     "threshold": "Thres",
     "dense_ratio": "Density",
     "anneal_factor": "Anneal",
+    "erk_power_scale": r"ERK Power",
     "lr_v": r"$LR_{head}$",
     "lambda_p": r"$\lambda_p$",
     "lambda_acl": r"$\lambda_{acl}$",
@@ -31,11 +42,11 @@ def get_adj_suffix(args):
     adj_type = args["adj_type"]
     suffix = f"{adj_type}"
     if adj_type == "random":
-        suffix += f"_{args['edge_p']}"
+        suffix += f"_{_fmt_num(args['edge_p'])}"
     elif adj_type == "small_world":
-        suffix += f"_{args['k_small_world']}_{args['edge_p']}"
+        suffix += f"_{_fmt_num(args['k_small_world'])}_{_fmt_num(args['edge_p'])}"
     elif adj_type == "scale_free":
-        suffix += f"_{args['m_scale_free']}"
+        suffix += f"_{_fmt_num(args['m_scale_free'])}"
     return suffix
 
 
@@ -61,56 +72,56 @@ class ResultLoader:
         self.base_dir = base_dir
         self.algo_patterns = {
             "fedala": lambda args: (
-                f"_{args['eta']}_{args['rand_percent']}_{args['layer_idx']}_{args['ala_threshold']}_{args['num_pre_loss']}"
+                f"_{_fmt_num(args['eta'])}_{_fmt_num(args['rand_percent'])}_{_fmt_num(args['layer_idx'])}_{_fmt_num(args['ala_threshold'])}_{_fmt_num(args['num_pre_loss'])}"
             ),
             "fedavg": lambda args: "",
-            "feddyn": lambda args: f"_alpha{args['alpha_coef']}",
-            "fedfm": lambda args: f"_{args['mu']}",
-            "fedkd": lambda args: f"_{args['lr_g']}_{args['energy']}",
+            "feddyn": lambda args: f"_alpha{_fmt_num(args['alpha_coef'])}",
+            "fedfm": lambda args: f"_{_fmt_num(args['mu'])}",
+            "fedkd": lambda args: f"_{_fmt_num(args['lr_g'])}_{_fmt_num(args['energy'])}",
             "fedlsa": lambda args: (
-                f"_{args['lambda_com']}_{args['alpha_sep']}_{args['server_epochs']}_{args['server_lr']}_{args['tau']}"
+                f"_{_fmt_num(args['lambda_com'])}_{_fmt_num(args['alpha_sep'])}_{_fmt_num(args['server_epochs'])}_{_fmt_num(args['server_lr'])}_{_fmt_num(args['tau'])}"
             ),
             "fedper": lambda args: "",
             "fedpln": lambda args: (
-                f"_{args['lambda_']}_{args['epoch_pln']}_{args['lr_pln']}_{args['batch_size_pln']}_{args['depth_pln']}_{args['width_pln']}_{args['mode']}_{args['fixed_proto']}_{args['init_emb']}_{args['har']}"
+                f"_{_fmt_num(args['lambda_'])}_{_fmt_num(args['epoch_pln'])}_{_fmt_num(args['lr_pln'])}_{_fmt_num(args['batch_size_pln'])}_{_fmt_num(args['depth_pln'])}_{_fmt_num(args['width_pln'])}_{args['mode']}_{_fmt_num(args['fixed_proto'])}_{_fmt_num(args['init_emb'])}_{_fmt_num(args['har'])}"
             ),
             "fedproc": lambda args: "",
-            "fedproto": lambda args: f"_{args['mu']}",
-            "fedprox": lambda args: f"_{args['mu']}",
-            "fedrep": lambda args: f"_{args['epochs_head']}",
+            "fedproto": lambda args: f"_{_fmt_num(args['mu'])}",
+            "fedprox": lambda args: f"_{_fmt_num(args['mu'])}",
+            "fedrep": lambda args: f"_{_fmt_num(args['epochs_head'])}",
             "fedsa": lambda args: (
-                f"_{args['alpha_sa']}_{args['lambda_r']}_{args['lambda_mcl']}_{args['lambda_cc']}"
+                f"_{_fmt_num(args['alpha_sa'])}_{_fmt_num(args['lambda_r'])}_{_fmt_num(args['lambda_mcl'])}_{_fmt_num(args['lambda_cc'])}"
             ),
-            "scaffold": lambda args: f"_glr{args['global_lr']}",
+            "scaffold": lambda args: f"_glr{_fmt_num(args['global_lr'])}",
             "fedtgp": lambda args: (
-                f"_{args['lamda_']}_{args['server_epochs']}_{args['server_lr']}_{args['margin_threshold']}"
+                f"_{_fmt_num(args['lamda_'])}_{_fmt_num(args['server_epochs'])}_{_fmt_num(args['server_lr'])}_{_fmt_num(args['margin_threshold'])}"
             ),
             "feddpc": lambda args: (
-                f"_{args['lamda_']}_{args['head_epochs']}_{args['body_epochs']}_{args['lr_head']}_{args['lr_body']}_{args['server_epochs']}_{args['server_lr']}_{args['lambda_p']}_{args['lambda_acl']}"
+                f"_{_fmt_num(args['lamda_'])}_{_fmt_num(args['head_epochs'])}_{_fmt_num(args['body_epochs'])}_{_fmt_num(args['lr_head'])}_{_fmt_num(args['lr_body'])}_{_fmt_num(args['server_epochs'])}_{_fmt_num(args['server_lr'])}_{_fmt_num(args['lambda_p'])}_{_fmt_num(args['lambda_acl'])}"
             ),
-            "fml": lambda args: f"_{args['alpha_fml']}_{args['beta_fml']}",
+            "fml": lambda args: f"_{_fmt_num(args['alpha_fml'])}_{_fmt_num(args['beta_fml'])}",
             "lgfedavg": lambda args: "",
-            "moon": lambda args: f"_{args['mu']}_{args['tau']}",
-            "fedtest": lambda args: f"_ray_{args['use_ray']}",
+            "moon": lambda args: f"_{_fmt_num(args['mu'])}_{_fmt_num(args['tau'])}",
+            "fedtest": lambda args: f"_ray_{_fmt_num(args['use_ray'])}",
             "local": lambda args: "",
             # Decentralized Algorithms
             "l2c": lambda args: (
-                f"_{get_adj_suffix(args)}_{args['val_ratio']}_{args['lr_alpha']}_{args['prune_round']}_{args['prune_num']}"
+                f"_{get_adj_suffix(args)}_{_fmt_num(args['val_ratio'])}_{_fmt_num(args['lr_alpha'])}_{_fmt_num(args['prune_round'])}_{_fmt_num(args['prune_num'])}"
             ),
             "dispfl": lambda args: (
-                f"_{get_adj_suffix(args)}_{args['dense_ratio']}_{args['anneal_factor']}"
+                f"_{get_adj_suffix(args)}_{_fmt_num(args['dense_ratio'])}_{_fmt_num(args['anneal_factor'])}_{_fmt_num(args.get('erk_power_scale', 1.0))}"
             ),
-            "pearfl": lambda args: f"_{get_adj_suffix(args)}_{args['lamda']}",
+            "pearfl": lambda args: f"_{get_adj_suffix(args)}_{_fmt_num(args['lamda'])}",
             "dfedavgm": lambda args: f"_{get_adj_suffix(args)}",
             "dfedpgp": lambda args: (
-                f"_{get_adj_suffix(args)}_{args['local_v_epochs']}_{args['lr_v']}_{args['momentum_v']}_{args['weight_decay_v']}"
+                f"_{get_adj_suffix(args)}_{_fmt_num(args['local_v_epochs'])}_{_fmt_num(args['lr_v'])}_{_fmt_num(args['momentum_v'])}_{_fmt_num(args['weight_decay_v'])}"
             ),
-            "proxyfl": lambda args: f"_{get_adj_suffix(args)}_{args['mu']}",
+            "proxyfl": lambda args: f"_{get_adj_suffix(args)}_{_fmt_num(args['mu'])}",
             "dfedset": lambda args: (
-                f"_{get_adj_suffix(args)}_{args.get('lambda_sa', args.get('mu'))}_{args['eta']}_{args.get('lambda_so', args.get('lambda_cos'))}"
+                f"_{get_adj_suffix(args)}_{_fmt_num(args.get('lambda_sa', args.get('mu')))}_{_fmt_num(args['eta'])}_{_fmt_num(args.get('lambda_so', args.get('lambda_cos')))}"
             ),
             "efhc": lambda args: (
-                f"_{get_adj_suffix(args)}_r{args['event_r']}_bw{args['bandwidth_mean']}"
+                f"_{get_adj_suffix(args)}_r{_fmt_num(args['event_r'])}_bw{_fmt_num(args['bandwidth_mean'])}"
             ),
         }
 
@@ -133,11 +144,11 @@ class ResultLoader:
         return first
 
     def load(self, algo, dataset, partition, num_clients, specific_run=None, ablate_name=None, **kwargs):
-        folder_name = f"{dataset}_{partition}_{num_clients}"
+        folder_name = f"{dataset}_{partition}_{_fmt_num(num_clients)}"
         if partition == "dirichlet":
-            folder_name += f"_{kwargs['alpha']}"
+            folder_name += f"_{_fmt_num(kwargs['alpha'])}"
         elif partition == "pathological":
-            folder_name += f"_{kwargs['n_class']}"
+            folder_name += f"_{_fmt_num(kwargs['n_class'])}"
 
         # 结果目录路径：算法 / 数据集 /
         folder_path = os.path.join(self.base_dir, algo, folder_name)
@@ -150,7 +161,7 @@ class ResultLoader:
             return None
 
         # 构造基础文件名 (包含公共参数前缀)
-        common_name = f"{kwargs['epochs']}_{kwargs['batch_size']}_{kwargs['lr']}"
+        common_name = f"{_fmt_num(kwargs['epochs'])}_{_fmt_num(kwargs['batch_size'])}_{_fmt_num(kwargs['lr'])}"
         base_name = common_name
 
         # 添加算法特定的后缀以实现严格参数匹配
@@ -286,8 +297,6 @@ def plot_results(
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
 
-    if not os.path.exists("figures"):
-        os.makedirs("figures")
     save_name = (title or "comparison").lower().replace(" ", "_").replace(
         "(", ""
     ).replace(")", "") + ".png"
@@ -437,8 +446,6 @@ def plot_results_split(
 
     plt.tight_layout()
 
-    if not os.path.exists("figures"):
-        os.makedirs("figures")
     save_base = (
         (title or "comparison")
         .lower()
@@ -511,8 +518,6 @@ def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
     plt.yscale("log")
     plt.tight_layout()
 
-    if not os.path.exists("figures"):
-        os.makedirs("figures")
     save_name = (title or "loss_comparison").lower().replace(" ", "_").replace(
         "(", ""
     ).replace(")", "") + ".png"

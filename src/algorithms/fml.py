@@ -11,11 +11,12 @@ from .utils import (
     get_model,
     kl_loss,
     param_aggregate,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.alpha_fml}_{args.beta_fml}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.alpha_fml)}_{_fmt_num(args.beta_fml)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

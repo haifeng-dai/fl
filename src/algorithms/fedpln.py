@@ -10,11 +10,12 @@ from .utils import (
     dist_contrastive_loss,
     get_model,
     param_aggregate,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{args.lambda_}_{args.epoch_pln}_{args.lr_pln}_{args.batch_size_pln}_{args.depth_pln}_{args.width_pln}_{args.mode}_{args.fixed_proto}_{args.init_emb}_{args.har}"
+    args.file_name = f"{args.common_name}_{_fmt_num(args.lambda_)}_{_fmt_num(args.epoch_pln)}_{_fmt_num(args.lr_pln)}_{_fmt_num(args.batch_size_pln)}_{_fmt_num(args.depth_pln)}_{_fmt_num(args.width_pln)}_{args.mode}_{_fmt_num(args.fixed_proto)}_{_fmt_num(args.init_emb)}_{_fmt_num(args.har)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

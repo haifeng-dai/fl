@@ -9,11 +9,12 @@ from .utils import (
     BaseServer,
     ce_loss,
     get_model,
+    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_alpha{args.alpha_coef}"
+    args.file_name = f"{args.common_name}_alpha{_fmt_num(args.alpha_coef)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
