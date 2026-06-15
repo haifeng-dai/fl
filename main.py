@@ -6,6 +6,7 @@ import traceback
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 
 import src
+from src import TrainingFailureError
 
 
 def run_experiment(args, t):
@@ -80,13 +81,27 @@ def main():
         # 2. 初始化实验保存路径
         src.get_pre_name(args)
 
-        # 3. 循环执行多次实验：只需传入 args 对象和当前索引 t
-        for t in range(args.times):
-            src.init_ray(args)
-            try:
-                run_experiment(args, t)
-            finally:
-                src.shutdown_ray()
+        # 3. 循环执行多次实验：支持通过 -r/--run_time 指定索引子集
+        rt_str = getattr(args, "run_time", None)
+        if rt_str is not None:
+            trial_indices = [int(x.strip()) for x in rt_str.split(",")]
+            trial_indices = [t for t in trial_indices if 0 <= t < args.times]
+            if not trial_indices:
+                print(f"Warning: all specified trial indices out of range [0, {args.times}), falling back to full range")
+                trial_indices = range(args.times)
+        else:
+            trial_indices = range(args.times)
+
+        for t in trial_indices:
+            while True:
+                src.init_ray(args)
+                try:
+                    run_experiment(args, t)
+                    break
+                except TrainingFailureError as e:
+                    print(f"Trial {t+1}/{args.times} failed (NaN/Inf), retrying with same seed...")
+                finally:
+                    src.shutdown_ray()
 
 
 if __name__ == "__main__":

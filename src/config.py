@@ -34,6 +34,10 @@ def get_config():
     base_parser.add_argument(
         "-t", "--test", action="store_true", help="Enable test mode"
     )
+    base_parser.add_argument(
+        "-r", "--run_time", type=str, default=None,
+        help="Comma-separated trial indices to run, 0-based (e.g. '3,4')"
+    )
 
     # 解析命令行参数
     args = base_parser.parse_args()
@@ -74,6 +78,12 @@ def get_config():
 
     # 6. 展开参数搜索 (Sweep)
     configs = expand_sweep(config_dict)
+
+    # 7. 将 CLI 独有参数注入每个配置（不经过 YAML/sweep）
+    if args.run_time is not None:
+        for cfg in configs:
+            cfg.run_time = args.run_time
+
     return _apply_ablation(configs, raw_ablation)
 
 
@@ -140,7 +150,7 @@ def _apply_ablation(configs, ablation_str):
             if k in support_params:
                 setattr(cfg, k, v)
                 if k == "gamma_global" and ablate_dict.get("trigger") == "global":
-                    name_parts.append(f"{k}_{v}")
+                    name_parts.append(f"gamma_{v}")
         cfg.ablate_name = "_".join(name_parts)
     return configs
 

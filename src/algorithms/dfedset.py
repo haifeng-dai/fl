@@ -2,15 +2,18 @@ import os
 import time
 
 import numpy as np
+import ray
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+
+from src import TrainingFailureError
 
 from .utils import (
     BaseServer,
     ce_loss,
     compute_mh_weights,
-    evaluate_prototype,
+    eval_client_worker,
     extract_prototypes,
     generate_adjacency_matrix,
     get_model,
@@ -74,11 +77,13 @@ def client_worker(params):
             features = model.extractor(x)
             logits = model.classifier(features)
 
-            l_ce = ce_loss(logits, y)
-            target_protos = consensus_P[y]
-            l_con = mse_loss(features, target_protos)
-            l_cos = (1 - F.cosine_similarity(features, target_protos, dim=-1)).mean()
-            loss = l_ce + lambda_sa * l_con + lambda_so * l_cos
+            loss = ce_loss(logits, y)
+            if lambda_sa != 0 or lambda_so != 0:
+                target_protos = consensus_P[y]
+                if lambda_sa != 0:
+                    loss = loss + lambda_sa * mse_loss(features, target_protos)
+                if lambda_so != 0:
+                    loss = loss + lambda_so * (1 - F.cosine_similarity(features, target_protos, dim=-1)).mean()
 
             optimizer.zero_grad()
             loss.backward()
@@ -121,10 +126,6 @@ class Server(BaseServer):
         # 1. 计算静态 Metropolis-Hastings 双随机矩阵 (恒满足行和为 1、列和为 1 且对称)
         self.M_avg = compute_mh_weights(adj, device=self.device)
 
-        # 列随机矩阵 M_ps（仅 aggregator="pushsum" 模式使用）
-        row_sum = self.adj.sum(dim=1, keepdim=True)
-        self.M_ps = (self.adj / row_sum).t().to(self.device)
-
         # 状态缓存
         self.S_cache = [
             torch.zeros(self.num_class, args.feature_dim)
@@ -153,27 +154,29 @@ class Server(BaseServer):
         self.extractor_param_info = []
         total = 0
         for k in self.extractor_keys:
-            shape = self.clients_state[0][k].shape
-            n = self.clients_state[0][k].numel()
-            self.extractor_param_info.append((k, shape, total, total + n))
-            total += n
+             shape = self.clients_state[0][k].shape
+             n = self.clients_state[0][k].numel()
+             self.extractor_param_info.append((k, shape, total, total + n))
+             total += n
         self.extractor_total_size = total
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        # num_join_clients = int(self.num_clients * self.args.join_ratio)
+        # num_join_clients = max(1, num_join_clients)
+        num_join_clients = self.num_clients
+        selected_clients = np.arange(self.num_clients)
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- DFedSET Round {r + 1}/{self.rounds} ---")
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
+            # selected_clients = np.random.choice(
+            #     self.num_clients, num_join_clients, replace=False
+            # )
 
             ablate = getattr(self.args, "ablate", {})
             confidence_mode = ablate.get("confidence", "log")
             trigger_mode = ablate.get("trigger", "adaptive")
-            agg_mode = ablate.get("aggregator", "redirect")
+            use_redirect = ablate.get("aggregator", True)
 
             def get_client_param(i):
                 return (
@@ -201,6 +204,15 @@ class Server(BaseServer):
             total_loss = 0.0
             for cid, res in results.items():
                 total_loss += res["loss"]
+                if not np.isfinite(res["loss"]):
+                    raise TrainingFailureError(
+                        f"Client {cid} loss is NaN/Inf: {res['loss']}"
+                    )
+                for k, v in res["state"].items():
+                    if not torch.isfinite(v).all():
+                        raise TrainingFailureError(
+                            f"Client {cid} state[{k}] has NaN/Inf"
+                        )
                 self.clients_state[cid] = res["state"]
 
                 # 接力缓存法核心：如果某类别在本轮本地训练中没有样本计数，继承上一轮结束时的值而不是清零！
@@ -227,34 +239,23 @@ class Server(BaseServer):
             )
             local_P = S / (W + 1e-12)
 
-            # 2. 计算各客户端本轮的本地 GSD
-            all_gsds = []
-            for i in range(self.num_clients):
-                weights = self.counts_cache[i].to(self.device)
-                total_n = weights.sum()
-                if total_n > 0:
-                    probs = weights / total_n
-                    norm_local = torch.norm(local_P[i], dim=-1)
-                    norm_consensus = torch.norm(
-                        self.consensus_P[i].to(self.device), dim=-1
-                    )
-                    valid_mask = (norm_local > 1e-8) & (norm_consensus > 1e-8)
+            # ===== GPU 向量化计算本地 GSD =====
+            counts = torch.stack(self.counts_cache).to(self.device)  # [N, C]
+            total_n = counts.sum(dim=1, keepdim=True)                # [N, 1]
+            probs = counts / torch.clamp(total_n, min=1e-12)         # [N, C]
 
-                    cos_sim = torch.zeros(self.num_class, device=self.device)
-                    if valid_mask.any():
-                        cos_sim[valid_mask] = F.cosine_similarity(
-                            local_P[i][valid_mask],
-                            self.consensus_P[i].to(self.device)[valid_mask],
-                            dim=-1,
-                        )
-                    gsd = (probs * (1.0 - cos_sim)).sum()
-                else:
-                    gsd = torch.tensor(1.0, device=self.device)
-                all_gsds.append(gsd)
+            norm_local = torch.norm(local_P, dim=-1)                 # [N, C]
+            consensus_P_tensor = torch.stack(self.consensus_P).to(self.device)  # [N, C, D]
+            norm_consensus = torch.norm(consensus_P_tensor, dim=-1)  # [N, C]
 
-            # 将 GSD 装载为列向量进行 Gossip
-            gsd_tensor = torch.stack(all_gsds)  # 一次性 stack，去掉冗余 .to(device)
-            self.gsd_log.append(gsd_tensor.tolist())  # 批量 CPU 同步，替代逐个 .item()
+            valid_mask = (norm_local > 1e-8) & (norm_consensus > 1e-8)
+            cos_sim = F.cosine_similarity(local_P, consensus_P_tensor, dim=-1)  # [N, C]
+            cos_sim = torch.where(valid_mask, cos_sim, torch.zeros_like(cos_sim))
+
+            gsd_raw = (probs * (1.0 - cos_sim)).sum(dim=1)           # [N]
+            gsd_tensor = torch.where(total_n.squeeze(1) > 0, gsd_raw, torch.ones_like(gsd_raw))
+
+            self.gsd_log.append(gsd_tensor.tolist())
             D = gsd_tensor.view(self.num_clients, 1)
 
             # 3. 搭载 Gossip (S, W, D): 普通平均聚合 (using M_avg)
@@ -276,7 +277,6 @@ class Server(BaseServer):
                     W_tensor[i].cpu(),
                     consensus[i].cpu(),
                 )
-
             # 4. 触发机制：自适应 / 全局阈值 / 全触发
             local_trigger = torch.zeros(
                 self.num_clients, dtype=torch.bool, device=self.device
@@ -289,7 +289,7 @@ class Server(BaseServer):
                 if r == 0:
                     local_trigger.fill_(True)
                     lines = [
-                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
+                        f"Client {i} | Local GSD: {gsd_tensor[i].item():.6f} | [Warmup] Force Triggered"
                         for i in range(self.num_clients)
                     ]
                     print("\n".join(lines))
@@ -297,9 +297,9 @@ class Server(BaseServer):
                     local_trigger.fill_(True)
                     lines = []
                     for i in range(self.num_clients):
-                        self.local_gsd_ema[i] = all_gsds[i]
+                        self.local_gsd_ema[i] = gsd_tensor[i]
                         lines.append(
-                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
+                            f"Client {i} | Local GSD: {gsd_tensor[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
                         )
                     print("\n".join(lines))
                 else:
@@ -307,12 +307,12 @@ class Server(BaseServer):
                     for i in range(self.num_clients):
                         self.local_gsd_ema[i] = (
                             self.eta * self.local_gsd_ema[i]
-                            + (1.0 - self.eta) * all_gsds[i]
+                            + (1.0 - self.eta) * gsd_tensor[i]
                         )
                         lines.append(
-                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma Global: {gamma_global:.6f}"
+                            f"Client {i} | Local GSD: {gsd_tensor[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma Global: {gamma_global:.6f}"
                         )
-                        if all_gsds[i] > gamma_global or self.counts_cache[i].sum() == 0:
+                        if gsd_tensor[i] > gamma_global or self.counts_cache[i].sum() == 0:
                             local_trigger[i] = True
                     print("\n".join(lines))
             else:
@@ -320,7 +320,7 @@ class Server(BaseServer):
                 if r == 0:
                     local_trigger.fill_(True)
                     lines = [
-                        f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Warmup] Force Triggered"
+                        f"Client {i} | Local GSD: {gsd_tensor[i].item():.6f} | [Warmup] Force Triggered"
                         for i in range(self.num_clients)
                     ]
                     print("\n".join(lines))
@@ -328,9 +328,9 @@ class Server(BaseServer):
                     local_trigger.fill_(True)
                     lines = []
                     for i in range(self.num_clients):
-                        self.local_gsd_ema[i] = all_gsds[i]
+                        self.local_gsd_ema[i] = gsd_tensor[i]
                         lines.append(
-                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
+                            f"Client {i} | Local GSD: {gsd_tensor[i].item():.6f} | [Transition] Force Triggered, EMA initialized to {self.local_gsd_ema[i].item():.6f}"
                         )
                     print("\n".join(lines))
                 else:
@@ -338,19 +338,19 @@ class Server(BaseServer):
                     for i in range(self.num_clients):
                         self.local_gsd_ema[i] = (
                             self.eta * self.local_gsd_ema[i]
-                            + (1.0 - self.eta) * all_gsds[i]
+                            + (1.0 - self.eta) * gsd_tensor[i]
                         )
                         current_gamma = self.local_gsd_ema[i]
                         lines.append(
-                            f"Client {i} | Local GSD: {all_gsds[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma: {current_gamma.item():.6f}"
+                            f"Client {i} | Local GSD: {gsd_tensor[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma: {current_gamma.item():.6f}"
                         )
-                        if all_gsds[i] > current_gamma or self.counts_cache[i].sum() == 0:
+                        if gsd_tensor[i] > current_gamma or self.counts_cache[i].sum() == 0:
                             local_trigger[i] = True
                     print("\n".join(lines))
 
             # 邻域扩展激活（被激活链路双向开启，保持活跃子图无向对称）
             trigger_mask = local_trigger.clone()
-            if agg_mode != "pushsum":
+            if use_redirect:
                 for i in range(self.num_clients):
                     if local_trigger[i]:
                         neighbors = torch.where(self.adj[:, i] > 0)[0]
@@ -364,63 +364,54 @@ class Server(BaseServer):
             )
             self.num_triggered_log.append(num_triggered)
             self.triggered_ids_log.append(triggered_ids)
-
             # 5. Extractor: 矩阵化 Flatten → torch.mm → Unflatten 聚合
             if self.extractor_keys and self.extractor_total_size > 0:
-                if agg_mode == "pushsum":
-                    # ===== Push-Sum 列随机聚合 =====
-                    M_dynamic = self.M_ps.clone()
-                    for j in range(self.num_clients):
-                        if not trigger_mask[j]:
-                            M_dynamic[:, j] = 0.0
-                            M_dynamic[j, j] = 1.0
-                    flat = torch.zeros(
-                        self.num_clients, self.extractor_total_size, device=self.device
-                    )
-                    for i in range(self.num_clients):
-                        offset = 0
-                        for k, _, start, end in self.extractor_param_info:
-                            n = end - start
-                            t = self.clients_state[i][k].to(self.device, non_blocking=True)
-                            flat[i, offset:offset + n].copy_(t.reshape(-1))
-                            offset += n
+                flat = torch.zeros(
+                    self.num_clients, self.extractor_total_size, device=self.device
+                )
+                for i in range(self.num_clients):
+                    offset = 0
+                    for k, _, start, end in self.extractor_param_info:
+                        n = end - start
+                        t = self.clients_state[i][k].to(self.device, non_blocking=True)
+                        flat[i, offset:offset + n].copy_(t.reshape(-1))
+                        offset += n
 
-                    new_flat = torch.mm(M_dynamic.to(self.device), flat)
+                # ===== GPU 向量化构建权重矩阵 W =====
+                mask = trigger_mask.float().to(self.device)  # [N]
+                eye_mask = torch.eye(self.num_clients, device=self.device)
+
+                if use_redirect:
+                    # ===== Redirect 重定向（沉默邻居权重重定向到自身） =====
+                    phys_adj = self.adj * (1.0 - eye_mask)
+                    active_mask = phys_adj * mask.unsqueeze(0)
+                    silent_mask = phys_adj * (1.0 - mask.unsqueeze(0))
+                    W = self.M_avg * active_mask
+                    diag_vals = self.M_avg.diagonal() + (self.M_avg * silent_mask).sum(dim=1)
+                    W = W + torch.diag(diag_vals)
+                    row_identities = (1.0 - mask).unsqueeze(1) * eye_mask
+                    W = W * mask.unsqueeze(1) + row_identities
                 else:
-                    # ===== Redirect 重定向（默认） =====
-                    W_redirect = torch.zeros(self.num_clients, self.num_clients)
-                    for i in range(self.num_clients):
-                        if not trigger_mask[i]:
-                            W_redirect[i, i] = 1.0
-                            continue
-                        neighbors = torch.where(self.adj[i] > 0)[0].tolist()
-                        physical = [int(nb) for nb in neighbors if nb != i]
-                        active = [nb for nb in physical if trigger_mask[nb]]
-                        silent = [nb for nb in physical if not trigger_mask[nb]]
-                        W_redirect[i, i] = float(self.M_avg[i, i])
-                        for nb in silent:
-                            W_redirect[i, i] += float(self.M_avg[i, nb])
-                        for nb in active:
-                            W_redirect[i, nb] = float(self.M_avg[i, nb])
-
-                    flat = torch.zeros(
-                        self.num_clients, self.extractor_total_size, device=self.device
-                    )
-                    for i in range(self.num_clients):
-                        offset = 0
-                        for k, _, start, end in self.extractor_param_info:
-                            n = end - start
-                            t = self.clients_state[i][k].to(self.device, non_blocking=True)
-                            flat[i, offset:offset + n].copy_(t.reshape(-1))
-                            offset += n
-
-                    new_flat = torch.mm(W_redirect.to(self.device), flat)
-
+                    # ===== Plain 聚合（丢弃沉默边，剩余边重归一化） =====
+                    active_matrix = mask.unsqueeze(1) * mask.unsqueeze(0)
+                    W = self.M_avg * active_matrix
+                    row_identities = (1.0 - mask).unsqueeze(1) * eye_mask
+                    W = W * mask.unsqueeze(1) + row_identities
+                    row_sums = W.sum(dim=1, keepdim=True).clamp(min=1e-12)
+                    W = W / row_sums
+                new_flat = torch.mm(W, flat)
+                new_flat_cpu = new_flat.cpu()
                 for i in range(self.num_clients):
                     for k, shape, start, end in self.extractor_param_info:
                         n = end - start
                         self.clients_state[i][k] = (
-                            new_flat[i, start:end].view(shape).cpu().clone()
+                            new_flat_cpu[i, start:end].view(shape).clone()
+                        )
+            for i in range(self.num_clients):
+                for k, v in self.clients_state[i].items():
+                    if not torch.isfinite(v).all():
+                        raise TrainingFailureError(
+                            f"After aggregation, client {i} state[{k}] has NaN/Inf"
                         )
 
             self.evaluate(protos=self.consensus_P)
@@ -430,24 +421,29 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def evaluate(self, model_states=None, protos=None):
-        super().evaluate(model_states=model_states, protos=None)
-        if protos is not None:
-            p_accs = []
-            target_states = (
-                model_states if model_states is not None else self.clients_state
-            )
-            self.model.to(self.device)
-            for i in range(self.num_clients):
-                self.model.load_state_dict(target_states[i])
-                client_proto = protos[i].to(self.device)
-                p_accs.append(
-                    evaluate_prototype(
-                        self.model, client_proto, self.test_set[i], self.device
-                    )
+        target_states = model_states if model_states is not None else self.clients_state
+        ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
+        futures = []
+        for i in range(self.num_clients):
+            client_proto = protos[i] if protos is not None else None
+            futures.append(
+                eval_client_worker.options(
+                    num_gpus=ray_gpu_fraction,
+                    scheduling_strategy="SPREAD",
+                ).remote(
+                    self.args.model,
+                    self.args.dataset,
+                    self.args.feature_dim,
+                    target_states[i],
+                    self.test_set_refs[i],
+                    self.client_gpu[i],
+                    client_proto,
                 )
-            p_acc = sum(p_accs) / len(p_accs) if p_accs else 0.0
-            self.acc_proto.append(p_acc)
-            self.model.cpu()
+            )
+        results = ray.get(futures)
+        self.acc.append(sum(r["acc"] for r in results) / self.num_clients)
+        if protos is not None:
+            self.acc_proto.append(sum(r["p_acc"] for r in results) / self.num_clients)
 
     def save(self):
         f = {

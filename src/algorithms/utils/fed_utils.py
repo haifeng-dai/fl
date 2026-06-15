@@ -26,6 +26,18 @@ def worker(worker_func, params):
     return worker_func(tuple(p_list))
 
 
+@ray.remote
+def eval_client_worker(model_name, dataset_name, feature_dim, state_dict, test_set, device, prototype=None):
+    """Ray Worker: 并行评估单个客户端的模型准确率与原型准确率。"""
+    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model.load_state_dict(state_dict)
+    acc = evaluate_model(model, test_set, device)
+    p_acc = 0.0
+    if prototype is not None:
+        p_acc = evaluate_prototype(model, prototype.to(device), test_set, device)
+    return {"acc": acc, "p_acc": p_acc}
+
+
 class BaseServer:
     def __init__(self, pfl: bool, args):
         self.model = get_model(args.model, args.dataset, args.feature_dim).cpu()
@@ -80,6 +92,12 @@ class BaseServer:
         dev_str = "cuda:0" if torch.cuda.is_available() else "cpu"
         self.client_gpu = {i: torch.device(dev_str) for i in range(self.num_clients)}
 
+        # 3. 缓存测试集到 Ray Object Store，供并行评估使用
+        if pfl:
+            self.test_set_refs = [ray.put(self.test_set[i]) for i in range(self.num_clients)]
+        else:
+            self.test_set_refs = [ray.put(self.test_set) for _ in range(self.num_clients)]
+
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
     ):
@@ -89,62 +107,40 @@ class BaseServer:
         self.model.load_state_dict(aggregated_state)
 
     def evaluate(self, model_states=None, protos=None):
-        """
-        智能评估接口：自动在全局评估与个性化评估之间切换。
-        """
-        global_backup = None
-        if self.pfl:
-            global_backup = {
-                k: v.cpu().clone() for k, v in self.model.state_dict().items()
-            }
-
         if not self.pfl:
             acc = evaluate_model(self.model, self.test_set, self.device)
             self.acc.append(acc)
-        else:
-            accs = []
-            self.model.to(self.device)
-            target_states = (
-                model_states if model_states is not None else self.clients_state
-            )
-            for i in range(self.num_clients):
-                self.model.load_state_dict(target_states[i])
-                accs.append(evaluate_model(self.model, self.test_set[i], self.device))
-            self.acc.append(sum(accs) / len(accs) if accs else 0.0)
-
-        if protos is not None:
-            if isinstance(protos, dict):
-                proto_tensor = torch.zeros(
-                    self.num_class, self.args.feature_dim, device=self.device
-                )
-                for k, v in protos.items():
-                    proto_tensor[k] = v.to(self.device)
-            else:
-                proto_tensor = protos.to(self.device)
-
-            if not self.pfl:
+            if protos is not None:
                 p_acc = evaluate_prototype(
-                    self.model, proto_tensor, self.test_set, self.device
+                    self.model, protos.to(self.device), self.test_set, self.device
                 )
-            else:
-                p_accs = []
-                target_states = (
-                    model_states if model_states is not None else self.clients_state
+                self.acc_proto.append(p_acc)
+            return
+
+        # pfl=True: Ray 并行评估
+        target_states = model_states if model_states is not None else self.clients_state
+        ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
+        client_proto = protos.cpu() if protos is not None else None
+        futures = []
+        for i in range(self.num_clients):
+            futures.append(
+                eval_client_worker.options(
+                    num_gpus=ray_gpu_fraction,
+                    scheduling_strategy="SPREAD",
+                ).remote(
+                    self.args.model,
+                    self.args.dataset,
+                    self.args.feature_dim,
+                    target_states[i],
+                    self.test_set_refs[i],
+                    self.client_gpu[i],
+                    client_proto,
                 )
-                for i in range(self.num_clients):
-                    self.model.load_state_dict(target_states[i])
-                    p_accs.append(
-                        evaluate_prototype(
-                            self.model, proto_tensor, self.test_set[i], self.device
-                        )
-                    )
-                p_acc = sum(p_accs) / len(p_accs) if p_accs else 0.0
-            self.acc_proto.append(p_acc)
-
-        if self.pfl:
-            self.model.load_state_dict(global_backup)
-
-        self.model.cpu()
+            )
+        results = ray.get(futures)
+        self.acc.append(sum(r["acc"] for r in results) / self.num_clients)
+        if protos is not None:
+            self.acc_proto.append(sum(r["p_acc"] for r in results) / self.num_clients)
 
     def run_clients(self, client_worker, parameters):
         """强制通过 Ray 运行客户端训练。"""
@@ -170,7 +166,11 @@ class BaseServer:
         return results_map
 
     def deal_save(self, f):
-        """将实验结果字典持久化到磁盘"""
+        save_name = f"{self.args.file_name}_{self.args.cur_time}.pt"
+        save_full_path = os.path.join(self.args.save_path, save_name)
+        if getattr(self.args, "test", False):
+            print(f"\n-> [Test Mode] Would save to: {save_full_path} (skipped)")
+            return
         os.makedirs(self.args.save_path, exist_ok=True)
         save_name = f"{self.args.file_name}_{self.args.cur_time}.pt"
         save_full_path = os.path.join(self.args.save_path, save_name)
