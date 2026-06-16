@@ -2,7 +2,7 @@ import torch
 
 from .aggregate import flattened_matrix_aggregate, param_aggregate, proto_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
-from .fed_utils import BaseServer, eval_client_worker, get_model
+from .fed_utils import BaseServer, eval_worker, get_model
 from .loss import (
     ce_loss,
     cos_contrastive_loss,
@@ -21,7 +21,7 @@ __all__ = [
     "evaluate_model",
     "evaluate_prototype",
     "BaseServer",
-    "eval_client_worker",
+    "eval_worker",
     "get_model",
     "compute_mh_weights",
     "generate_adjacency_matrix",

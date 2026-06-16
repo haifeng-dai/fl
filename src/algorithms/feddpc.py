@@ -52,7 +52,7 @@ class PLN(nn.Module):
         return out
 
 
-def client_worker(params):
+def train_worker(params):
     """
     FedDPC 客户端训练流程：解耦的交替优化。
     Phase 1: 冻结特征提取器，仅优化分类头。
@@ -241,7 +241,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             total_loss_ce = 0.0
             total_loss_proto = 0.0

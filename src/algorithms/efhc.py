@@ -32,7 +32,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def client_worker(params):
+def train_worker(params):
     (
         _,
         device,
@@ -219,7 +219,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             total_loss = 0.0
             for cid, res in results.items():

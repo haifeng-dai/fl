@@ -90,7 +90,7 @@ class AnchorMapping(nn.Module):
         return F.normalize(out, p=2, dim=-1)
 
 
-def client_worker(params):
+def train_worker(params):
     """
     FedLSA 客户端训练流程。
 
@@ -221,7 +221,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             total_loss = 0.0
             selected_states = []

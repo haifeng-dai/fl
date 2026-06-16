@@ -17,7 +17,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def client_worker(params):
+def train_worker(params):
     """
     LG-FedAvg 本地训练流程:
     - 接收本地特征提取器状态与全局分类器状态。
@@ -111,7 +111,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             total_loss = 0.0
             new_heads = []

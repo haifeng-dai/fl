@@ -10,7 +10,7 @@ from .load_data import load_data
 
 
 @ray.remote
-def worker(worker_func, params):
+def train_worker(worker_func, params):
     """
     Ray 远程工作者的通用包装函数。
     """
@@ -27,7 +27,7 @@ def worker(worker_func, params):
 
 
 @ray.remote
-def eval_client_worker(model_name, dataset_name, feature_dim, state_dict, test_set, device, prototype=None):
+def eval_worker(model_name, dataset_name, feature_dim, state_dict, test_set, device, prototype=None):
     """Ray Worker: 并行评估单个客户端的模型准确率与原型准确率。"""
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(state_dict)
@@ -124,7 +124,7 @@ class BaseServer:
         futures = []
         for i in range(self.num_clients):
             futures.append(
-                eval_client_worker.options(
+                eval_worker.options(
                     num_gpus=ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
                 ).remote(
@@ -142,7 +142,7 @@ class BaseServer:
         if protos is not None:
             self.acc_proto.append(sum(r["p_acc"] for r in results) / self.num_clients)
 
-    def run_clients(self, client_worker, parameters):
+    def run_clients(self, worker_func, parameters):
         """强制通过 Ray 运行客户端训练。"""
         # 根据 max_workers_per_gpu 计算 Ray 需要的显存比例 (1/n)
         ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
@@ -154,10 +154,10 @@ class BaseServer:
             p_list[3] = self.train_set_refs[cid]
             optimized_parameters.append(tuple(p_list))
 
-        remote_worker = worker.options(
+        remote_worker = train_worker.options(
             num_gpus=ray_gpu_fraction, scheduling_strategy="SPREAD"
         )
-        futures = [remote_worker.remote(client_worker, p) for p in optimized_parameters]
+        futures = [remote_worker.remote(worker_func, p) for p in optimized_parameters]
         results_list = ray.get(futures)
 
         results_map = {

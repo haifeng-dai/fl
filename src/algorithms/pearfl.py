@@ -33,7 +33,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def client_worker(params):
+def train_worker(params):
     """
     PearFL 客户端工作函数：本地训练包含原型对齐损失，返回模型参数和本地原型
     """
@@ -205,7 +205,7 @@ class Server(BaseServer):
                 params = [get_client_param(i) for i in selected_clients]
 
                 # 2.2 启动 Ray 并行训练 (1 Epoch)
-                results = self.run_clients(client_worker, params)
+                results = self.run_clients(train_worker, params)
 
                 # 2.3 回收结果：更新模型状态、原型和样本计数
                 epoch_loss = 0.0

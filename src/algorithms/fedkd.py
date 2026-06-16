@@ -107,7 +107,7 @@ def reconstruct_param(compressed_param, device):
         raise ValueError(f"Unknown parameter type: {type(compressed_param)}")
 
 
-def client_worker(params):
+def train_worker(params):
     """
     FedKD 本地训练流程，采用基于 SVD 的通信压缩与相互知识蒸馏机制。
     """
@@ -273,7 +273,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             # 汇集各客户端回传结果并更新服务器端存储的客户端本地状态
             total_loss = 0.0

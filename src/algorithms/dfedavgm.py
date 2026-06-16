@@ -28,7 +28,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def client_worker(params):
+def train_worker(params):
     """
     标准的 FedAvg 本地训练流程，支持动量。
     """
@@ -148,7 +148,7 @@ class Server(BaseServer):
 
             p = [get_client_param(i) for i in selected_clients]
             # 2. 启动客户端多进程并行训练
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             # 3. 收集客户端训练后的状态和损失
             total_loss = 0.0

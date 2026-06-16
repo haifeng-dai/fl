@@ -20,7 +20,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def client_worker(params):
+def train_worker(params):
     """
     FedFM 客户端双阶段工作函数。
     通过 mode 参数区分当前执行的阶段：
@@ -130,7 +130,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results_train = self.run_clients(client_worker, p_train)
+            results_train = self.run_clients(train_worker, p_train)
 
             # 收集训练结果并聚合全局模型
             total_loss = 0.0
@@ -166,7 +166,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results_extract = self.run_clients(client_worker, p_extract)
+            results_extract = self.run_clients(train_worker, p_extract)
 
             # 收集本地锚点并按样本数量加权聚合为全局锚点
             all_local_anchors = []

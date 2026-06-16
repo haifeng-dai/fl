@@ -33,7 +33,7 @@ class SCAFFOLDOptimizer(optim.Optimizer):
                 p.data.add_(d_p + c_g.data - c_l.data, alpha=-group["lr"])
 
 
-def client_worker(params):
+def train_worker(params):
     (
         _,
         device,
@@ -161,7 +161,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             # 汇集并处理各客户端结果
             total_loss = 0.0

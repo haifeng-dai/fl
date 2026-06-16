@@ -72,7 +72,7 @@ class PLN(torch.nn.Module):
         return out
 
 
-def client_worker(params):
+def train_worker(params):
     """
     带有原型学习网络 (PLN) 的 FedPLN 本地训练流程。
     """
@@ -239,7 +239,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             # 汇集各客户端的回传结果，计算模型与 PLN 的加权整体损失
             total_loss_model = 0.0

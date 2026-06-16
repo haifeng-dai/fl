@@ -13,7 +13,7 @@ from .utils import (
     BaseServer,
     ce_loss,
     compute_mh_weights,
-    eval_client_worker,
+    eval_worker,
     extract_prototypes,
     generate_adjacency_matrix,
     get_model,
@@ -37,7 +37,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def client_worker(params):
+def train_worker(params):
     """
     DFedSET Worker: 联合训练 + S/W 原型提取。
     """
@@ -199,7 +199,7 @@ class Server(BaseServer):
 
 
             params = [get_client_param(i) for i in selected_clients]
-            results = self.run_clients(client_worker, params)
+            results = self.run_clients(train_worker, params)
 
             total_loss = 0.0
             for cid, res in results.items():
@@ -427,7 +427,7 @@ class Server(BaseServer):
         for i in range(self.num_clients):
             client_proto = protos[i] if protos is not None else None
             futures.append(
-                eval_client_worker.options(
+                eval_worker.options(
                     num_gpus=ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
                 ).remote(

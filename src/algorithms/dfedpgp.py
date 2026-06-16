@@ -29,7 +29,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def client_worker(params):
+def train_worker(params):
     """
     DFedPGP 客户端工作函数：实现解耦更新和梯度推送
     """
@@ -247,7 +247,7 @@ class Server(BaseServer):
             params = [get_client_param(i) for i in selected_clients]
 
             # 3. 启动客户端并行训练
-            results = self.run_clients(client_worker, params)
+            results = self.run_clients(train_worker, params)
 
             # 4. 收集客户端的更新
             total_loss = 0.0

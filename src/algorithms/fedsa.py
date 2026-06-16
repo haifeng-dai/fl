@@ -40,7 +40,7 @@ def margin(anchor: torch.Tensor) -> float:
     return d.item() / denom
 
 
-def client_worker(params):
+def train_worker(params):
     """
     基于语义锚点 (Semantic Anchors) 与多重正则化的 FedSA 本地训练流程。
     对齐论文公式 (5), (7), (8), (9)。
@@ -180,7 +180,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             total_loss = 0.0
             selected_states = []

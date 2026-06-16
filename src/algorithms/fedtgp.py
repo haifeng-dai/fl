@@ -53,7 +53,7 @@ class TGP(nn.Module):
         return out
 
 
-def client_worker(params):
+def train_worker(params):
     """
     FedTGP 客户端训练流程（基于原型匹配训练）。
     """
@@ -186,7 +186,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(client_worker, p)
+            results = self.run_clients(train_worker, p)
 
             total_loss_ce = 0.0
             total_loss_proto = 0.0

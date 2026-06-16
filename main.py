@@ -98,7 +98,7 @@ def main():
                 try:
                     run_experiment(args, t)
                     break
-                except TrainingFailureError as e:
+                except TrainingFailureError as _:
                     print(f"Trial {t+1}/{args.times} failed (NaN/Inf), retrying with same seed...")
                 finally:
                     src.shutdown_ray()

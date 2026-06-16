@@ -37,7 +37,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def client_worker_phase1(params):
+def train_worker_phase1(params):
     """
     L2C 客户端第一阶段：本地训练并计算参数增量 Delta Theta
 
@@ -131,7 +131,7 @@ def client_worker_phase1(params):
     }
 
 
-def client_worker_phase2(params):
+def train_worker_phase2(params):
     """
     L2C 客户端第二阶段：元学习更新 alpha 并执行最终加权聚合
 
@@ -287,7 +287,7 @@ class Server(BaseServer):
                     ]
                 )
 
-            p1_results = self.run_clients(client_worker_phase1, payloads_p1)
+            p1_results = self.run_clients(train_worker_phase1, payloads_p1)
 
             # 整理中间变量
             cid_to_delta = {}
@@ -346,7 +346,7 @@ class Server(BaseServer):
                     ]
                 )
 
-            p2_results = self.run_clients(client_worker_phase2, payloads_p2)
+            p2_results = self.run_clients(train_worker_phase2, payloads_p2)
 
             # --- 更新 Server 端状态 ---
             all_weights = {}
