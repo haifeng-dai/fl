@@ -8,16 +8,26 @@ def process(output_dir="./datasets/raw"):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,)),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,)),
+        ]
+    )
 
     train_set = datasets.EMNIST(
-        root=output_dir, split="balanced", train=True, download=True, transform=transform
+        root=output_dir,
+        split="balanced",
+        train=True,
+        download=True,
+        transform=transform,
     )
     test_set = datasets.EMNIST(
-        root=output_dir, split="balanced", train=False, download=True, transform=transform
+        root=output_dir,
+        split="balanced",
+        train=False,
+        download=True,
+        transform=transform,
     )
 
     def get_all_tensors(dataset):

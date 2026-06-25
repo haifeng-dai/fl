@@ -16,7 +16,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     """
     标准的 FedAvg 本地训练流程。
     """
@@ -96,7 +96,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             # 汇集各客户端的回传结果，计算总损失与聚合权重分布
             total_loss = 0.0

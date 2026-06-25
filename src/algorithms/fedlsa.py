@@ -8,10 +8,10 @@ import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     cos_contrastive_loss,
     get_model,
-    _fmt_num,
 )
 
 
@@ -90,7 +90,7 @@ class AnchorMapping(nn.Module):
         return F.normalize(out, p=2, dim=-1)
 
 
-def train_worker(params):
+def train(params):
     """
     FedLSA 客户端训练流程。
 
@@ -221,7 +221,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             total_loss = 0.0
             selected_states = []

@@ -9,10 +9,10 @@ from torch.utils.data import DataLoader, Subset
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     generate_adjacency_matrix,
     get_model,
-    _fmt_num,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker_phase1(params):
+def train_phase1(params):
     """
     L2C 客户端第一阶段：本地训练并计算参数增量 Delta Theta
 
@@ -131,7 +131,7 @@ def train_worker_phase1(params):
     }
 
 
-def train_worker_phase2(params):
+def train_phase2(params):
     """
     L2C 客户端第二阶段：元学习更新 alpha 并执行最终加权聚合
 
@@ -220,9 +220,14 @@ def train_worker_phase2(params):
 
     # 6. 整理返回结果（严格遵守伪代码：返回 alpha 更新前的聚合模型）
     return {
-        "state": {k: v.cpu().detach().clone() for k, v in theta_agg.items()},  # 对应伪代码 Line 16 的 theta_i^{t+1}
+        "state": {
+            k: v.cpu().detach().clone() for k, v in theta_agg.items()
+        },  # 对应伪代码 Line 16 的 theta_i^{t+1}
         "alpha": alpha.cpu().detach().clone(),  # 更新后的 alpha 用于下一轮
-        "weights": w.cpu().detach().clone().tolist(),  # 返回更新前的权重用于 Server 端剪枝判断
+        "weights": w.cpu()
+        .detach()
+        .clone()
+        .tolist(),  # 返回更新前的权重用于 Server 端剪枝判断
     }
 
 
@@ -287,7 +292,7 @@ class Server(BaseServer):
                     ]
                 )
 
-            p1_results = self.run_clients(train_worker_phase1, payloads_p1)
+            p1_results = self.run_clients(train_phase1, payloads_p1)
 
             # 整理中间变量
             cid_to_delta = {}
@@ -320,7 +325,9 @@ class Server(BaseServer):
                         neighbor_deltas.append(self.phase1_results[nb])
                     else:
                         # 既无本轮增量也无缓存，则使用零增量（不贡献变化），严禁随机 fallback
-                        zero_delta = {k: torch.zeros_like(v) for k, v in cid_to_delta[i].items()}
+                        zero_delta = {
+                            k: torch.zeros_like(v) for k, v in cid_to_delta[i].items()
+                        }
                         neighbor_deltas.append(zero_delta)
 
                 payloads_p2.append(
@@ -346,7 +353,7 @@ class Server(BaseServer):
                     ]
                 )
 
-            p2_results = self.run_clients(train_worker_phase2, payloads_p2)
+            p2_results = self.run_clients(train_phase2, payloads_p2)
 
             # --- 更新 Server 端状态 ---
             all_weights = {}
@@ -363,7 +370,9 @@ class Server(BaseServer):
             prune_num = getattr(self.args, "prune_num", 0)
 
             if round_idx + 1 == prune_round and prune_num > 0:
-                logger.info(f"Applying Top-K pruning (K={prune_num}) at round {round_idx+1}")
+                logger.info(
+                    f"Applying Top-K pruning (K={prune_num}) at round {round_idx + 1}"
+                )
                 for i in range(self.num_clients):
                     if i not in all_weights:
                         continue
@@ -374,7 +383,9 @@ class Server(BaseServer):
 
                     weights = np.array(all_weights[i])
                     # 排除自环（不剪掉自己）
-                    neighbor_indices = [idx for idx, nb in enumerate(neighbors) if nb != i]
+                    neighbor_indices = [
+                        idx for idx, nb in enumerate(neighbors) if nb != i
+                    ]
                     if len(neighbor_indices) <= prune_num:
                         continue
 
@@ -385,7 +396,9 @@ class Server(BaseServer):
                     for idx in to_prune_indices:
                         neighbor_to_remove = neighbors[neighbor_indices[idx]]
                         self.A[i, neighbor_to_remove] = 0.0
-                        logger.debug(f"Client {i}: Removed neighbor {neighbor_to_remove}")
+                        logger.debug(
+                            f"Client {i}: Removed neighbor {neighbor_to_remove}"
+                        )
 
             # --- 聚合虚拟全局模型（Evaluation Oracle）---
             self.aggregate()

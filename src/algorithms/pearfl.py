@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     extract_prototypes,
     flattened_matrix_aggregate,
@@ -14,7 +15,6 @@ from .utils import (
     get_model,
     mse_loss,
     sinkhorn_knopp,
-    _fmt_num,
 )
 
 
@@ -33,7 +33,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     """
     PearFL 客户端工作函数：本地训练包含原型对齐损失，返回模型参数和本地原型
     """
@@ -205,7 +205,7 @@ class Server(BaseServer):
                 params = [get_client_param(i) for i in selected_clients]
 
                 # 2.2 启动 Ray 并行训练 (1 Epoch)
-                results = self.run_clients(train_worker, params)
+                results = self.run_clients(train, params)
 
                 # 2.3 回收结果：更新模型状态、原型和样本计数
                 epoch_loss = 0.0
@@ -214,9 +214,11 @@ class Server(BaseServer):
                     self.clients_state[cid] = res["state"]
                     self.local_protos_pool[cid] = res["protos"].to(self.device)
                     self.local_counts_pool[cid] = res["counts"].to(self.device)
-                
+
                 epoch_loss /= len(selected_clients)
-                if e == self.args.epochs - 1: # 记录最后一个 epoch 的 loss 作为 round loss
+                if (
+                    e == self.args.epochs - 1
+                ):  # 记录最后一个 epoch 的 loss 作为 round loss
                     round_loss = epoch_loss
 
                 # 2.4 执行原型交换与聚合 (Algorithm 2)

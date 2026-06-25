@@ -2,7 +2,9 @@ import torch.nn as nn
 
 
 class CNN(nn.Module):
-    def __init__(self, input_channels=1, num_classes=10, feature_dim=512, dataset_name="mnist"):
+    def __init__(
+        self, input_channels=1, num_classes=10, feature_dim=512, dataset_name="mnist"
+    ):
         super(CNN, self).__init__()
         # 计算展平后的特征维度
         if dataset_name in ["mnist", "fashionmnist", "femnist", "emnist"]:

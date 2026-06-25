@@ -8,11 +8,11 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     compute_mh_weights,
     generate_adjacency_matrix,
     get_model,
-    _fmt_num,
 )
 
 
@@ -32,7 +32,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     (
         _,
         device,
@@ -219,7 +219,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             total_loss = 0.0
             for cid, res in results.items():
@@ -229,8 +229,7 @@ class Server(BaseServer):
             self.loss.append(total_loss / len(results))
 
             changes_this_round = {
-                i: self.client_changes.get(i, 0.0)
-                for i in range(self.num_clients)
+                i: self.client_changes.get(i, 0.0) for i in range(self.num_clients)
             }
             self.changes_log.append(changes_this_round)
 
@@ -251,9 +250,7 @@ class Server(BaseServer):
             )
 
             self.evaluate()
-            print(
-                f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%"
-            )
+            print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
             print(f"Round finished in {time.time() - t0:.2f}s")
 
     def save(self):

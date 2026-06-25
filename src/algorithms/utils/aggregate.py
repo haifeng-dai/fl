@@ -102,12 +102,10 @@ def pushsum_param_aggregate(
         target_keys = [k for k in state_dicts[0].keys() if k.startswith(prefix)]
     elif isinstance(prefix, (list, tuple)):
         target_keys = [
-            k for k in state_dicts[0].keys() 
-            if any(k.startswith(p) for p in prefix)
+            k for k in state_dicts[0].keys() if any(k.startswith(p) for p in prefix)
         ]
     else:
         target_keys = list(state_dicts[0].keys())
-
 
     param_info = []
     total_size = 0
@@ -185,7 +183,7 @@ def flattened_matrix_aggregate(
         for k in keys:
             t = state_dicts[i][k].to(device, non_blocking=True)
             n = t.numel()
-            S_flat[i, offset:offset + n].copy_(t.reshape(-1))
+            S_flat[i, offset : offset + n].copy_(t.reshape(-1))
             offset += n
 
     # 2. 逐客户端累加：new[i] = sum_j W[i,j] * S_flat[j]
@@ -204,7 +202,7 @@ def flattened_matrix_aggregate(
         for k in keys:
             shape = state_dicts[0][k].shape
             n = state_dicts[0][k].numel()
-            d[k] = new_flat[i, offset:offset + n].view(shape).cpu()
+            d[k] = new_flat[i, offset : offset + n].view(shape).cpu()
             offset += n
         new_dicts.append(d)
 

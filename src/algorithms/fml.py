@@ -6,21 +6,23 @@ import torch
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     evaluate_model,
     get_model,
     kl_loss,
     param_aggregate,
-    _fmt_num,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{_fmt_num(args.alpha_fml)}_{_fmt_num(args.beta_fml)}"
+    args.file_name = (
+        f"{args.common_name}_{_fmt_num(args.alpha_fml)}_{_fmt_num(args.beta_fml)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     """
     FML (Federated Mutual Learning) 联邦互学习本地训练。
     """
@@ -148,7 +150,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             total_loss = 0.0
             total_loss_g = 0.0

@@ -10,7 +10,7 @@ from .load_data import load_data
 
 
 @ray.remote
-def train_worker(worker_func, params):
+def train(worker_func, params):
     """
     Ray 远程工作者的通用包装函数。
     """
@@ -27,7 +27,9 @@ def train_worker(worker_func, params):
 
 
 @ray.remote
-def eval_worker(model_name, dataset_name, feature_dim, state_dict, test_set, device, prototype=None):
+def evaluate(
+    model_name, dataset_name, feature_dim, state_dict, test_set, device, prototype=None
+):
     """Ray Worker: 并行评估单个客户端的模型准确率与原型准确率。"""
     model = get_model(model_name, dataset_name, feature_dim).to(device)
     model.load_state_dict(state_dict)
@@ -94,9 +96,13 @@ class BaseServer:
 
         # 3. 缓存测试集到 Ray Object Store，供并行评估使用
         if pfl:
-            self.test_set_refs = [ray.put(self.test_set[i]) for i in range(self.num_clients)]
+            self.test_set_refs = [
+                ray.put(self.test_set[i]) for i in range(self.num_clients)
+            ]
         else:
-            self.test_set_refs = [ray.put(self.test_set) for _ in range(self.num_clients)]
+            self.test_set_refs = [
+                ray.put(self.test_set) for _ in range(self.num_clients)
+            ]
 
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
@@ -124,7 +130,7 @@ class BaseServer:
         futures = []
         for i in range(self.num_clients):
             futures.append(
-                eval_worker.options(
+                evaluate.options(
                     num_gpus=ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
                 ).remote(
@@ -154,7 +160,7 @@ class BaseServer:
             p_list[3] = self.train_set_refs[cid]
             optimized_parameters.append(tuple(p_list))
 
-        remote_worker = train_worker.options(
+        remote_worker = train.options(
             num_gpus=ray_gpu_fraction, scheduling_strategy="SPREAD"
         )
         futures = [remote_worker.remote(worker_func, p) for p in optimized_parameters]
@@ -209,7 +215,8 @@ def get_model(model_name, dataset_name, feature_dim=512):
         3
         if (
             "cifar" in dataset_name
-            or dataset_name in ["tiny_imagenet", "flowers102", "cars", "gtsrb", "cinic10", "svhn"]
+            or dataset_name
+            in ["tiny_imagenet", "flowers102", "cars", "gtsrb", "cinic10", "svhn"]
         )
         else 1
     )

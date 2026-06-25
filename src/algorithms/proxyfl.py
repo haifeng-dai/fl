@@ -6,13 +6,13 @@ import torch
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     evaluate_model,
     flattened_matrix_aggregate,
     generate_adjacency_matrix,
     get_model,
     kl_loss,
-    _fmt_num,
 )
 
 
@@ -29,7 +29,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     """
     ProxyFL 本地训练流程，利用私有本地模型与共享代理模型之间的相互蒸馏机制 (Mutual Distillation)。
     """
@@ -168,7 +168,7 @@ class Server(BaseServer):
 
             p = [get_client_param(i) for i in selected_clients]
             # 2. 启动客户端多进程并行训练
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             # 3. 收集更新客户端状态数据与评估并计算平均损失
             total_loss = 0.0

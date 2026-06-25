@@ -87,7 +87,9 @@ def main():
             trial_indices = [int(x.strip()) for x in rt_str.split(",")]
             trial_indices = [t for t in trial_indices if 0 <= t < args.times]
             if not trial_indices:
-                print(f"Warning: all specified trial indices out of range [0, {args.times}), falling back to full range")
+                print(
+                    f"Warning: all specified trial indices out of range [0, {args.times}), falling back to full range"
+                )
                 trial_indices = range(args.times)
         else:
             trial_indices = range(args.times)
@@ -99,7 +101,9 @@ def main():
                     run_experiment(args, t)
                     break
                 except TrainingFailureError as _:
-                    print(f"Trial {t+1}/{args.times} failed (NaN/Inf), retrying with same seed...")
+                    print(
+                        f"Trial {t + 1}/{args.times} failed (NaN/Inf), retrying with same seed..."
+                    )
                 finally:
                     src.shutdown_ray()
 

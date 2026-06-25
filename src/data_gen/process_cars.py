@@ -1,6 +1,8 @@
 import os
+
 import torch
-from torchvision import transforms, datasets
+from torchvision import datasets, transforms
+
 
 def process(output_dir="./datasets/raw"):
     """
@@ -24,24 +26,28 @@ def process(output_dir="./datasets/raw"):
     print(f"-> Processing Stanford Cars from manual extraction: {extracted_path}")
 
     # 定义数据转换
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
 
     all_x = []
     all_y = []
 
     # 直接使用 ImageFolder 加载 train 和 test
-    for split in ['train', 'test']:
+    for split in ["train", "test"]:
         split_path = os.path.join(extracted_path, split)
         if os.path.exists(split_path):
             print(f"   Loading {split} split...")
             # ImageFolder 会自动将子文件夹作为标签
             dataset = datasets.ImageFolder(root=split_path, transform=transform)
-            loader = torch.utils.data.DataLoader(dataset, batch_size=128, shuffle=False, num_workers=4)
-            
+            loader = torch.utils.data.DataLoader(
+                dataset, batch_size=128, shuffle=False, num_workers=4
+            )
+
             for x, y in loader:
                 all_x.append(x)
                 all_y.append(y)

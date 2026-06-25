@@ -8,10 +8,12 @@ def process(output_dir="./datasets/raw"):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4377, 0.4438, 0.4728), (0.1980, 0.2010, 0.1970)),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.4377, 0.4438, 0.4728), (0.1980, 0.2010, 0.1970)),
+        ]
+    )
 
     train_set = datasets.SVHN(
         root=output_dir, split="train", download=True, transform=transform

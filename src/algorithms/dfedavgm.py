@@ -6,12 +6,12 @@ import torch
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     compute_mh_weights,
     flattened_matrix_aggregate,
     generate_adjacency_matrix,
     get_model,
-    _fmt_num,
 )
 
 
@@ -28,7 +28,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     """
     标准的 FedAvg 本地训练流程，支持动量。
     """
@@ -51,7 +51,7 @@ def train_worker(params):
     model.load_state_dict(model_state)
 
     # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr) # , momentum=0.9)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)  # , momentum=0.9)
     # if optimizer_state is not None:
     #     optimizer.load_state_dict(optimizer_state)
 
@@ -90,7 +90,7 @@ def train_worker(params):
     return {
         "loss": avg_loss,
         "state": model_state,
-        "opt_state": None, # new_optimizer_state,
+        "opt_state": None,  # new_optimizer_state,
     }
 
 
@@ -148,7 +148,7 @@ class Server(BaseServer):
 
             p = [get_client_param(i) for i in selected_clients]
             # 2. 启动客户端多进程并行训练
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             # 3. 收集客户端训练后的状态和损失
             total_loss = 0.0

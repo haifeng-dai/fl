@@ -29,14 +29,20 @@ def get_config():
         "-a", "--algo", type=str, default=None, help="Algorithm name"
     )
     base_parser.add_argument(
-        "-b", "--ablation", type=str, default=None,
+        "-b",
+        "--ablation",
+        type=str,
+        default=None,
     )
     base_parser.add_argument(
         "-t", "--test", action="store_true", help="Enable test mode"
     )
     base_parser.add_argument(
-        "-r", "--run_time", type=str, default=None,
-        help="Comma-separated trial indices to run, 0-based (e.g. '3,4')"
+        "-r",
+        "--run_time",
+        type=str,
+        default=None,
+        help="Comma-separated trial indices to run, 0-based (e.g. '3,4')",
     )
 
     # 解析命令行参数

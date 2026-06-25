@@ -8,10 +8,10 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     generate_adjacency_matrix,
     get_model,
-    _fmt_num,
 )
 
 
@@ -33,7 +33,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     """
     DisPFL 客户端工作函数：稀疏训练，带动态掩码搜索
 
@@ -199,7 +199,8 @@ class Server(BaseServer):
         sparsities = self._calculate_erk_sparsities(initial_state, self.dense_ratio)
 
         self.client_masks = {
-            cid: self._init_masks(initial_state, sparsities) for cid in range(args.num_clients)
+            cid: self._init_masks(initial_state, sparsities)
+            for cid in range(args.num_clients)
         }
 
         # 3. 严格执行初始掩码：直接将未被掩码的参数置为 0
@@ -327,7 +328,7 @@ class Server(BaseServer):
             params = [get_client_param(i) for i in selected_clients]
 
             # 4. 启动客户端并行训练 + 掩码搜索
-            results = self.run_clients(train_worker, params)
+            results = self.run_clients(train, params)
 
             # 5. 收集客户端的更新
             total_loss = 0.0
@@ -373,10 +374,7 @@ class Server(BaseServer):
             layer_flat = layer_stacked.view(self.num_clients, -1)
 
             mask_stacked = torch.stack(
-                [
-                    round_masks[i][k].to(self.device)
-                    for i in range(self.num_clients)
-                ]
+                [round_masks[i][k].to(self.device) for i in range(self.num_clients)]
             )
             mask_flat = mask_stacked.view(self.num_clients, -1)
 

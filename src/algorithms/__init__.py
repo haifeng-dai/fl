@@ -1,5 +1,6 @@
 import importlib
 
+
 def load_algorithm(algo_name):
     """
     加载指定算法的核心组件。
@@ -14,6 +15,9 @@ def load_algorithm(algo_name):
     except ModuleNotFoundError:
         raise ValueError(f"Algorithm '{algo_name}' not found in src.algorithms.")
     except AttributeError as e:
-        raise AttributeError(f"Algorithm '{algo_name}' is missing a required component: {e}")
+        raise AttributeError(
+            f"Algorithm '{algo_name}' is missing a required component: {e}"
+        )
+
 
 __all__ = ["load_algorithm"]

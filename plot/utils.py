@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -77,7 +78,9 @@ class ResultLoader:
             "fedavg": lambda args: "",
             "feddyn": lambda args: f"_alpha{_fmt_num(args['alpha_coef'])}",
             "fedfm": lambda args: f"_{_fmt_num(args['mu'])}",
-            "fedkd": lambda args: f"_{_fmt_num(args['lr_g'])}_{_fmt_num(args['energy'])}",
+            "fedkd": lambda args: (
+                f"_{_fmt_num(args['lr_g'])}_{_fmt_num(args['energy'])}"
+            ),
             "fedlsa": lambda args: (
                 f"_{_fmt_num(args['lambda_com'])}_{_fmt_num(args['alpha_sep'])}_{_fmt_num(args['server_epochs'])}_{_fmt_num(args['server_lr'])}_{_fmt_num(args['tau'])}"
             ),
@@ -99,7 +102,9 @@ class ResultLoader:
             "feddpc": lambda args: (
                 f"_{_fmt_num(args['lamda_'])}_{_fmt_num(args['head_epochs'])}_{_fmt_num(args['body_epochs'])}_{_fmt_num(args['lr_head'])}_{_fmt_num(args['lr_body'])}_{_fmt_num(args['server_epochs'])}_{_fmt_num(args['server_lr'])}_{_fmt_num(args['lambda_p'])}_{_fmt_num(args['lambda_acl'])}"
             ),
-            "fml": lambda args: f"_{_fmt_num(args['alpha_fml'])}_{_fmt_num(args['beta_fml'])}",
+            "fml": lambda args: (
+                f"_{_fmt_num(args['alpha_fml'])}_{_fmt_num(args['beta_fml'])}"
+            ),
             "lgfedavg": lambda args: "",
             "moon": lambda args: f"_{_fmt_num(args['mu'])}_{_fmt_num(args['tau'])}",
             "fedtest": lambda args: f"_ray_{_fmt_num(args['use_ray'])}",
@@ -143,7 +148,17 @@ class ResultLoader:
             return res
         return first
 
-    def load(self, algo, dataset, partition, num_clients, specific_run=None, ablate_name=None, **kwargs):
+    def load(
+        self,
+        algo,
+        dataset,
+        partition,
+        num_clients,
+        specific_run=None,
+        ablate_name=None,
+        keys=None,
+        **kwargs,
+    ):
         folder_name = f"{dataset}_{partition}_{_fmt_num(num_clients)}"
         if partition == "dirichlet":
             folder_name += f"_{_fmt_num(kwargs['alpha'])}"
@@ -204,7 +219,10 @@ class ResultLoader:
         for idx in run_indices:
             file_path = os.path.join(folder_path, f"{base_name}_{idx}.pt")
             try:
-                loaded_data.append(torch.load(file_path, map_location="cpu"))
+                data = torch.load(file_path, map_location="cpu", weights_only=True)
+                if keys is not None:
+                    data = {k: data[k] for k in keys if k in data}
+                loaded_data.append(data)
             except Exception as e:
                 # 真正的加载错误（如文件损坏）才报错
                 print(f"  [Error] Failed to load {file_path}: {e}")
@@ -732,3 +750,55 @@ def print_stats(selected_group, experiments, common_args, loader, x_lim=200):
         print(
             f"{label:<25} | {m_max:>10} | {m_last:>10} | {p_max:>10} | {p_last:>10} ({len(run_results)} runs)"
         )
+
+
+def batch_cached_load(loader, algo, specs, data_cache=None, keys=None, max_workers=8):
+    """并行批量加载结果文件，兼容现有 data_cache。
+
+    Args:
+        loader: ResultLoader 实例
+        algo: 算法名
+        specs: list of kwargs dict（每个 dict 传给 loader.load）
+        data_cache: 外部缓存 dict（可选），有则写入
+        keys: 要提取的字段
+        max_workers: 线程数
+    Returns:
+        list of (data or None)，顺序与 specs 一致
+    """
+    if data_cache is None:
+        data_cache = {}
+
+    cache_keys = []
+    cached = [None] * len(specs)
+    missing_idx = []
+    missing_specs = []
+
+    for i, kw in enumerate(specs):
+        kt = tuple(sorted(kw.items()))
+        kk = tuple(keys) if keys else None
+        ck = (algo, kk, kt)
+        cache_keys.append(ck)
+        if ck in data_cache:
+            cached[i] = data_cache[ck]
+        else:
+            missing_idx.append(i)
+            missing_specs.append(kw)
+
+    if not missing_specs:
+        return cached
+
+    def _load_one(kw):
+        return loader.load(algo, keys=keys, **kw)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        fut_map = {
+            pool.submit(_load_one, kw): i for i, kw in zip(missing_idx, missing_specs)
+        }
+        for fut in as_completed(fut_map):
+            i = fut_map[fut]
+            data = fut.result()
+            cached[i] = data
+            if data is not None:
+                data_cache[cache_keys[i]] = data
+
+    return cached

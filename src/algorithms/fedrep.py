@@ -6,10 +6,10 @@ import torch
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     get_model,
     param_aggregate,
-    _fmt_num,
 )
 
 
@@ -18,7 +18,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     (
         _,
         device,
@@ -124,7 +124,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             total_loss = 0.0
             new_bodies = []

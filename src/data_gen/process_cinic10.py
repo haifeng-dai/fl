@@ -35,13 +35,15 @@ def process(output_dir="./datasets/raw"):
     else:
         print("-> Already extracted, skipping.")
 
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(
-            (0.47889522, 0.47227842, 0.43047404),
-            (0.24205776, 0.23828046, 0.25874835),
-        ),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize(
+                (0.47889522, 0.47227842, 0.43047404),
+                (0.24205776, 0.23828046, 0.25874835),
+            ),
+        ]
+    )
 
     all_x, all_y = [], []
     base_dir = extract_dir

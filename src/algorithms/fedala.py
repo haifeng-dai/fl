@@ -8,9 +8,9 @@ from torch.utils.data import DataLoader, Subset
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     get_model,
-    _fmt_num,
 )
 
 
@@ -164,7 +164,7 @@ class ALA:
             param.data = param_t.data.clone()
 
 
-def train_worker(params):
+def train(params):
     """
     带有自适应本地聚合的 FedALA 客户端 worker 进程。
     """
@@ -303,7 +303,7 @@ class Server(BaseServer):
                 for i in selected_clients
             ]
             # 运行并行客户端训练任务
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             # 处理结果：计算总损失，获取所选客户端的状态和权重信息清单。
             total_loss = 0.0

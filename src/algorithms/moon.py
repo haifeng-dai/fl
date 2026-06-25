@@ -6,9 +6,9 @@ import torch
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     get_model,
-    _fmt_num,
 )
 
 
@@ -17,7 +17,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     """
     带有模型交叉学习对抗损失 (Model-Contrastive Loss) 的 MOON 本地训练流程。
     """
@@ -129,7 +129,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             # 汇集各客户端回传结果，增量计算加权平均损失
             total_loss = 0.0

@@ -6,11 +6,11 @@ import torch
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     get_model,
     kl_loss,
     mse_loss,
-    _fmt_num,
 )
 
 
@@ -107,7 +107,7 @@ def reconstruct_param(compressed_param, device):
         raise ValueError(f"Unknown parameter type: {type(compressed_param)}")
 
 
-def train_worker(params):
+def train(params):
     """
     FedKD 本地训练流程，采用基于 SVD 的通信压缩与相互知识蒸馏机制。
     """
@@ -273,7 +273,7 @@ class Server(BaseServer):
                 ]
                 for i in selected_clients
             ]
-            results = self.run_clients(train_worker, p)
+            results = self.run_clients(train, p)
 
             # 汇集各客户端回传结果并更新服务器端存储的客户端本地状态
             total_loss = 0.0

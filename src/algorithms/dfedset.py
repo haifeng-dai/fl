@@ -11,14 +11,14 @@ from src import TrainingFailureError
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     compute_mh_weights,
-    eval_worker,
+    evaluate,
     extract_prototypes,
     generate_adjacency_matrix,
     get_model,
     mse_loss,
-    _fmt_num,
 )
 
 
@@ -31,13 +31,11 @@ def get_path(args):
     elif args.adj_type == "scale_free":
         adj_suffix += f"_{_fmt_num(args.m_scale_free)}"
 
-    args.file_name = (
-        f"{args.common_name}_{adj_suffix}_{_fmt_num(args.lambda_sa)}_{_fmt_num(args.eta)}_{_fmt_num(args.lambda_so)}"
-    )
+    args.file_name = f"{args.common_name}_{adj_suffix}_{_fmt_num(args.lambda_sa)}_{_fmt_num(args.eta)}_{_fmt_num(args.lambda_so)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     """
     DFedSET Worker: 联合训练 + S/W 原型提取。
     """
@@ -83,7 +81,13 @@ def train_worker(params):
                 if lambda_sa != 0:
                     loss = loss + lambda_sa * mse_loss(features, target_protos)
                 if lambda_so != 0:
-                    loss = loss + lambda_so * (1 - F.cosine_similarity(features, target_protos, dim=-1)).mean()
+                    loss = (
+                        loss
+                        + lambda_so
+                        * (
+                            1 - F.cosine_similarity(features, target_protos, dim=-1)
+                        ).mean()
+                    )
 
             optimizer.zero_grad()
             loss.backward()
@@ -154,10 +158,10 @@ class Server(BaseServer):
         self.extractor_param_info = []
         total = 0
         for k in self.extractor_keys:
-             shape = self.clients_state[0][k].shape
-             n = self.clients_state[0][k].numel()
-             self.extractor_param_info.append((k, shape, total, total + n))
-             total += n
+            shape = self.clients_state[0][k].shape
+            n = self.clients_state[0][k].numel()
+            self.extractor_param_info.append((k, shape, total, total + n))
+            total += n
         self.extractor_total_size = total
 
     def fit(self):
@@ -197,9 +201,8 @@ class Server(BaseServer):
                     confidence_mode,
                 )
 
-
             params = [get_client_param(i) for i in selected_clients]
-            results = self.run_clients(train_worker, params)
+            results = self.run_clients(train, params)
 
             total_loss = 0.0
             for cid, res in results.items():
@@ -241,19 +244,23 @@ class Server(BaseServer):
 
             # ===== GPU 向量化计算本地 GSD =====
             counts = torch.stack(self.counts_cache).to(self.device)  # [N, C]
-            total_n = counts.sum(dim=1, keepdim=True)                # [N, 1]
-            probs = counts / torch.clamp(total_n, min=1e-12)         # [N, C]
+            total_n = counts.sum(dim=1, keepdim=True)  # [N, 1]
+            probs = counts / torch.clamp(total_n, min=1e-12)  # [N, C]
 
-            norm_local = torch.norm(local_P, dim=-1)                 # [N, C]
-            consensus_P_tensor = torch.stack(self.consensus_P).to(self.device)  # [N, C, D]
+            norm_local = torch.norm(local_P, dim=-1)  # [N, C]
+            consensus_P_tensor = torch.stack(self.consensus_P).to(
+                self.device
+            )  # [N, C, D]
             norm_consensus = torch.norm(consensus_P_tensor, dim=-1)  # [N, C]
 
             valid_mask = (norm_local > 1e-8) & (norm_consensus > 1e-8)
             cos_sim = F.cosine_similarity(local_P, consensus_P_tensor, dim=-1)  # [N, C]
             cos_sim = torch.where(valid_mask, cos_sim, torch.zeros_like(cos_sim))
 
-            gsd_raw = (probs * (1.0 - cos_sim)).sum(dim=1)           # [N]
-            gsd_tensor = torch.where(total_n.squeeze(1) > 0, gsd_raw, torch.ones_like(gsd_raw))
+            gsd_raw = (probs * (1.0 - cos_sim)).sum(dim=1)  # [N]
+            gsd_tensor = torch.where(
+                total_n.squeeze(1) > 0, gsd_raw, torch.ones_like(gsd_raw)
+            )
 
             self.gsd_log.append(gsd_tensor.tolist())
             D = gsd_tensor.view(self.num_clients, 1)
@@ -312,7 +319,10 @@ class Server(BaseServer):
                         lines.append(
                             f"Client {i} | Local GSD: {gsd_tensor[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma Global: {gamma_global:.6f}"
                         )
-                        if gsd_tensor[i] > gamma_global or self.counts_cache[i].sum() == 0:
+                        if (
+                            gsd_tensor[i] > gamma_global
+                            or self.counts_cache[i].sum() == 0
+                        ):
                             local_trigger[i] = True
                     print("\n".join(lines))
             else:
@@ -344,7 +354,10 @@ class Server(BaseServer):
                         lines.append(
                             f"Client {i} | Local GSD: {gsd_tensor[i].item():.6f} | Own EMA: {self.local_gsd_ema[i].item():.6f} | Gamma: {current_gamma.item():.6f}"
                         )
-                        if gsd_tensor[i] > current_gamma or self.counts_cache[i].sum() == 0:
+                        if (
+                            gsd_tensor[i] > current_gamma
+                            or self.counts_cache[i].sum() == 0
+                        ):
                             local_trigger[i] = True
                     print("\n".join(lines))
 
@@ -374,7 +387,7 @@ class Server(BaseServer):
                     for k, _, start, end in self.extractor_param_info:
                         n = end - start
                         t = self.clients_state[i][k].to(self.device, non_blocking=True)
-                        flat[i, offset:offset + n].copy_(t.reshape(-1))
+                        flat[i, offset : offset + n].copy_(t.reshape(-1))
                         offset += n
 
                 # ===== GPU 向量化构建权重矩阵 W =====
@@ -387,7 +400,9 @@ class Server(BaseServer):
                     active_mask = phys_adj * mask.unsqueeze(0)
                     silent_mask = phys_adj * (1.0 - mask.unsqueeze(0))
                     W = self.M_avg * active_mask
-                    diag_vals = self.M_avg.diagonal() + (self.M_avg * silent_mask).sum(dim=1)
+                    diag_vals = self.M_avg.diagonal() + (self.M_avg * silent_mask).sum(
+                        dim=1
+                    )
                     W = W + torch.diag(diag_vals)
                     row_identities = (1.0 - mask).unsqueeze(1) * eye_mask
                     W = W * mask.unsqueeze(1) + row_identities
@@ -427,7 +442,7 @@ class Server(BaseServer):
         for i in range(self.num_clients):
             client_proto = protos[i] if protos is not None else None
             futures.append(
-                eval_worker.options(
+                evaluate.options(
                     num_gpus=ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
                 ).remote(

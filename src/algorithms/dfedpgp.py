@@ -6,11 +6,11 @@ import torch
 
 from .utils import (
     BaseServer,
+    _fmt_num,
     ce_loss,
     flattened_matrix_aggregate,
     generate_adjacency_matrix,
     get_model,
-    _fmt_num,
 )
 
 
@@ -29,7 +29,7 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_worker(params):
+def train(params):
     """
     DFedPGP 客户端工作函数：实现解耦更新和梯度推送
     """
@@ -154,7 +154,9 @@ def train_worker(params):
         "body": {
             k: new_full_state[k].cpu().detach().clone() for k in shared_keys
         },  # body_shared
-        "head": {k: new_full_state[k].cpu().detach().clone() for k in head_keys},  # head_state
+        "head": {
+            k: new_full_state[k].cpu().detach().clone() for k in head_keys
+        },  # head_state
     }
 
 
@@ -247,7 +249,7 @@ class Server(BaseServer):
             params = [get_client_param(i) for i in selected_clients]
 
             # 3. 启动客户端并行训练
-            results = self.run_clients(train_worker, params)
+            results = self.run_clients(train, params)
 
             # 4. 收集客户端的更新
             total_loss = 0.0
