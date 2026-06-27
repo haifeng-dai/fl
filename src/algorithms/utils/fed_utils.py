@@ -100,8 +100,9 @@ class BaseServer:
                 ray.put(self.test_set[i]) for i in range(self.num_clients)
             ]
         else:
+            global_test_ref = ray.put(self.test_set)
             self.test_set_refs = [
-                ray.put(self.test_set) for _ in range(self.num_clients)
+                global_test_ref for _ in range(self.num_clients)
             ]
 
     def aggregate(

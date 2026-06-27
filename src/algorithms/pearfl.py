@@ -47,7 +47,6 @@ def train(params):
         num_classes,
         feature_dim,
         batch_size,
-        local_epochs,
         lr,
         momentum,
         weight_decay,
@@ -194,7 +193,6 @@ class Server(BaseServer):
                         self.num_class,
                         self.args.feature_dim,
                         self.args.batch_size,
-                        1,  # 强制 local_epochs = 1
                         self.args.lr,
                         self.args.momentum,
                         self.args.weight_decay,

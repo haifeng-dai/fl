@@ -34,7 +34,6 @@ def get_path(args):
 
 def train(params):
     (
-        _,
         device,
         model_state,
         train_set,
@@ -45,9 +44,6 @@ def train(params):
         epochs,
         feature_dim,
         hat_state,
-        r,
-        rho_i,
-        gamma_k,
     ) = params
 
     model = get_model(model_name, dataset_name, feature_dim).to(device)
@@ -202,7 +198,6 @@ class Server(BaseServer):
 
             p = [
                 [
-                    i,
                     self.client_gpu[i],
                     self.clients_state[i],
                     self.train_sets[i],
@@ -213,9 +208,6 @@ class Server(BaseServer):
                     self.args.epochs,
                     self.args.feature_dim,
                     self.hat_states[i],
-                    self.r,
-                    self.rho[i],
-                    self.gamma(r),
                 ]
                 for i in selected_clients
             ]

@@ -43,14 +43,11 @@ def train_phase1(params):
 
     参数结构：
         params: [
-            client_id,
             device,
             model_state (dict),
             train_set,
             model_name,
             dataset_name,
-            test_set,
-            num_classes,
             feature_dim,
             batch_size,
             local_epochs,
@@ -59,14 +56,11 @@ def train_phase1(params):
         ]
     """
     (
-        client_id,
         device,
         model_state,
         train_set,
         model_name,
         dataset_name,
-        test_set,
-        num_classes,
         feature_dim,
         batch_size,
         local_epochs,
@@ -97,8 +91,6 @@ def train_phase1(params):
 
     model.train()
     total_loss = 0.0
-    correct = 0
-    total = 0
     num_batches = 0
 
     for _ in range(local_epochs):
@@ -111,9 +103,6 @@ def train_phase1(params):
             optimizer.step()
 
             total_loss += loss.item()
-            _, predicted = torch.max(output.data, 1)
-            total += y.size(0)
-            correct += (predicted == y).sum().item()
             num_batches += 1
 
     # 4. 计算 Delta = theta_t - theta_updated
@@ -137,20 +126,14 @@ def train_phase2(params):
 
     参数结构：
         params: [
-            client_id,
             device,
             model_state (dict),
-            theta_t (dict),
             train_set,
+            theta_t (dict),
             model_name,
             dataset_name,
-            test_set,
-            num_classes,
             feature_dim,
             batch_size,
-            local_epochs,
-            lr,
-            neighbors (list),
             neighbor_deltas (list),
             alpha (tensor),
             val_indices (list),
@@ -158,20 +141,14 @@ def train_phase2(params):
         ]
     """
     (
-        client_id,
         device,
         model_state,
         train_set,
         theta_t,
         model_name,
         dataset_name,
-        test_set,
-        num_classes,
         feature_dim,
         batch_size,
-        local_epochs,
-        lr,
-        neighbors,
         neighbor_deltas,
         alpha,
         val_indices,
@@ -276,14 +253,11 @@ class Server(BaseServer):
             for cid in selected_clients:
                 payloads_p1.append(
                     [
-                        cid,
                         self.client_gpu[cid],
                         self.clients_state[cid],
                         self.train_sets[cid],
                         self.args.model,
                         self.args.dataset,
-                        self.test_set[cid],
-                        self.num_class,
                         self.args.feature_dim,
                         self.args.batch_size,
                         self.args.epochs,
@@ -332,20 +306,14 @@ class Server(BaseServer):
 
                 payloads_p2.append(
                     [
-                        i,
                         self.client_gpu[i],
                         self.clients_state[i],
                         self.train_sets[i],
                         cid_to_theta_t[i],
                         self.args.model,
                         self.args.dataset,
-                        self.test_set[i],
-                        self.num_class,
                         self.args.feature_dim,
                         self.args.batch_size,
-                        self.args.epochs,
-                        self.args.lr,
-                        neighbors,
                         neighbor_deltas,
                         self.alphas[i],
                         cid_to_indices[i]["val"],
@@ -407,9 +375,8 @@ class Server(BaseServer):
             self.evaluate()
 
             print(
-                f"[Round {round_idx + 1}] Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%"
+                f"[Round {round_idx + 1}] Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%, Time spent: {time.time() - t0:.2f}s"
             )
-            print(f"[Round {round_idx + 1}] Time spent: {time.time() - t0:.2f}s")
 
     def aggregate(self):
         """

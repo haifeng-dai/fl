@@ -137,18 +137,14 @@ dfedset:
         # - 8
         # - 9
         # - 10
+        # - 12
+        # - 14
+        # - 16
+        # - 18
+        # - 20
     ablate:
         relay: true # false → 无中继，无样本类别直接清零
-        aggregator: # "redirect"(默认) | "pushsum" → 单向 Push-Sum 聚合
-            - pushsum
-            # - redirect
-        confidence: # "count" → 原始样本量  |  "none" → 无置信度
-            - none
-            # - count
-        trigger: # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
-            - global
-            # - all
-        gamma_global: # trigger="global" 时使用的固定 GSD 阈值
-            - 0.001
-            # - 0.005
-            # - 0.01
+        aggregator: true # true → Redirect（默认） | false → Plain 聚合（丢弃沉默边）
+        confidence: none # "count" → 原始样本量  |  "none" → 无置信度
+        trigger: global # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
+        gamma_global: 0.001 # trigger="global" 时使用的固定 GSD 阈值
