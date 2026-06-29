@@ -173,6 +173,13 @@ class BaseServer:
         return results_map
 
     def deal_save(self, f):
+        max_a = max(self.acc) if self.acc else 0.0
+        summary_str = f"\n[Summary] Max Acc: {max_a:.2f}%"
+        if self.acc_proto:
+            max_pa = max(self.acc_proto)
+            summary_str += f" | Max Proto Acc: {max_pa:.2f}%"
+        print(summary_str)
+
         save_name = f"{self.args.file_name}_{self.args.cur_time}.pt"
         save_full_path = os.path.join(self.args.save_path, save_name)
         if getattr(self.args, "test", False):
@@ -182,7 +189,7 @@ class BaseServer:
         save_name = f"{self.args.file_name}_{self.args.cur_time}.pt"
         save_full_path = os.path.join(self.args.save_path, save_name)
         torch.save(f, save_full_path)
-        print(f"\n-> Results saved to: {save_full_path}")
+        print(f"-> Results saved to: {save_full_path}")
 
 
 def get_model(model_name, dataset_name, feature_dim=512):
