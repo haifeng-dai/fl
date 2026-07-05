@@ -324,13 +324,6 @@ class Server(BaseServer):
             self.compressed_params[name] = decompose_param(param, self.args.energy)
 
     def save(self):
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "global": self.model.state_dict(),
-                "client": self.clients_state,
-                "aux": self.client_wh_states,
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {"global": self.model.state_dict(), "client": self.clients_state, "aux": {"client_wh_states": self.client_wh_states}}
+        self.deal_save(metrics, params)

@@ -165,7 +165,7 @@ def get_pre_name(args):
     """设置并创建实验所需的保存路径和日志路径"""
     fold_path = os.path.join(
         f"{args.algo}",
-        f"{args.dataset}_{args.partition}_{args.num_clients}",
+        f"{args.dataset}_{args.model}_{args.partition}_{args.num_clients}",
     )
     if args.partition == "dirichlet":
         fold_path += f"_{args.alpha}"

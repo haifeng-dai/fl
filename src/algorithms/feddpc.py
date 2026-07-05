@@ -330,25 +330,19 @@ class Server(BaseServer):
             self.global_protos = self.pln(all_class_ids).cpu().clone()
 
     def save(self):
-        f = {
-            "acc": {
-                "model": self.acc,
-                "proto": self.acc_proto,
-            },
-            "loss": {
-                "model_ce": self.loss,
-                "client_proto": self.loss_proto,
-                "server_pln": self.loss_pln,
-                "server_pln_mse": self.loss_pln_mse,
-                "server_pln_ortho": self.loss_pln_ortho,
-            },
-            "state_dict": {
-                "global_model_init": self.model.state_dict(),
-                "client_states": self.clients_state,
-                "global_prototypes": self.global_protos,
-                "aux": {
-                    "pln_net": self.pln.state_dict(),
-                },
-            },
+        metrics = {
+            "acc": self.acc,
+            "acc_p": self.acc_proto,
+            "loss": self.loss,
+            "loss_p": self.loss_proto,
+            "loss_pln": self.loss_pln,
+            "loss_pln_mse": self.loss_pln_mse,
+            "loss_pln_ortho": self.loss_pln_ortho,
         }
-        self.deal_save(f)
+        params = {
+            "global_model_init": self.model.state_dict(),
+            "client_states": self.clients_state,
+            "global_prototypes": self.global_protos,
+            "aux": {"pln_net": self.pln.state_dict()},
+        }
+        self.deal_save(metrics, params)

@@ -172,7 +172,7 @@ class BaseServer:
         }
         return results_map
 
-    def deal_save(self, f):
+    def deal_save(self, metrics, params):
         max_a = max(self.acc) if self.acc else 0.0
         summary_str = f"\n[Summary] Max Acc: {max_a:.2f}%"
         if self.acc_proto:
@@ -180,16 +180,18 @@ class BaseServer:
             summary_str += f" | Max Proto Acc: {max_pa:.2f}%"
         print(summary_str)
 
-        save_name = f"{self.args.file_name}_{self.args.cur_time}.pt"
-        save_full_path = os.path.join(self.args.save_path, save_name)
+        name = f"{self.args.file_name}_{self.args.cur_time}.pt"
+        metrics_path = os.path.join(self.args.save_path, name)
+        params_path = os.path.join(self.args.save_path, name.replace(".pt", "_params.pt"))
         if getattr(self.args, "test", False):
-            print(f"\n-> [Test Mode] Would save to: {save_full_path} (skipped)")
+            print(f"\n-> [Test Mode] Would save metrics to: {metrics_path}")
+            print(f"\n-> [Test Mode] Would save params to: {params_path}")
             return
         os.makedirs(self.args.save_path, exist_ok=True)
-        save_name = f"{self.args.file_name}_{self.args.cur_time}.pt"
-        save_full_path = os.path.join(self.args.save_path, save_name)
-        torch.save(f, save_full_path)
-        print(f"-> Results saved to: {save_full_path}")
+        torch.save(metrics, metrics_path)
+        torch.save(params, params_path)
+        print(f"-> Metrics saved to: {metrics_path}")
+        print(f"-> Params saved to: {params_path}")
 
 
 def get_model(model_name, dataset_name, feature_dim=512):

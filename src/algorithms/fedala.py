@@ -328,13 +328,6 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
-        """保存实验结果和模型状态"""
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "client": self.clients_state,
-                "aux": self.clients_weights,
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {"client": self.clients_state, "aux": {"clients_weights": self.clients_weights}}
+        self.deal_save(metrics, params)

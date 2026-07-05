@@ -292,16 +292,14 @@ class Server(BaseServer):
         return aggregated_state
 
     def save(self):
-        """保存模型和相关状态"""
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "client": self.clients_state,
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {
+            "client": self.clients_state,
+            "aux": {
                 "personalized_protos": self.personalized_protos.cpu(),
                 "local_protos_pool": self.local_protos_pool.cpu(),
                 "local_counts_pool": self.local_counts_pool.cpu(),
                 "W": self.W.cpu(),
             },
         }
-        self.deal_save(f)
+        self.deal_save(metrics, params)

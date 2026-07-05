@@ -227,12 +227,6 @@ class Server(BaseServer):
         self.anchors[mask] = alpha * self.anchors[mask] + (1 - alpha) * new_p_bar[mask]
 
     def save(self):
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "global": self.model.state_dict(),
-                "proto": self.anchors.data,
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {"global": self.model.state_dict(), "proto": self.anchors.data}
+        self.deal_save(metrics, params)

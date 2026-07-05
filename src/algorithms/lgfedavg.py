@@ -170,12 +170,6 @@ class Server(BaseServer):
             full_state.update(global_head_kv)
             client_states_full.append(full_state)
 
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "global": self.model.classifier.state_dict(),  # 全局部分 (分享层)
-                "client": client_states_full,  # 完整的个性化模型聚合
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {"global": self.model.classifier.state_dict(), "client": client_states_full}
+        self.deal_save(metrics, params)

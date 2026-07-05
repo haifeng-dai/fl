@@ -302,12 +302,6 @@ class Server(BaseServer):
             param.requires_grad = True
 
     def save(self):
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "global": self.model.state_dict(),
-                "proto": self.get_anchors().detach().cpu(),
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {"global": self.model.state_dict(), "proto": self.get_anchors().detach().cpu()}
+        self.deal_save(metrics, params)

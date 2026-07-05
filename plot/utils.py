@@ -69,7 +69,7 @@ def beautify_label(name):
 
 
 class ResultLoader:
-    def __init__(self, base_dir="results"):
+    def __init__(self, base_dir="results_ray"):
         self.base_dir = base_dir
         self.algo_patterns = {
             "fedala": lambda args: (
@@ -159,7 +159,8 @@ class ResultLoader:
         keys=None,
         **kwargs,
     ):
-        folder_name = f"{dataset}_{partition}_{_fmt_num(num_clients)}"
+        model = kwargs.get("model", "cnn")
+        folder_name = f"{dataset}_{model}_{partition}_{_fmt_num(num_clients)}"
         if partition == "dirichlet":
             folder_name += f"_{_fmt_num(kwargs['alpha'])}"
         elif partition == "pathological":

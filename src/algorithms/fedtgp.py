@@ -269,14 +269,6 @@ class Server(BaseServer):
             self.global_protos = self.tgp(all_class_ids).detach().cpu()
 
     def save(self):
-        f = {
-            "acc": {"model": self.acc, "proto": self.acc_proto},
-            "loss": {"model": self.loss, "proto": self.loss_proto},
-            "state_dict": {
-                "global": self.model.state_dict(),
-                "client": self.clients_state,
-                "proto": self.global_protos,
-                "aux": {"tgp": self.tgp.state_dict(), "gap": self.gap.cpu()},
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "acc_p": self.acc_proto, "loss": self.loss, "loss_p": self.loss_proto}
+        params = {"global": self.model.state_dict(), "client": self.clients_state, "proto": self.global_protos, "aux": {"tgp": self.tgp.state_dict(), "gap": self.gap.cpu()}}
+        self.deal_save(metrics, params)

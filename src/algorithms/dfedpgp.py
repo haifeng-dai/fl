@@ -307,18 +307,14 @@ class Server(BaseServer):
             self.clients_state[cid] = full_state
 
     def save(self):
-        """保存模型和相关状态"""
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "client": self.clients_state,
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {
+            "client": self.clients_state,
+            "aux": {
                 "body": self.client_body,
                 "head": self.client_head,
                 "mu": self.client_mu,
-                "topology": self.adj_matrix.cpu()
-                if isinstance(self.adj_matrix, torch.Tensor)
-                else self.adj_matrix,
+                "topology": self.adj_matrix.cpu() if isinstance(self.adj_matrix, torch.Tensor) else self.adj_matrix,
             },
         }
-        self.deal_save(f)
+        self.deal_save(metrics, params)

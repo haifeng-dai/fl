@@ -155,12 +155,6 @@ class Server(BaseServer):
             full_state.update(head_state)
             client_states.append(full_state)
 
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "global": self.model.extractor.state_dict(),
-                "client": client_states,
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {"global": self.model.extractor.state_dict(), "client": client_states}
+        self.deal_save(metrics, params)

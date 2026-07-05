@@ -120,11 +120,6 @@ class Server(BaseServer):
 
     def save(self):
         """保存全局模型的实验结果与最终参数"""
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "global": self.model.state_dict(),
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {"global": self.model.state_dict()}
+        self.deal_save(metrics, params)

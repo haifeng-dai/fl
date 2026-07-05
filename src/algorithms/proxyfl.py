@@ -200,12 +200,6 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
-        f = {
-            "acc": {"model": self.acc, "proxy": self.acc_p},
-            "loss": {"model": self.loss, "proxy": self.loss_p},
-            "state_dict": {
-                "client": self.clients_state,
-                "proxy": self.client_states_p,
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "acc_p": self.acc_p, "loss": self.loss, "loss_p": self.loss_p}
+        params = {"client": self.clients_state, "aux": {"proxy": self.client_states_p}}
+        self.deal_save(metrics, params)

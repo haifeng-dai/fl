@@ -395,16 +395,12 @@ class Server(BaseServer):
         self.model.load_state_dict(aggregated_state)
 
     def save(self):
-        """保存模型和相关状态"""
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "client": self.clients_state,
-                "topology": self.A.cpu()
-                if isinstance(self.A, torch.Tensor)
-                else self.A,
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {
+            "client": self.clients_state,
+            "aux": {
+                "topology": self.A.cpu() if isinstance(self.A, torch.Tensor) else self.A,
                 "alphas": self.alphas,
             },
         }
-        self.deal_save(f)
+        self.deal_save(metrics, params)

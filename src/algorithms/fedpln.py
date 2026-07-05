@@ -271,12 +271,6 @@ class Server(BaseServer):
         self.pln.load_state_dict(param_aggregate(plns_params, weights))
 
     def save(self):
-        f = {
-            "acc": {"model": self.acc, "proto": self.acc_proto},
-            "loss": {"model": self.loss, "proto": self.loss_p},
-            "state_dict": {
-                "global": self.model.state_dict(),
-                "proto": self.pln.state_dict(),
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "acc_p": self.acc_proto, "loss": self.loss, "loss_p": self.loss_p}
+        params = {"global": self.model.state_dict(), "proto": self.pln.state_dict()}
+        self.deal_save(metrics, params)

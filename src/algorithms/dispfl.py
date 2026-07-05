@@ -414,14 +414,6 @@ class Server(BaseServer):
         self.model.load_state_dict(aggregated_state)
 
     def save(self):
-        """保存模型和相关状态"""
-        f = {
-            "acc": self.acc,
-            "loss": self.loss,
-            "state_dict": {
-                "client": self.clients_state,
-                "client_masks": self.client_masks,
-                "topology": self.A.cpu(),
-            },
-        }
-        self.deal_save(f)
+        metrics = {"acc": self.acc, "loss": self.loss}
+        params = {"client": self.clients_state, "aux": {"client_masks": self.client_masks, "topology": self.A.cpu()}}
+        self.deal_save(metrics, params)

@@ -461,13 +461,13 @@ class Server(BaseServer):
             self.acc_proto.append(sum(r["p_acc"] for r in results) / self.num_clients)
 
     def save(self):
-        f = {
-            "acc": {"model": self.acc, "proto": self.acc_proto},
+        metrics = {
+            "acc": self.acc,
+            "acc_p": self.acc_proto,
             "loss": self.loss,
             "gsd": self.gsd_log,
             "num_triggered": self.num_triggered_log,
             "triggered_ids": self.triggered_ids_log,
-            "state_dict": self.clients_state,
-            "consensus_P": self.consensus_P,
         }
-        self.deal_save(f)
+        params = {"client": self.clients_state, "proto": self.consensus_P}
+        self.deal_save(metrics, params)
