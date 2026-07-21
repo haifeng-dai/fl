@@ -163,14 +163,27 @@ def _apply_ablation(configs, ablation_str):
 
 def get_pre_name(args):
     """设置并创建实验所需的保存路径和日志路径"""
-    fold_path = os.path.join(
-        f"{args.algo}",
-        f"{args.dataset}_{args.model}_{args.partition}_{args.num_clients}",
-    )
-    if args.partition == "dirichlet":
-        fold_path += f"_{args.alpha}"
-    elif args.partition == "pathological":
-        fold_path += f"_{args.n_class}"
+    domain_dataset = getattr(args, 'domain_dataset', None)
+    target_domain = getattr(args, 'target_domain', None)
+
+    if domain_dataset is not None:
+        domain_partition = getattr(args, 'domain_partition', '')
+        fold_path = os.path.join(
+            f"{args.algo}",
+            f"dg_{domain_dataset}_{args.model}_{domain_partition}_{args.num_clients}",
+        )
+        if target_domain is not None:
+            fold_path += f"_target_{target_domain}"
+    else:
+        fold_path = os.path.join(
+            f"{args.algo}",
+            f"{args.dataset}_{args.model}_{args.partition}_{args.num_clients}",
+        )
+        if args.partition == "dirichlet":
+            fold_path += f"_{args.alpha}"
+        elif args.partition == "pathological":
+            fold_path += f"_{args.n_class}"
+
     args.common_name = f"{args.epochs}_{args.batch_size}_{args.lr}"
     base_save = os.path.join("results_ray", fold_path)
     base_log = os.path.join("logs_ray", fold_path)

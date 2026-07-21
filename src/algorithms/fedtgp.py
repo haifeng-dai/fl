@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    _fmt_num,
+    fmt_num,
     ce_loss,
     dist_contrastive_loss,
     extract_prototypes,
@@ -19,7 +19,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{_fmt_num(args.lamda_)}_{_fmt_num(args.server_epochs)}_{_fmt_num(args.server_lr)}_{_fmt_num(args.margin_threshold)}"
+    args.file_name = f"{args.common_name}_{fmt_num(args.lamda_)}_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}_{fmt_num(args.margin_threshold)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    _fmt_num,
+    fmt_num,
     ce_loss,
     cos_contrastive_loss,
     get_model,
@@ -16,7 +16,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{_fmt_num(args.lambda_com)}_{_fmt_num(args.alpha_sep)}_{_fmt_num(args.server_epochs)}_{_fmt_num(args.server_lr)}_{_fmt_num(args.tau)}"
+    args.file_name = f"{args.common_name}_{fmt_num(args.lambda_com)}_{fmt_num(args.alpha_sep)}_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}_{fmt_num(args.tau)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

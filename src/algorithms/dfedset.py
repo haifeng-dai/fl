@@ -11,7 +11,7 @@ from src import TrainingFailureError
 
 from .utils import (
     BaseServer,
-    _fmt_num,
+    fmt_num,
     ce_loss,
     compute_mh_weights,
     evaluate,
@@ -25,13 +25,13 @@ from .utils import (
 def get_path(args):
     adj_suffix = f"{args.adj_type}"
     if args.adj_type == "random":
-        adj_suffix += f"_{_fmt_num(args.edge_p)}"
+        adj_suffix += f"_{fmt_num(args.edge_p)}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{_fmt_num(args.k_small_world)}_{_fmt_num(args.edge_p)}"
+        adj_suffix += f"_{fmt_num(args.k_small_world)}_{fmt_num(args.edge_p)}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{_fmt_num(args.m_scale_free)}"
+        adj_suffix += f"_{fmt_num(args.m_scale_free)}"
 
-    args.file_name = f"{args.common_name}_{adj_suffix}_{_fmt_num(args.lambda_sa)}_{_fmt_num(args.eta)}_{_fmt_num(args.lambda_so)}"
+    args.file_name = f"{args.common_name}_{adj_suffix}_{fmt_num(args.lambda_sa)}_{fmt_num(args.eta)}_{fmt_num(args.lambda_so)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

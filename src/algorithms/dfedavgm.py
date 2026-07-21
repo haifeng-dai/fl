@@ -6,10 +6,10 @@ import torch
 
 from .utils import (
     BaseServer,
-    _fmt_num,
     ce_loss,
     compute_mh_weights,
     flattened_matrix_aggregate,
+    fmt_num,
     generate_adjacency_matrix,
     get_model,
 )
@@ -18,11 +18,11 @@ from .utils import (
 def get_path(args):
     adj_suffix = f"{args.adj_type}"
     if args.adj_type == "random":
-        adj_suffix += f"_{_fmt_num(args.edge_p)}"
+        adj_suffix += f"_{fmt_num(args.edge_p)}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{_fmt_num(args.k_small_world)}_{_fmt_num(args.edge_p)}"
+        adj_suffix += f"_{fmt_num(args.k_small_world)}_{fmt_num(args.edge_p)}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{_fmt_num(args.m_scale_free)}"
+        adj_suffix += f"_{fmt_num(args.m_scale_free)}"
 
     args.file_name = f"{args.common_name}_{adj_suffix}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
@@ -52,8 +52,8 @@ def train(params):
 
     # 2. 设置优化器与数据加载器
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)  # , momentum=0.9)
-    # if optimizer_state is not None:
-    #     optimizer.load_state_dict(optimizer_state)
+    if optimizer_state is not None:
+        optimizer.load_state_dict(optimizer_state)
 
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 

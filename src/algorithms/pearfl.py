@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    _fmt_num,
+    fmt_num,
     ce_loss,
     extract_prototypes,
     flattened_matrix_aggregate,
@@ -22,14 +22,14 @@ def get_path(args):
     """生成日志文件路径，包含拓扑参数"""
     adj_suffix = f"{args.adj_type}"
     if args.adj_type == "random":
-        adj_suffix += f"_{_fmt_num(args.edge_p)}"
+        adj_suffix += f"_{fmt_num(args.edge_p)}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{_fmt_num(args.k_small_world)}_{_fmt_num(args.edge_p)}"
+        adj_suffix += f"_{fmt_num(args.k_small_world)}_{fmt_num(args.edge_p)}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{_fmt_num(args.m_scale_free)}"
+        adj_suffix += f"_{fmt_num(args.m_scale_free)}"
 
     # 将算法的关键超参加入文件名，便于区分实验
-    args.file_name = f"{args.common_name}_{adj_suffix}_{_fmt_num(args.lamda)}"
+    args.file_name = f"{args.common_name}_{adj_suffix}_{fmt_num(args.lamda)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

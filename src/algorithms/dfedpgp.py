@@ -6,9 +6,9 @@ import torch
 
 from .utils import (
     BaseServer,
-    _fmt_num,
     ce_loss,
     flattened_matrix_aggregate,
+    fmt_num,
     generate_adjacency_matrix,
     get_model,
 )
@@ -18,14 +18,14 @@ def get_path(args):
     """生成日志文件路径，包含拓扑参数"""
     adj_suffix = f"{args.adj_type}"
     if args.adj_type == "random":
-        adj_suffix += f"_{_fmt_num(args.edge_p)}"
+        adj_suffix += f"_{fmt_num(args.edge_p)}"
     elif args.adj_type == "small_world":
-        adj_suffix += f"_{_fmt_num(args.k_small_world)}_{_fmt_num(args.edge_p)}"
+        adj_suffix += f"_{fmt_num(args.k_small_world)}_{fmt_num(args.edge_p)}"
     elif args.adj_type == "scale_free":
-        adj_suffix += f"_{_fmt_num(args.m_scale_free)}"
+        adj_suffix += f"_{fmt_num(args.m_scale_free)}"
 
     # 将算法的关键超参加入文件名，便于区分实验
-    args.file_name = f"{args.common_name}_{adj_suffix}_{_fmt_num(args.local_v_epochs)}_{_fmt_num(args.lr_v)}_{_fmt_num(args.momentum_v)}_{_fmt_num(args.weight_decay_v)}"
+    args.file_name = f"{args.common_name}_{adj_suffix}_{fmt_num(args.local_v_epochs)}_{fmt_num(args.lr_v)}_{fmt_num(args.momentum_v)}_{fmt_num(args.weight_decay_v)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -34,7 +34,7 @@ def train(params):
     DFedPGP 客户端工作函数：实现解耦更新和梯度推送
     """
     (
-        client_id,
+        _,
         device,
         body_biased,
         train_set,
@@ -314,7 +314,9 @@ class Server(BaseServer):
                 "body": self.client_body,
                 "head": self.client_head,
                 "mu": self.client_mu,
-                "topology": self.adj_matrix.cpu() if isinstance(self.adj_matrix, torch.Tensor) else self.adj_matrix,
+                "topology": self.adj_matrix.cpu()
+                if isinstance(self.adj_matrix, torch.Tensor)
+                else self.adj_matrix,
             },
         }
         self.deal_save(metrics, params)

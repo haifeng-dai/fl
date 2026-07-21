@@ -6,7 +6,7 @@ import torch
 from ...models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
-from .load_data import load_data
+from .load_data import load_data, load_domain_data
 
 
 @ray.remote
@@ -58,16 +58,44 @@ class BaseServer:
         self.pfl = pfl
         self.acc: list[float] = []
         self.acc_proto: list[float] = []
+        self.acc_source: list[float] = []
+        self.acc_target: list[float] = []
         self.loss: list[float] = []
 
-        self.train_sets, self.test_set, train_counts, self.num_class = load_data(
-            dataset_name=args.dataset,
-            partition=args.partition,
-            num_clients=args.num_clients,
-            alpha=args.alpha,
-            n_classes=args.n_class,
-            pfl=self.pfl,
+        # 领域数据分支
+        self.domain_dataset = getattr(args, "domain_dataset", None)
+        self.effective_dataset = (
+            self.domain_dataset if self.domain_dataset is not None else args.dataset
         )
+        self.source_test = None
+        self.target_test = None
+
+        if self.domain_dataset is not None:
+            domain_partition_dir = self.get_domain_partition_dir()
+            (
+                self.train_sets,
+                self.test_set,
+                train_counts,
+                self.num_class,
+                self.source_test,
+                self.target_test,
+                self.domain_labels,
+            ) = load_domain_data(
+                domain_dataset=self.domain_dataset,
+                domain_partition=domain_partition_dir,
+                num_clients=args.num_clients,
+                alpha=args.alpha,
+                pfl=self.pfl,
+            )
+        else:
+            self.train_sets, self.test_set, train_counts, self.num_class = load_data(
+                dataset_name=args.dataset,
+                partition=args.partition,
+                num_clients=args.num_clients,
+                alpha=args.alpha,
+                n_classes=args.n_class,
+                pfl=self.pfl,
+            )
         self.train_set_refs = [ray.put(ds) for ds in self.train_sets.values()]
 
         total_samples = sum(train_counts.values())
@@ -101,9 +129,26 @@ class BaseServer:
             ]
         else:
             global_test_ref = ray.put(self.test_set)
-            self.test_set_refs = [
-                global_test_ref for _ in range(self.num_clients)
-            ]
+            self.test_set_refs = [global_test_ref for _ in range(self.num_clients)]
+
+        # 4. 领域模式缓存源域/目标域测试集
+        if self.domain_dataset is not None:
+            self.source_test_ref = (
+                ray.put(self.source_test) if self.source_test is not None else None
+            )
+            self.target_test_ref = (
+                ray.put(self.target_test) if self.target_test is not None else None
+            )
+
+    def get_domain_partition_dir(self):
+        """构建领域分区目录名（与 _prepare_domain_data 中的 part_str 一致）。"""
+        dp = self.args.domain_partition
+        if dp == "domain_as_client":
+            return f"domain_as_client_n{self.num_clients}"
+        elif dp == "domain_mixed":
+            aware = "aware" if getattr(self.args, "domain_aware", True) else "blind"
+            return f"domain_mixed_{aware}_n{self.num_clients}_a{self.args.alpha}"
+        raise ValueError(f"未知领域分区方法: {dp}")
 
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
@@ -114,6 +159,26 @@ class BaseServer:
         self.model.load_state_dict(aggregated_state)
 
     def evaluate(self, model_states=None, protos=None):
+        if self.domain_dataset is not None:
+            # 领域模式：分别评估源域和目标域准确率
+            if self.source_test is not None:
+                acc_src = evaluate_model(self.model, self.source_test, self.device)
+                self.acc_source.append(acc_src)
+                self.acc.append(acc_src)
+            if self.target_test is not None:
+                acc_tgt = evaluate_model(self.model, self.target_test, self.device)
+                self.acc_target.append(acc_tgt)
+            if protos is not None:
+                if self.source_test is not None:
+                    p_acc = evaluate_prototype(
+                        self.model,
+                        protos.to(self.device),
+                        self.source_test,
+                        self.device,
+                    )
+                    self.acc_proto.append(p_acc)
+            return
+
         if not self.pfl:
             acc = evaluate_model(self.model, self.test_set, self.device)
             self.acc.append(acc)
@@ -175,6 +240,9 @@ class BaseServer:
     def deal_save(self, metrics, params):
         max_a = max(self.acc) if self.acc else 0.0
         summary_str = f"\n[Summary] Max Acc: {max_a:.2f}%"
+        if self.acc_target:
+            max_ta = max(self.acc_target)
+            summary_str += f" | Max Target Acc: {max_ta:.2f}%"
         if self.acc_proto:
             max_pa = max(self.acc_proto)
             summary_str += f" | Max Proto Acc: {max_pa:.2f}%"
@@ -182,7 +250,9 @@ class BaseServer:
 
         name = f"{self.args.file_name}_{self.args.cur_time}.pt"
         metrics_path = os.path.join(self.args.save_path, name)
-        params_path = os.path.join(self.args.save_path, name.replace(".pt", "_params.pt"))
+        params_path = os.path.join(
+            self.args.save_path, name.replace(".pt", "_params.pt")
+        )
         if getattr(self.args, "test", False):
             print(f"\n-> [Test Mode] Would save metrics to: {metrics_path}")
             print(f"\n-> [Test Mode] Would save params to: {params_path}")
@@ -218,6 +288,16 @@ def get_model(model_name, dataset_name, feature_dim=512):
         n_class = 47
     elif dataset_name == "har" or dataset_name == "har_feat":
         n_class = 6
+    elif dataset_name == "pacs":
+        n_class = 7
+    elif dataset_name == "officehome":
+        n_class = 65
+    elif dataset_name == "vlcs":
+        n_class = 5
+    elif dataset_name == "domainnet":
+        n_class = 345
+    elif dataset_name == "cifar10_dg":
+        n_class = 10
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
@@ -226,7 +306,18 @@ def get_model(model_name, dataset_name, feature_dim=512):
         if (
             "cifar" in dataset_name
             or dataset_name
-            in ["tiny_imagenet", "flowers102", "cars", "gtsrb", "cinic10", "svhn"]
+            in [
+                "tiny_imagenet",
+                "flowers102",
+                "cars",
+                "gtsrb",
+                "cinic10",
+                "svhn",
+                "pacs",
+                "officehome",
+                "vlcs",
+                "domainnet",
+            ]
         )
         else 1
     )

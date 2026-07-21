@@ -7,14 +7,14 @@ from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 from .utils import (
     BaseServer,
-    _fmt_num,
+    fmt_num,
     ce_loss,
     get_model,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_alpha{_fmt_num(args.alpha_coef)}"
+    args.file_name = f"{args.common_name}_alpha{fmt_num(args.alpha_coef)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

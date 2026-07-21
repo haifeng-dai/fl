@@ -6,14 +6,14 @@ import torch
 
 from .utils import (
     BaseServer,
-    _fmt_num,
+    fmt_num,
     ce_loss,
     get_model,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{_fmt_num(args.mu)}_{_fmt_num(args.tau)}"
+    args.file_name = f"{args.common_name}_{fmt_num(args.mu)}_{fmt_num(args.tau)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

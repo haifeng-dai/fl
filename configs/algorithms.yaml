@@ -110,8 +110,8 @@ efhc:
 dfedset:
     lambda_sa:
         # - 0
-        # - 10
-        - 20
+        - 10
+        # - 20
         # - 30
         # - 40
         # - 50
@@ -121,17 +121,25 @@ dfedset:
         # - 90
         # - 100
     eta:
+        # - 0.1
+        # - 0.2
+        # - 0.3
+        # - 0.4
         # - 0.5
+        # - 0.6
+        # - 0.7
+        # - 0.8
         - 0.9
         # - 0.99
         # - 0.999
+        # - 1
     lambda_so:
         # - 0
         # - 1
         # - 2
         # - 3
         # - 4
-        - 5
+        # - 5
         # - 6
         # - 7
         # - 8
@@ -141,10 +149,10 @@ dfedset:
         # - 14
         # - 16
         # - 18
-        # - 20
+        - 20
     ablate:
         relay: true # false → 无中继，无样本类别直接清零
         aggregator: true # true → Redirect（默认） | false → Plain 聚合（丢弃沉默边）
-        confidence: none # "count" → 原始样本量  |  "none" → 无置信度
-        trigger: global # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
+        confidence: count # "count" → 原始样本量  |  "none" → 无置信度
+        trigger: all # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
         gamma_global: 0.001 # trigger="global" 时使用的固定 GSD 阈值

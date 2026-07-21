@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    _fmt_num,
+    fmt_num,
     ce_loss,
     extract_prototypes,
     get_model,
@@ -18,7 +18,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{_fmt_num(args.lamda_)}_{_fmt_num(args.head_epochs)}_{_fmt_num(args.body_epochs)}_{_fmt_num(args.lr_head)}_{_fmt_num(args.lr_body)}_{_fmt_num(args.server_epochs)}_{_fmt_num(args.server_lr)}_{_fmt_num(args.lambda_p)}_{_fmt_num(args.lambda_acl)}"
+    args.file_name = f"{args.common_name}_{fmt_num(args.lamda_)}_{fmt_num(args.head_epochs)}_{fmt_num(args.body_epochs)}_{fmt_num(args.lr_head)}_{fmt_num(args.lr_body)}_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}_{fmt_num(args.lambda_p)}_{fmt_num(args.lambda_acl)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

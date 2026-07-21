@@ -24,8 +24,8 @@ def param_aggregate(
 
 def proto_aggregate(
     local_protos_list: list[torch.Tensor],
-    local_counts_list: list[torch.Tensor] = None,
-    old_global_protos: torch.Tensor = None,
+    local_counts_list: list[torch.Tensor] | None = None,
+    old_global_protos: torch.Tensor | None = None,
 ):
     """
     针对 [C, D] 张量格式的统一原型聚合函数。
@@ -77,7 +77,7 @@ def pushsum_param_aggregate(
     weights: torch.Tensor,
     M: torch.Tensor,
     gossip_rounds: int = 1,
-    prefix: str = None,
+    prefix: str | list[str] | tuple[str, ...] | None = None,
 ):
     """
     使用矩阵运算形式的 Push-Sum 机制聚合模型参数字典列表。

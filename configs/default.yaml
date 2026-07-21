@@ -7,8 +7,8 @@ dataset: # cifar10, cifar100, cinic10, tiny_imagenet, mnist, fashionmnist, emnis
     # - cinic10
     # - tiny_imagenet
 model:
-    - cnn
-    # - resnet18
+    # - cnn
+    - resnet18
 feature_dim: 512
 num_clients:
     - 20
@@ -16,7 +16,9 @@ num_clients:
 partition:
     - dirichlet
     # - pathological
-alpha: 0.1
+alpha:
+    - 0.1
+    # - 0.5
 n_class: 0 # 0 表示自动根据数据集选择
 test_ratio: 0.2
 
@@ -35,9 +37,16 @@ times: 5
 gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
 # gpus: "0,1"
 # gpus: "2,3"
-# gpus: "2,0"
-max_workers_per_gpu: 5
+# gpus: "3,0,1,2"
+max_workers_per_gpu: 1
 test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)，可用 -t 在命令行中快速开启
+
+# 领域泛化参数 (Domain Generalization - 仅在 domain_dataset 非空时生效)
+domain_dataset: ~          # 领域数据集名: pacs / officehome / vlcs / domainnet / cifar10_dg
+domain_partition: ~        # domain_as_client / domain_mixed
+domain_aware: true         # domain_mixed 时是否按领域感知 Dirichlet 分配
+selected_domains: ~  # list[str]，仅使用指定领域；None=全用
+target_domain: ~           # str，留作目标域测试（leave-one-domain-out）
 
 # 去中心化网络拓扑 (Network Topology)
 # ring, complete, random, small_world, scale_free, star

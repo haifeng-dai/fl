@@ -8,14 +8,14 @@ from torch.utils.data import DataLoader, Subset
 
 from .utils import (
     BaseServer,
-    _fmt_num,
+    fmt_num,
     ce_loss,
     get_model,
 )
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{_fmt_num(args.eta)}_{_fmt_num(args.rand_percent)}_{_fmt_num(args.layer_idx)}_{_fmt_num(args.ala_threshold)}_{_fmt_num(args.num_pre_loss)}"
+    args.file_name = f"{args.common_name}_{fmt_num(args.eta)}_{fmt_num(args.rand_percent)}_{fmt_num(args.layer_idx)}_{fmt_num(args.ala_threshold)}_{fmt_num(args.num_pre_loss)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

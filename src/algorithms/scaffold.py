@@ -7,7 +7,7 @@ import torch.optim as optim
 
 from .utils import (
     BaseServer,
-    _fmt_num,
+    fmt_num,
     ce_loss,
     get_model,
     param_aggregate,
@@ -15,7 +15,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_glr{_fmt_num(args.global_lr)}"
+    args.file_name = f"{args.common_name}_glr{fmt_num(args.global_lr)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

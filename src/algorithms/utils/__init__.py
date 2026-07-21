@@ -1,3 +1,4 @@
+import numpy
 import torch
 
 from .aggregate import flattened_matrix_aggregate, param_aggregate, proto_aggregate
@@ -33,11 +34,12 @@ __all__ = [
     "kl_loss",
     "extract_prototypes",
     "orthogonality_loss",
-    "_fmt_num",
+    "fmt_num",
+    "mixup",
 ]
 
 
-def _fmt_num(x):
+def fmt_num(x):
     """数值统一转字符串：整数不保留 .0，浮点数保留原样"""
     if isinstance(x, float) and x == int(x):
         return str(int(x))
@@ -80,3 +82,26 @@ def extract_prototypes(
     if return_counts:
         return protos_cpu, proto_count.cpu().detach().clone()
     return protos_cpu
+
+
+def mixup(x1, y1, x2, y2, alpha=1.0):
+    """
+    对两个输入样本执行 mixup 数据增强。
+
+    从 Beta(alpha, alpha) 分布中采样混合系数 lam，
+    对 (x1, y1) 和 (x2, y2) 进行线性插值。
+
+    返回:
+        mixed_x: 混合后的特征
+        mixed_y1, mixed_y2: 混合前的标签（供损失函数分别加权）
+        lam: 混合系数
+    """
+    lam = numpy.random.beta(alpha, alpha)
+    device = x1.device
+    lam = torch.tensor(lam, device=device)
+
+    mixed_x = lam * x1 + (1 - lam) * x2
+    mixed_y1 = y1
+    mixed_y2 = y2
+
+    return mixed_x, mixed_y1, mixed_y2, lam
