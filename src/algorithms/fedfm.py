@@ -37,11 +37,11 @@ def train(params):
         lr,
         batch_size,
         epochs,
+        feature_dim,
         mu,
         num_classes,
-        feature_dim,
         mode,
-        global_anchors,  # 阶段一时为全局锚点 Tensor，阶段二时为 None
+        global_anchors,
     ) = params
 
     model = get_model(model_name, dataset_name, feature_dim).to(device)
@@ -111,25 +111,12 @@ class Server(BaseServer):
             print(f"Selected clients: {selected_clients}")
 
             # ========== 阶段一：下发全局模型 + 全局锚点，执行本地训练 ==========
-            p_train = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.model.state_dict(),
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.mu,
-                    self.num_class,
-                    self.args.feature_dim,
-                    "train",
-                    self.global_anchors,
-                ]
-                for i in selected_clients
-            ]
+            p_train = self.build_base_params(selected_clients)
+            for params, i in zip(p_train, selected_clients):
+                params.append(self.args.mu)
+                params.append(self.num_class)
+                params.append("train")
+                params.append(self.global_anchors)
             results_train = self.run_clients(train, p_train)
 
             # 收集训练结果并聚合全局模型
@@ -147,25 +134,13 @@ class Server(BaseServer):
 
             # ========== 阶段二：下发聚合后的全局模型，提取对齐锚点 ==========
             global_state = self.model.state_dict()
-            p_extract = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    global_state,
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.mu,
-                    self.num_class,
-                    self.args.feature_dim,
-                    "extract",
-                    None,
-                ]
-                for i in selected_clients
-            ]
+            p_extract = self.build_base_params(selected_clients)
+            for params, i in zip(p_extract, selected_clients):
+                params[2] = global_state
+                params.append(self.args.mu)
+                params.append(self.num_class)
+                params.append("extract")
+                params.append(None)
             results_extract = self.run_clients(train, p_extract)
 
             # 收集本地锚点并按样本数量加权聚合为全局锚点

@@ -38,14 +38,14 @@ def train(params):
         device,
         proxy_state,
         train_set,
-        local_state,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
-        mu,
         feature_dim,
+        local_state,
+        mu,
     ) = params
 
     # 1. 初始化代理模型 (公共/共享模型)
@@ -150,24 +150,11 @@ class Server(BaseServer):
                 proxy_list, self.adj_matrix, self.device
             )
 
-            def get_client_param(i):
-                return [
-                    i,
-                    self.client_gpu[i],
-                    agg_proxy_list[i],
-                    self.train_sets[i],
-                    self.clients_state[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.mu,
-                    self.args.feature_dim,
-                ]
-
-            p = [get_client_param(i) for i in selected_clients]
-            # 2. 启动客户端多进程并行训练
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = agg_proxy_list[i]
+                params.append(self.clients_state[i])
+                params.append(self.args.mu)
             results = self.run_clients(train, p)
 
             # 3. 收集更新客户端状态数据与评估并计算平均损失

@@ -44,10 +44,11 @@ def train(params):
         train_set,
         model_name,
         dataset_name,
-        num_classes,
-        feature_dim,
-        batch_size,
         lr,
+        batch_size,
+        _,
+        feature_dim,
+        num_classes,
         momentum,
         weight_decay,
         lamda,
@@ -181,29 +182,17 @@ class Server(BaseServer):
             # 2. 嵌套循环：执行 E 个本地 Epoch，并在每个 Epoch 结束后交换原型
             round_loss = 0.0
             for e in range(self.args.epochs):
-                # 2.1 为每个选中的客户端准备参数
-                def get_client_param(i):
-                    return [
-                        i,
-                        self.client_gpu[i],
-                        self.clients_state[i],
-                        self.train_sets[i],
-                        self.args.model,
-                        self.args.dataset,
-                        self.num_class,
-                        self.args.feature_dim,
-                        self.args.batch_size,
-                        self.args.lr,
-                        self.args.momentum,
-                        self.args.weight_decay,
-                        self.args.lamda,
-                        self.personalized_protos[i].cpu(),
-                    ]
-
-                params = [get_client_param(i) for i in selected_clients]
+                p = self.build_base_params(selected_clients)
+                for params, i in zip(p, selected_clients):
+                    params[2] = self.clients_state[i]
+                    params.append(self.num_class)
+                    params.append(self.args.momentum)
+                    params.append(self.args.weight_decay)
+                    params.append(self.args.lamda)
+                    params.append(self.personalized_protos[i].cpu())
 
                 # 2.2 启动 Ray 并行训练 (1 Epoch)
-                results = self.run_clients(train, params)
+                results = self.run_clients(train, p)
 
                 # 2.3 回收结果：更新模型状态、原型和样本计数
                 epoch_loss = 0.0

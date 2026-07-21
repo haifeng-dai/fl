@@ -6,9 +6,9 @@ import torch
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
     dist_contrastive_loss,
+    fmt_num,
     get_model,
     param_aggregate,
 )
@@ -81,18 +81,18 @@ def train(params):
         device,
         model_state,
         train_set,
-        pln_state,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
+        feature_dim,
+        pln_state,
         num_classes,
         lambda_,
         epoch_pln,
         lr_pln,
         batch_size_pln,
-        feature_dim,
         depth_pln,
         width_pln,
         mode,
@@ -212,33 +212,20 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.model.state_dict(),
-                    self.train_sets[i],
-                    self.pln.state_dict(),
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.num_class,
-                    self.args.lambda_,
-                    self.args.epoch_pln,
-                    self.args.lr_pln,
-                    self.args.batch_size_pln,
-                    self.args.feature_dim,
-                    self.args.depth_pln,
-                    self.args.width_pln,
-                    self.args.mode,
-                    self.args.fixed_proto,
-                    self.args.init_emb,
-                    self.args.har,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, _ in zip(p, selected_clients):
+                params.append(self.pln.state_dict())
+                params.append(self.num_class)
+                params.append(self.args.lambda_)
+                params.append(self.args.epoch_pln)
+                params.append(self.args.lr_pln)
+                params.append(self.args.batch_size_pln)
+                params.append(self.args.depth_pln)
+                params.append(self.args.width_pln)
+                params.append(self.args.mode)
+                params.append(self.args.fixed_proto)
+                params.append(self.args.init_emb)
+                params.append(self.args.har)
             results = self.run_clients(train, p)
 
             # 汇集各客户端的回传结果，计算模型与 PLN 的加权整体损失
@@ -271,6 +258,11 @@ class Server(BaseServer):
         self.pln.load_state_dict(param_aggregate(plns_params, weights))
 
     def save(self):
-        metrics = {"acc": self.acc, "acc_p": self.acc_proto, "loss": self.loss, "loss_p": self.loss_p}
+        metrics = {
+            "acc": self.acc,
+            "acc_p": self.acc_proto,
+            "loss": self.loss,
+            "loss_p": self.loss_p,
+        }
         params = {"global": self.model.state_dict(), "proto": self.pln.state_dict()}
         self.deal_save(metrics, params)

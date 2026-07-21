@@ -173,19 +173,19 @@ def train(params):
         device,
         global_model_state,
         train_set,
-        local_model_state,
-        saved_weights,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
+        feature_dim,
+        local_model_state,
+        saved_weights,
         eta,
         rand_percent,
         layer_idx,
         ala_threshold,
         num_pre_loss,
-        feature_dim,
     ) = params
 
     # 初始化模型
@@ -280,28 +280,16 @@ class Server(BaseServer):
                 k: v.cpu() for k, v in self.model.state_dict().items()
             }
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    global_model_state_cpu,
-                    self.train_sets[i],
-                    self.clients_state[i],
-                    self.clients_weights[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.eta,
-                    self.args.rand_percent,
-                    self.args.layer_idx,
-                    self.args.ala_threshold,
-                    self.args.num_pre_loss,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = global_model_state_cpu
+                params.append(self.clients_state[i])
+                params.append(self.clients_weights[i])
+                params.append(self.args.eta)
+                params.append(self.args.rand_percent)
+                params.append(self.args.layer_idx)
+                params.append(self.args.ala_threshold)
+                params.append(self.args.num_pre_loss)
             # 运行并行客户端训练任务
             results = self.run_clients(train, p)
 

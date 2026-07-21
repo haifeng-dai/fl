@@ -23,13 +23,13 @@ def train(params):
         device,
         global_body_state,
         train_set,
-        local_head_state,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
         feature_dim,
+        local_head_state,
     ) = params
 
     model = get_model(model_name, dataset_name, feature_dim).to(device)
@@ -84,22 +84,10 @@ class Server(BaseServer):
             # 全局共享特征提取器 (Body)
             global_body_state = self.model.extractor.state_dict()
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    global_body_state,
-                    self.train_sets[i],
-                    self.client_head_states[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = global_body_state
+                params.append(self.client_head_states[i])
             results = self.run_clients(train, p)
 
             total_loss = 0.0

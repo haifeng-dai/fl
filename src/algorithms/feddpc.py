@@ -65,7 +65,10 @@ def train(params):
         train_set,
         model_name,
         dataset_name,
+        _,
         batch_size,
+        _,
+        feature_dim,
         head_epochs,
         body_epochs,
         lr_head,
@@ -73,7 +76,6 @@ def train(params):
         lamda_,
         global_protos,
         num_class,
-        feature_dim,
         lambda_p,
     ) = params
 
@@ -218,29 +220,17 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.batch_size,
-                    self.args.head_epochs,
-                    self.args.body_epochs,
-                    self.args.lr_head,
-                    self.args.lr_body,
-                    self.args.lamda_,
-                    self.global_protos.cpu()
-                    if self.global_protos is not None
-                    else None,
-                    self.num_class,
-                    self.args.feature_dim,
-                    self.args.lambda_p,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.clients_state[i]
+                params.append(self.args.head_epochs)
+                params.append(self.args.body_epochs)
+                params.append(self.args.lr_head)
+                params.append(self.args.lr_body)
+                params.append(self.args.lamda_)
+                params.append(self.global_protos.cpu() if self.global_protos is not None else None)
+                params.append(self.num_class)
+                params.append(self.args.lambda_p)
             results = self.run_clients(train, p)
 
             total_loss_ce = 0.0

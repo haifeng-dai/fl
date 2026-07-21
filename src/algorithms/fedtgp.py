@@ -67,10 +67,10 @@ def train(params):
         lr,
         batch_size,
         epochs,
+        feature_dim,
         lamda_,
         global_protos,
         num_classes,
-        feature_dim,
     ) = params
 
     # 初始化模型并加载全局状态
@@ -166,26 +166,12 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.lamda_,
-                    self.global_protos.cpu()
-                    if self.global_protos is not None
-                    else None,
-                    self.num_class,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.clients_state[i]
+                params.append(self.args.lamda_)
+                params.append(self.global_protos.cpu() if self.global_protos is not None else None)
+                params.append(self.num_class)
             results = self.run_clients(train, p)
 
             total_loss_ce = 0.0

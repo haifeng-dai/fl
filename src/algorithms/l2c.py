@@ -56,15 +56,16 @@ def train_phase1(params):
         ]
     """
     (
+        _,
         device,
         model_state,
         train_set,
         model_name,
         dataset_name,
-        feature_dim,
+        lr,
         batch_size,
         local_epochs,
-        lr,
+        feature_dim,
         val_ratio,
     ) = params
 
@@ -141,14 +142,17 @@ def train_phase2(params):
         ]
     """
     (
+        _,
         device,
         model_state,
         train_set,
-        theta_t,
         model_name,
         dataset_name,
-        feature_dim,
+        _,
         batch_size,
+        _,
+        feature_dim,
+        theta_t,
         neighbor_deltas,
         alpha,
         val_indices,
@@ -249,22 +253,10 @@ class Server(BaseServer):
             logger.info(f"Selected clients: {selected_clients}")
 
             # --- Phase 1：并行计算所有客户端的本地 Delta ---
-            payloads_p1 = []
-            for cid in selected_clients:
-                payloads_p1.append(
-                    [
-                        self.client_gpu[cid],
-                        self.clients_state[cid],
-                        self.train_sets[cid],
-                        self.args.model,
-                        self.args.dataset,
-                        self.args.feature_dim,
-                        self.args.batch_size,
-                        self.args.epochs,
-                        self.args.lr,
-                        self.args.val_ratio,
-                    ]
-                )
+            payloads_p1 = self.build_base_params(selected_clients)
+            for params, cid in zip(payloads_p1, selected_clients):
+                params[2] = self.clients_state[cid]
+                params.append(self.args.val_ratio)
 
             p1_results = self.run_clients(train_phase1, payloads_p1)
 
@@ -283,9 +275,9 @@ class Server(BaseServer):
             self.loss.append(total_loss / len(selected_clients))
 
             # --- Phase 2：分发邻居 Delta 并执行元更新与最终聚合 ---
+            p2_base = self.build_base_params(selected_clients)
             payloads_p2 = []
-
-            for i in selected_clients:
+            for params, i in zip(p2_base, selected_clients):
                 # 获取节点 i 的协作邻居
                 neighbors = torch.where(self.A[i] > 0)[0].tolist()
                 neighbors.sort()
@@ -304,22 +296,13 @@ class Server(BaseServer):
                         }
                         neighbor_deltas.append(zero_delta)
 
-                payloads_p2.append(
-                    [
-                        self.client_gpu[i],
-                        self.clients_state[i],
-                        self.train_sets[i],
-                        cid_to_theta_t[i],
-                        self.args.model,
-                        self.args.dataset,
-                        self.args.feature_dim,
-                        self.args.batch_size,
-                        neighbor_deltas,
-                        self.alphas[i],
-                        cid_to_indices[i]["val"],
-                        self.args.lr_alpha,
-                    ]
-                )
+                params[2] = self.clients_state[i]
+                params.append(cid_to_theta_t[i])
+                params.append(neighbor_deltas)
+                params.append(self.alphas[i])
+                params.append(cid_to_indices[i]["val"])
+                params.append(self.args.lr_alpha)
+                payloads_p2.append(params)
 
             p2_results = self.run_clients(train_phase2, payloads_p2)
 

@@ -115,17 +115,17 @@ def train(params):
     (
         _,
         device,
-        model_name,
-        train_set,
-        dataset_name,
-        feature_dim,
         compressed_params_g,
-        prev_local_state,
-        wh_state,
+        train_set,
+        model_name,
+        dataset_name,
         lr,
-        lr_g,
         batch_size,
         epochs,
+        feature_dim,
+        prev_local_state,
+        wh_state,
+        lr_g,
         energy_threshold,
     ) = params
 
@@ -253,26 +253,13 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # 向全体客户端下发压缩后的全局参数
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.args.model,
-                    self.train_sets[i],
-                    self.args.dataset,
-                    self.args.feature_dim,
-                    self.compressed_params,
-                    self.clients_state[i],
-                    self.client_wh_states[i],
-                    self.args.lr,
-                    self.args.lr_g,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.energy,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.compressed_params
+                params.append(self.clients_state[i])
+                params.append(self.client_wh_states[i])
+                params.append(self.args.lr_g)
+                params.append(self.args.energy)
             results = self.run_clients(train, p)
 
             # 汇集各客户端回传结果并更新服务器端存储的客户端本地状态

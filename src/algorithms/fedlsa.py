@@ -105,15 +105,15 @@ def train(params):
         device,
         model_state,
         train_set,
-        global_anchors,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
+        feature_dim,
+        global_anchors,
         lambda_com,
         tau,
-        feature_dim,
     ) = params
 
     # 1. 初始化模型
@@ -203,24 +203,12 @@ class Server(BaseServer):
             # 生成下发前的最新当前语义锚点
             current_anchors = self.get_anchors().detach().cpu()
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    current_anchors,
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.lambda_com,
-                    self.args.tau,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.clients_state[i]
+                params.append(current_anchors)
+                params.append(self.args.lambda_com)
+                params.append(self.args.tau)
             results = self.run_clients(train, p)
 
             total_loss = 0.0

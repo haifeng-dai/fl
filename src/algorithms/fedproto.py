@@ -31,8 +31,8 @@ def train(params):
         lr,
         batch_size,
         epochs,
-        num_classes,
         feature_dim,
+        num_classes,
         mu,
         global_protos,
     ) = params
@@ -103,26 +103,12 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.num_class,
-                    self.args.feature_dim,
-                    self.args.mu,
-                    self.global_protos.cpu()
-                    if self.global_protos is not None
-                    else None,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.clients_state[i]
+                params.append(self.num_class)
+                params.append(self.args.mu)
+                params.append(self.global_protos.cpu() if self.global_protos is not None else None)
             results = self.run_clients(train, p)
 
             total_loss = 0.0

@@ -31,8 +31,8 @@ def train(params):
         lr,
         batch_size,
         epochs,
-        mu,
         feature_dim,
+        mu,
     ) = params
 
     # 1. 初始化模型并加载全局状态
@@ -97,22 +97,9 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.model.state_dict(),
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.mu,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params in p:
+                params.append(self.args.mu)
             results = self.run_clients(train, p)
 
             # 汇集并处理各客户端结果

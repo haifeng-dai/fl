@@ -24,15 +24,15 @@ def train(params):
         device,
         model_state,
         train_set,
-        grad_prev,
-        global_model_vector,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
-        alpha_coef,
         feature_dim,
+        grad_prev,
+        global_model_vector,
+        alpha_coef,
     ) = params
 
     # 1. 初始化模型并加载全局状态
@@ -120,24 +120,11 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.model.state_dict(),
-                    self.train_sets[i],
-                    self.local_grads[i],
-                    global_model_vector,
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.alpha_coef,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params.append(self.local_grads[i])
+                params.append(global_model_vector)
+                params.append(self.args.alpha_coef)
             results = self.run_clients(train, p)
 
             total_loss = 0.0

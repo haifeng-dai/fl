@@ -38,16 +38,16 @@ def train(params):
         device,
         body_biased,
         train_set,
-        mu,
-        head_state,
         model_name,
         dataset_name,
         lr_u,
-        lr_v,
         batch_size,
         local_u_epochs,
-        local_v_epochs,
         feature_dim,
+        mu,
+        head_state,
+        lr_v,
+        local_v_epochs,
         momentum,
         weight_decay,
     ) = params
@@ -225,31 +225,20 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            # 2. 为每个选中的客户端准备参数
-            def get_client_param(i):
-                return [
-                    i,
-                    self.client_gpu[i],
-                    self.client_body[i],
-                    self.train_sets[i],
-                    self.client_mu[i],
-                    self.client_head[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.lr_u,
-                    self.lr_v,
-                    self.args.batch_size,
-                    self.local_u_epochs,
-                    self.local_v_epochs,
-                    self.args.feature_dim,
-                    self.momentum_v,
-                    self.weight_decay_v,
-                ]
-
-            params = [get_client_param(i) for i in selected_clients]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.client_body[i]
+                params[6] = self.lr_u
+                params[8] = self.local_u_epochs
+                params.append(self.client_mu[i])
+                params.append(self.client_head[i])
+                params.append(self.lr_v)
+                params.append(self.local_v_epochs)
+                params.append(self.momentum_v)
+                params.append(self.weight_decay_v)
 
             # 3. 启动客户端并行训练
-            results = self.run_clients(train, params)
+            results = self.run_clients(train, p)
 
             # 4. 收集客户端的更新
             total_loss = 0.0

@@ -182,27 +182,15 @@ class Server(BaseServer):
             trigger_mode = ablate.get("trigger", "adaptive")
             use_redirect = ablate.get("aggregator", True)
 
-            def get_client_param(i):
-                return (
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.feature_dim,
-                    self.num_class,
-                    self.consensus_P[i],
-                    self.args.lambda_sa,
-                    self.args.lambda_so,
-                    confidence_mode,
-                )
-
-            params = [get_client_param(i) for i in selected_clients]
-            results = self.run_clients(train, params)
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.clients_state[i]
+                params.append(self.num_class)
+                params.append(self.consensus_P[i])
+                params.append(self.args.lambda_sa)
+                params.append(self.args.lambda_so)
+                params.append(confidence_mode)
+            results = self.run_clients(train, p)
 
             total_loss = 0.0
             for cid, res in results.items():

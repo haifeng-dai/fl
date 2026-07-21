@@ -31,15 +31,15 @@ def train(params):
         device,
         global_state,
         train_set,
-        local_state,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
+        feature_dim,
+        local_state,
         alpha_fml,
         beta_fml,
-        feature_dim,
     ) = params
 
     # 1. 初始化全局模型 (MEME)
@@ -132,24 +132,11 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.model.state_dict(),
-                    self.train_sets[i],
-                    self.clients_state[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.alpha_fml,
-                    self.args.beta_fml,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params.append(self.clients_state[i])
+                params.append(self.args.alpha_fml)
+                params.append(self.args.beta_fml)
             results = self.run_clients(train, p)
 
             total_loss = 0.0

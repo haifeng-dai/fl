@@ -8,8 +8,8 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
+    fmt_num,
     generate_adjacency_matrix,
     get_model,
 )
@@ -62,13 +62,13 @@ def train(params):
         device,
         model_state,
         train_set,
-        masks,
         model_name,
         dataset_name,
-        feature_dim,
-        batch_size,
-        local_epochs,
         lr,
+        batch_size,
+        epochs,
+        feature_dim,
+        masks,
         round_idx,
         num_rounds,
         anneal_factor,
@@ -89,7 +89,7 @@ def train(params):
     total = 0
     num_batches = 0
 
-    for _ in range(local_epochs):
+    for _ in range(epochs):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
@@ -307,28 +307,16 @@ class Server(BaseServer):
             print(f"Selected clients: {selected_clients}")
 
             # 3. 为每个选中的客户端准备参数（用聚合后的模型）
-            def get_client_param(i):
-                return [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.client_masks[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.feature_dim,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.lr,
-                    r,  # round_idx
-                    self.rounds,  # num_rounds
-                    self.args.anneal_factor,
-                ]
-
-            params = [get_client_param(i) for i in selected_clients]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.clients_state[i]
+                params.append(self.client_masks[i])
+                params.append(r)
+                params.append(self.rounds)
+                params.append(self.args.anneal_factor)
 
             # 4. 启动客户端并行训练 + 掩码搜索
-            results = self.run_clients(train, params)
+            results = self.run_clients(train, p)
 
             # 5. 收集客户端的更新
             total_loss = 0.0
@@ -415,5 +403,8 @@ class Server(BaseServer):
 
     def save(self):
         metrics = {"acc": self.acc, "loss": self.loss}
-        params = {"client": self.clients_state, "aux": {"client_masks": self.client_masks, "topology": self.A.cpu()}}
+        params = {
+            "client": self.clients_state,
+            "aux": {"client_masks": self.client_masks, "topology": self.A.cpu()},
+        }
         self.deal_save(metrics, params)

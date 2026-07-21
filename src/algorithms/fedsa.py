@@ -50,18 +50,18 @@ def train(params):
         device,
         model_state,
         train_set,
-        prev_local_anchors,
-        global_anchors,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
+        feature_dim,
+        prev_local_anchors,
+        global_anchors,
         lambda_r,
         lambda_mcl,
         lambda_cc,
         num_classes,
-        feature_dim,
     ) = params
 
     # 1. 初始化模型
@@ -159,27 +159,15 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.clients_anchors[i],
-                    self.anchors,
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.lambda_r,
-                    self.args.lambda_mcl,
-                    self.args.lambda_cc,
-                    self.num_class,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.clients_state[i]
+                params.append(self.clients_anchors[i])
+                params.append(self.anchors)
+                params.append(self.args.lambda_r)
+                params.append(self.args.lambda_mcl)
+                params.append(self.args.lambda_cc)
+                params.append(self.num_class)
             results = self.run_clients(train, p)
 
             total_loss = 0.0

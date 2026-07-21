@@ -8,9 +8,9 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
     compute_mh_weights,
+    fmt_num,
     generate_adjacency_matrix,
     get_model,
 )
@@ -34,6 +34,7 @@ def get_path(args):
 
 def train(params):
     (
+        _,
         device,
         model_state,
         train_set,
@@ -196,21 +197,11 @@ class Server(BaseServer):
                 self.num_clients, num_join_clients, replace=False
             )
 
-            p = [
-                [
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.feature_dim,
-                    self.hat_states[i],
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.clients_state[i]
+                params[6] = lr
+                params.append(self.hat_states[i])
             results = self.run_clients(train, p)
 
             total_loss = 0.0

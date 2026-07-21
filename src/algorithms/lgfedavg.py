@@ -29,13 +29,13 @@ def train(params):
         device,
         local_body_state,
         train_set,
-        global_head_state,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
         feature_dim,
+        global_head_state,
     ) = params
 
     model = get_model(model_name, dataset_name, feature_dim).to(device)
@@ -95,22 +95,10 @@ class Server(BaseServer):
             # 获取当前的全局共享分类头 (Head)
             global_head_state = self.model.classifier.state_dict()
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    global_head_state,
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params[2] = self.clients_state[i]
+                params.append(global_head_state)
             results = self.run_clients(train, p)
 
             total_loss = 0.0

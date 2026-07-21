@@ -39,14 +39,14 @@ def train(params):
         device,
         model_state,
         train_set,
-        c_global_state,
-        c_local_state,
         model_name,
         dataset_name,
         lr,
         batch_size,
         epochs,
         feature_dim,
+        c_global_state,
+        c_local_state,
     ) = params
 
     # 1. 初始化模型并加载全局状态
@@ -144,23 +144,10 @@ class Server(BaseServer):
             )
             print(f"Selected clients: {selected_clients}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.model.state_dict(),
-                    self.train_sets[i],
-                    self.c_global,
-                    self.c_local[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected_clients)
+            for params, i in zip(p, selected_clients):
+                params.append(self.c_global)
+                params.append(self.c_local[i])
             results = self.run_clients(train, p)
 
             # 汇集并处理各客户端结果
