@@ -57,7 +57,7 @@ def train(params):
 
         model.train()
         for _ in range(epochs):
-            for data, target in loader:
+            for data, target, *_ in loader:
                 data, target = data.to(device), target.to(device)
                 optimizer.zero_grad()
                 features = model.extractor(data)

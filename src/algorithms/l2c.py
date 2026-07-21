@@ -95,7 +95,7 @@ def train_phase1(params):
     num_batches = 0
 
     for _ in range(local_epochs):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
             output = model(x)

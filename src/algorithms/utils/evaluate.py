@@ -9,7 +9,7 @@ def evaluate_model(model, test_set, device) -> float:
     correct = 0.0
     count = 0.0
     with torch.no_grad():
-        for data, target in loader:
+        for data, target, *_ in loader:
             data, target = data.to(device), target.to(device)
             output = model(data)
             pred = output.argmax(dim=1, keepdim=True)
@@ -30,7 +30,7 @@ def evaluate_prototype(model, prototypes, test_set, device) -> float:
     correct = 0.0
     count = 0.0
     with torch.no_grad():
-        for data, target in loader:
+        for data, target, *_ in loader:
             data, target = data.to(device), target.to(device)
             features = model.extractor(data)
 

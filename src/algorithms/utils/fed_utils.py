@@ -6,7 +6,7 @@ import torch
 from ...models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
-from .load_data import load_data, load_domain_data
+from .load_data import load_data
 
 
 @ray.remote
@@ -71,7 +71,6 @@ class BaseServer:
         self.target_test = None
 
         if self.domain_dataset is not None:
-            domain_partition_dir = self.get_domain_partition_dir()
             (
                 self.train_sets,
                 self.test_set,
@@ -80,15 +79,24 @@ class BaseServer:
                 self.source_test,
                 self.target_test,
                 self.domain_labels,
-            ) = load_domain_data(
-                domain_dataset=self.domain_dataset,
-                domain_partition=domain_partition_dir,
+            ) = load_data(
+                dataset_name=self.domain_dataset,
+                domain_partition=args.domain_partition,
                 num_clients=args.num_clients,
                 alpha=args.alpha,
                 pfl=self.pfl,
+                domain_aware=getattr(args, "domain_aware", True),
             )
         else:
-            self.train_sets, self.test_set, train_counts, self.num_class = load_data(
+            (
+                self.train_sets,
+                self.test_set,
+                train_counts,
+                self.num_class,
+                _,
+                _,
+                _,
+            ) = load_data(
                 dataset_name=args.dataset,
                 partition=args.partition,
                 num_clients=args.num_clients,
@@ -139,16 +147,6 @@ class BaseServer:
             self.target_test_ref = (
                 ray.put(self.target_test) if self.target_test is not None else None
             )
-
-    def get_domain_partition_dir(self):
-        """构建领域分区目录名（与 _prepare_domain_data 中的 part_str 一致）。"""
-        dp = self.args.domain_partition
-        if dp == "domain_as_client":
-            return f"domain_as_client_n{self.num_clients}"
-        elif dp == "domain_mixed":
-            aware = "aware" if getattr(self.args, "domain_aware", True) else "blind"
-            return f"domain_mixed_{aware}_n{self.num_clients}_a{self.args.alpha}"
-        raise ValueError(f"未知领域分区方法: {dp}")
 
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
@@ -213,6 +211,23 @@ class BaseServer:
         self.acc.append(sum(r["acc"] for r in results) / self.num_clients)
         if protos is not None:
             self.acc_proto.append(sum(r["p_acc"] for r in results) / self.num_clients)
+
+    def build_base_params(self, selected_clients):
+        return [
+            [
+                i,
+                self.client_gpu[i],
+                self.model.state_dict(),
+                self.train_sets[i],
+                self.args.model,
+                self.effective_dataset,
+                self.args.lr,
+                self.args.batch_size,
+                self.args.epochs,
+                self.args.feature_dim,
+            ]
+            for i in selected_clients
+        ]
 
     def run_clients(self, worker_func, parameters):
         """强制通过 Ray 运行客户端训练。"""

@@ -5,6 +5,19 @@ import numpy as np
 import torch
 
 
+def get_domain_partition_dir(domain_partition, num_clients, alpha=0.5, domain_aware=True):
+    if domain_partition == "domain_as_client":
+        return f"domain_as_client_n{num_clients}"
+    elif domain_partition == "domain_mixed":
+        aware_str = "aware" if domain_aware else "blind"
+        return f"domain_mixed_{aware_str}_n{num_clients}_a{alpha}"
+    elif domain_partition == "domain_mixed_aware":
+        return f"domain_mixed_aware_n{num_clients}_a{alpha}"
+    elif domain_partition == "domain_mixed_blind":
+        return f"domain_mixed_blind_n{num_clients}_a{alpha}"
+    raise ValueError(f"Unknown domain partition method: {domain_partition}")
+
+
 def per_domain_train_test_split(all_domains, test_ratio):
     unique_domains = sorted(set(all_domains))
     domain_train_indices = {}

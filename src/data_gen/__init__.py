@@ -2,8 +2,10 @@ import os
 
 import torch
 
-from .partition import prepare_domain_data, prepare_label_data
+from .partition import get_domain_partition_dir, prepare_domain_data, prepare_label_data
 from .process import process_dataset
+
+__all__ = ["get_domain_partition_dir", "prepare_data"]
 
 
 def load_data(args):

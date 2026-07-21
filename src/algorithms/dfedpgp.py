@@ -93,7 +93,7 @@ def train(params):
 
     model.train()
     for _ in range(local_v_epochs):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             optimizer_v.zero_grad()
             out = model(x)
@@ -116,7 +116,7 @@ def train(params):
     num_batches = 0
 
     for _ in range(local_u_epochs):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
 
             # a. 执行 U -> Z 转换 (除以 mu)，使 Forward 作用在解偏状态上

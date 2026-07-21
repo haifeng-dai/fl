@@ -41,12 +41,24 @@ gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
 max_workers_per_gpu: 1
 test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)，可用 -t 在命令行中快速开启
 
-# 领域泛化参数 (Domain Generalization - 仅在 domain_dataset 非空时生效)
+# 领域与半监督参数
+# ── 组合模式 ──────────────────────────────────────────────
+#  传统 FL:        domain_partition=~, label_ratio=1.0
+#  通用半监督:     domain_partition=~, label_ratio=0.x, lam=x
+#  DG:             domain_partition=domain_*, label_ratio=1.0
+#  DG+通用半监督:  domain_partition=domain_*, label_ratio=0.x, lam=x
+#  DG+域掩半监督:  domain_partition=domain_*, unlabeled_domain=X, lam=x
+#  DG+两者叠加:    domain_partition=domain_*, unlabeled_domain=X, label_ratio=0.x
+#  留一域评估:     domain_partition=domain_*, target_domain=X, label_ratio=1.0
+# ──────────────────────────────────────────────────────────
 domain_dataset: ~          # 领域数据集名: pacs / officehome / vlcs / domainnet / cifar10_dg
-domain_partition: ~        # domain_as_client / domain_mixed
+domain_partition: ~        # ~ / domain_as_client / domain_mixed_aware / domain_mixed_blind
 domain_aware: true         # domain_mixed 时是否按领域感知 Dirichlet 分配
-selected_domains: ~  # list[str]，仅使用指定领域；None=全用
-target_domain: ~           # str，留作目标域测试（leave-one-domain-out）
+selected_domains: ~        # list[str]，仅使用指定域；None=全用。与 target_domain 互斥。
+target_domain: ~           # str，从训练集剥离作为目标域（leave-one-domain-out），与 selected_domains 互斥。
+unlabeled_domain: ~        # str，将该域的标签全部掩掉以构造半监督场景。仅 domain_partition 非空时生效。
+label_ratio: 1.0           # float (0~1]，通用半监督中有标签样本比例。1.0 = 全监督。
+lam: 1.0                   # float，无监督损失权重系数。0 = 退化为纯监督。
 
 # 去中心化网络拓扑 (Network Topology)
 # ring, complete, random, small_world, scale_free, star

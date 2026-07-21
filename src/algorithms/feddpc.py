@@ -109,7 +109,7 @@ def train(params):
     )
 
     for _ in range(head_epochs):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
 
             # 1. 本地数据交叉熵损失
@@ -147,7 +147,7 @@ def train(params):
         total_loss_proto = 0.0
         num_batches_body = 0
         for _ in range(body_epochs):
-            for x, y in loader:
+            for x, y, *_ in loader:
                 x, y = x.to(device), y.to(device)
                 features = model.extractor(x)
 

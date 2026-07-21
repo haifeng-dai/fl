@@ -163,14 +163,13 @@ def _apply_ablation(configs, ablation_str):
 
 def get_pre_name(args):
     """设置并创建实验所需的保存路径和日志路径"""
-    domain_dataset = getattr(args, 'domain_dataset', None)
+    domain_partition = getattr(args, 'domain_partition', None)
     target_domain = getattr(args, 'target_domain', None)
 
-    if domain_dataset is not None:
-        domain_partition = getattr(args, 'domain_partition', '')
+    if domain_partition is not None:
         fold_path = os.path.join(
             f"{args.algo}",
-            f"dg_{domain_dataset}_{args.model}_{domain_partition}_{args.num_clients}",
+            f"dg_{args.dataset}_{args.model}_{domain_partition}_{args.num_clients}",
         )
         if target_domain is not None:
             fold_path += f"_target_{target_domain}"

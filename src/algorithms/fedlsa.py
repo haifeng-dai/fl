@@ -132,7 +132,7 @@ def train(params):
 
     # 2. 训练循环 (伪代码 L3-L11)
     for _ in range(epochs):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
 
             # L4: h = nor(φ(ψ(x)))，extractor 的 hook 已自动完成 L2 归一化

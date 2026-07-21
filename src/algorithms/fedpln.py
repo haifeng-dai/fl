@@ -122,7 +122,7 @@ def train(params):
     with torch.no_grad():
         protos = pln(all_classes)
     for _ in range(epochs):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             feature = model.extractor(x)
             output = model.classifier(feature)

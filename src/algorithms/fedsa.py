@@ -83,7 +83,7 @@ def train(params):
 
     # 2. 训练循环
     for _ in range(epochs):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             features = model.extractor(x)
             logits = model.classifier(features)

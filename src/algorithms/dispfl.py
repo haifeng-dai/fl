@@ -90,7 +90,7 @@ def train(params):
     num_batches = 0
 
     for _ in range(epochs):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
 

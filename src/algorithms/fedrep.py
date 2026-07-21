@@ -49,7 +49,7 @@ def train(params):
     for param in model.classifier.parameters():
         param.requires_grad = True
     for _ in range(epochs_head):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
             loss = ce_loss(logits, y)
@@ -65,7 +65,7 @@ def train(params):
     total_loss = 0.0
     num_batches = 0
     for _ in range(epochs):
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
             loss = ce_loss(logits, y)

@@ -82,7 +82,7 @@ def train(params):
     num_batches = 0
 
     # 强制执行 1 个 epoch 以适配 Algorithm 3 的 Inter-Epoch 交换
-    for x, y in loader:
+    for x, y, *_ in loader:
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
 

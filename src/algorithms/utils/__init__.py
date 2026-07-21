@@ -67,7 +67,7 @@ def extract_prototypes(
     proto_count = torch.zeros(num_classes, device=device)
 
     with torch.no_grad():
-        for x, y in loader:
+        for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             features = model.extractor(x)
             proto_sum.index_add_(0, y, features)
