@@ -5,12 +5,9 @@ import numpy as np
 import torch
 
 
-def get_domain_partition_dir(domain_partition, num_clients, alpha=0.5, domain_aware=True):
+def get_domain_partition_dir(domain_partition, num_clients, alpha=0.5):
     if domain_partition == "domain_as_client":
         return f"domain_as_client_n{num_clients}"
-    elif domain_partition == "domain_mixed":
-        aware_str = "aware" if domain_aware else "blind"
-        return f"domain_mixed_{aware_str}_n{num_clients}_a{alpha}"
     elif domain_partition == "domain_mixed_aware":
         return f"domain_mixed_aware_n{num_clients}_a{alpha}"
     elif domain_partition == "domain_mixed_blind":
@@ -99,7 +96,6 @@ def domain_dirichlet_partition(
 
 def prepare_domain_data(args, dataset_name, raw_data):
     partition_method = args.domain_partition
-    domain_aware = getattr(args, "domain_aware", True)
     selected_domains = getattr(args, "selected_domains", None)
     target_domain = getattr(args, "target_domain", None)
     num_clients = args.num_clients
@@ -131,14 +127,7 @@ def prepare_domain_data(args, dataset_name, raw_data):
         all_domains, test_ratio
     )
 
-    if partition_method == "domain_as_client":
-        part_str = f"domain_as_client_n{num_clients}"
-    elif partition_method == "domain_mixed":
-        aware_str = "aware" if domain_aware else "blind"
-        part_str = f"domain_mixed_{aware_str}_n{num_clients}_a{args.alpha}"
-    else:
-        raise ValueError(f"未知领域分区方法: {partition_method}")
-
+    part_str = get_domain_partition_dir(partition_method, num_clients, args.alpha)
     output_dir = os.path.join("./datasets", dataset_name, part_str)
 
     if os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients:
@@ -158,10 +147,16 @@ def prepare_domain_data(args, dataset_name, raw_data):
         cli_tr, cli_te = domain_as_client_partition(
             tr_idx_by_domain, te_idx_by_domain, num_clients
         )
-    elif partition_method == "domain_mixed":
+    elif partition_method == "domain_mixed_aware":
         cli_tr, cli_te = domain_dirichlet_partition(
-            tr_idx_by_domain, te_idx_by_domain, num_clients, args.alpha, domain_aware
+            tr_idx_by_domain, te_idx_by_domain, num_clients, args.alpha, domain_aware=True
         )
+    elif partition_method == "domain_mixed_blind":
+        cli_tr, cli_te = domain_dirichlet_partition(
+            tr_idx_by_domain, te_idx_by_domain, num_clients, args.alpha, domain_aware=False
+        )
+    else:
+        raise ValueError(f"未知领域分区方法: {partition_method}")
 
     for i in range(num_clients):
         train_idx = cli_tr[i]

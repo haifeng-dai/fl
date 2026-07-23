@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -84,20 +83,17 @@ class Server(BaseServer):
         super().__init__(False, args)
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         print(f"FedProx with mu={self.args.mu}")
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedProx Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
+            p = self.build_base_params(selected)
             for params in p:
                 params.append(self.args.mu)
             results = self.run_clients(train, p)
@@ -110,7 +106,7 @@ class Server(BaseServer):
                 total_loss += res["loss"]
                 selected_states.append(res["state"])
                 current_weights.append(self.weights[cid])
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 

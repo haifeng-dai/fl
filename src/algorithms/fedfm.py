@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -98,21 +97,18 @@ class Server(BaseServer):
         self.global_anchors = torch.zeros((self.num_class, self.args.feature_dim))
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedFM Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
             # ========== 阶段一：下发全局模型 + 全局锚点，执行本地训练 ==========
-            p_train = self.build_base_params(selected_clients)
-            for params, i in zip(p_train, selected_clients):
+            p_train = self.build_base_params(selected)
+            for params in p_train:
                 params.append(self.args.mu)
                 params.append(self.num_class)
                 params.append("train")
@@ -125,17 +121,17 @@ class Server(BaseServer):
             for _, res in results_train.items():
                 total_loss += res["loss"]
                 selected_states.append(res["state"])
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
             # 聚合模型参数
-            weights = [self.weights[i] for i in selected_clients]
+            weights = [self.weights[i] for i in selected]
             sum_w = sum(weights)
             weights = [w / sum_w for w in weights]
             self.aggregate(selected_states, weights=weights)
 
             # ========== 阶段二：下发聚合后的全局模型，提取对齐锚点 ==========
             global_state = self.model.state_dict()
-            p_extract = self.build_base_params(selected_clients)
-            for params, i in zip(p_extract, selected_clients):
+            p_extract = self.build_base_params(selected)
+            for params in p_extract:
                 params[2] = global_state
                 params.append(self.args.mu)
                 params.append(self.num_class)

@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -65,40 +64,25 @@ class Server(BaseServer):
         super().__init__(True, args)
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- Local Training Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
+                params[2] = self.clients_state[i]
             results = self.run_clients(train, p)
 
             total_loss = 0.0
             for cid, res in results.items():
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
 
             self.evaluate()
             print(

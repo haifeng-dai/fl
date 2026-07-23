@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -69,33 +68,16 @@ class Server(BaseServer):
 
     def fit(self):
         """运行 FedAvg 训练流程"""
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedAvg Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = sorted(torch.randperm(self.num_clients)[:num_join].tolist())
+            print(f"Selected clients: {selected}")
 
-            p = [
-                [
-                    i,
-                    self.client_gpu[i],
-                    self.model.state_dict(),
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.feature_dim,
-                ]
-                for i in selected_clients
-            ]
+            p = self.build_base_params(selected)
             results = self.run_clients(train, p)
 
             # 汇集各客户端的回传结果，计算总损失与聚合权重分布
@@ -106,7 +88,7 @@ class Server(BaseServer):
                 total_loss += res["loss"]
                 selected_states.append(res["state"])
                 current_weights.append(self.weights[cid])
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 

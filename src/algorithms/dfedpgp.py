@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -212,21 +211,18 @@ class Server(BaseServer):
 
     def fit(self):
         """主训练循环"""
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- DFedPGP Round {r + 1}/{self.rounds} ---")
 
             # 1. 随机选择参与的客户端
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = self.client_body[i]
                 params[6] = self.lr_u
                 params[8] = self.local_u_epochs
@@ -247,7 +243,7 @@ class Server(BaseServer):
                 self.client_body[cid] = res["body"]
                 self.client_head[cid] = res["head"]
 
-            self.loss.append(total_loss / len(selected_clients))
+            self.loss.append(total_loss / len(selected))
 
             # 5. 执行去中心化聚合（Gossip/Push-Sum）
             self.aggregate()

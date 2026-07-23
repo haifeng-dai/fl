@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -166,24 +165,21 @@ class Server(BaseServer):
 
     def fit(self):
         """主训练循环：实现 Algorithm 3 的 Inter-Epoch Prototype Exchange"""
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- PearFL Round {r + 1}/{self.rounds} ---")
 
             # 1. 随机选择参与的客户端
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
             # 2. 嵌套循环：执行 E 个本地 Epoch，并在每个 Epoch 结束后交换原型
             round_loss = 0.0
             for e in range(self.args.epochs):
-                p = self.build_base_params(selected_clients)
-                for params, i in zip(p, selected_clients):
+                p = self.build_base_params(selected)
+                for params, i in zip(p, selected):
                     params[2] = self.clients_state[i]
                     params.append(self.num_class)
                     params.append(self.args.momentum)
@@ -202,7 +198,7 @@ class Server(BaseServer):
                     self.local_protos_pool[cid] = res["protos"].to(self.device)
                     self.local_counts_pool[cid] = res["counts"].to(self.device)
 
-                epoch_loss /= len(selected_clients)
+                epoch_loss /= len(selected)
                 if (
                     e == self.args.epochs - 1
                 ):  # 记录最后一个 epoch 的 loss 作为 round loss

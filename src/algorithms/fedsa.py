@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -145,8 +144,7 @@ class Server(BaseServer):
         ]
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         print(f"FedSA Training with alpha_sa={self.args.alpha_sa} (EMA factor)")
 
@@ -154,13 +152,11 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- FedSA Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
                 params.append(self.clients_anchors[i])
                 params.append(self.anchors)
@@ -185,7 +181,7 @@ class Server(BaseServer):
                 # 更新服务端缓存的客户端锚点，用于下一轮的边界 (margin) 计算
                 self.clients_anchors[cid] = res["protos"].detach().clone()
 
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
             norm_weights = [w / sum(current_weights) for w in current_weights]
 
             # 1. 聚合全局模型（用于提供基础的特征表达能力）

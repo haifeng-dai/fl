@@ -8,8 +8,8 @@ from torch.utils.data import DataLoader, Subset
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
+    fmt_num,
     get_model,
 )
 
@@ -262,26 +262,23 @@ class Server(BaseServer):
 
     def fit(self):
         """运行 FedALA 训练流程"""
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedALA Round {r + 1}/{self.rounds} ---")
 
             # 选择本轮参与的客户端
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
             # 为并行执行准备参数配置
             global_model_state_cpu = {
                 k: v.cpu() for k, v in self.model.state_dict().items()
             }
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = global_model_state_cpu
                 params.append(self.clients_state[i])
                 params.append(self.clients_weights[i])
@@ -303,7 +300,7 @@ class Server(BaseServer):
                 self.clients_weights[cid] = res["weights"]
                 selected_states.append(res["state"])
                 current_weights.append(self.weights[cid])
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
@@ -317,5 +314,8 @@ class Server(BaseServer):
 
     def save(self):
         metrics = {"acc": self.acc, "loss": self.loss}
-        params = {"client": self.clients_state, "aux": {"clients_weights": self.clients_weights}}
+        params = {
+            "client": self.clients_state,
+            "aux": {"clients_weights": self.clients_weights},
+        }
         self.deal_save(metrics, params)

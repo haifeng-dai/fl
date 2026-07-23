@@ -9,8 +9,8 @@ from torch.utils.data import DataLoader, Subset
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
+    fmt_num,
     generate_adjacency_matrix,
     get_model,
 )
@@ -239,22 +239,19 @@ class Server(BaseServer):
 
     def fit(self):
         """主训练流程：执行 L2C 的两阶段协作更新"""
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for round_idx in range(self.rounds):
             t0 = time.time()
             logger.info(f"--- L2C Round {round_idx + 1}/{self.rounds} ---")
 
             # 1. 随机选择参与的客户端
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            logger.info(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            logger.info(f"Selected clients: {selected}")
 
             # --- Phase 1：并行计算所有客户端的本地 Delta ---
-            payloads_p1 = self.build_base_params(selected_clients)
-            for params, cid in zip(payloads_p1, selected_clients):
+            payloads_p1 = self.build_base_params(selected)
+            for params, cid in zip(payloads_p1, selected):
                 params[2] = self.clients_state[cid]
                 params.append(self.args.val_ratio)
 
@@ -272,12 +269,12 @@ class Server(BaseServer):
                 cid_to_theta_t[cid] = res["state_t"]
                 cid_to_indices[cid] = {"train": res["train_idx"], "val": res["val_idx"]}
 
-            self.loss.append(total_loss / len(selected_clients))
+            self.loss.append(total_loss / len(selected))
 
             # --- Phase 2：分发邻居 Delta 并执行元更新与最终聚合 ---
-            p2_base = self.build_base_params(selected_clients)
+            p2_base = self.build_base_params(selected)
             payloads_p2 = []
-            for params, i in zip(p2_base, selected_clients):
+            for params, i in zip(p2_base, selected):
                 # 获取节点 i 的协作邻居
                 neighbors = torch.where(self.A[i] > 0)[0].tolist()
                 neighbors.sort()
@@ -382,7 +379,9 @@ class Server(BaseServer):
         params = {
             "client": self.clients_state,
             "aux": {
-                "topology": self.A.cpu() if isinstance(self.A, torch.Tensor) else self.A,
+                "topology": self.A.cpu()
+                if isinstance(self.A, torch.Tensor)
+                else self.A,
                 "alphas": self.alphas,
             },
         }

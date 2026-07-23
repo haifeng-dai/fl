@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -83,20 +82,18 @@ class Server(BaseServer):
         ]
 
     def fit(self):
-        num_join_clients = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- LG-FedAvg Round {r + 1}/{self.rounds} ---")
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
 
             # 获取当前的全局共享分类头 (Head)
             global_head_state = self.model.classifier.state_dict()
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
                 params.append(global_head_state)
             results = self.run_clients(train, p)
@@ -111,7 +108,7 @@ class Server(BaseServer):
                 new_heads.append(res["head"])
                 current_weights.append(self.weights[cid])
 
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
             norm_weights = [w / sum(current_weights) for w in current_weights]
 
             # 仅聚合分类头模块的过程

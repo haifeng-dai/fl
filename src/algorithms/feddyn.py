@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
@@ -103,8 +102,7 @@ class Server(BaseServer):
         }
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         # 用于下一轮次训练的全局模型向量
         global_model_vector = (
@@ -115,13 +113,11 @@ class Server(BaseServer):
             t0 = time.time()
             print(f"\n--- FedDyn Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params.append(self.local_grads[i])
                 params.append(global_model_vector)
                 params.append(self.args.alpha_coef)
@@ -142,15 +138,15 @@ class Server(BaseServer):
                 # nabla L_k(w^{t+1}) 约等于 nabla L_k(w^t) - alpha * (w^{t+1} - w^t)
                 model_diff = client_flat - global_model_vector
                 self.local_grads[cid] -= self.args.alpha_coef * model_diff
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
 
             # 1. 计算所有客户端模型的平均值
-            avg_model_params = sum_model_params / num_join_clients
+            avg_model_params = sum_model_params / num_join
 
             # 2. 更新全局历史梯度 h
             # 理论公式: h_{t+1} = h_t - \alpha * \frac{|P_t|}{N} * (w_{avg} - w_t)
-            # 在非全量客户端参与时，必须乘以参与比例 (num_join_clients / num_clients) 防止更新过激导致散度爆炸
-            scale_factor = num_join_clients / self.num_clients
+            # 在非全量客户端参与时，必须乘以参与比例 (num_join / num_clients) 防止更新过激导致散度爆炸
+            scale_factor = num_join / self.num_clients
             self.h -= (
                 self.args.alpha_coef
                 * scale_factor

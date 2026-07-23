@@ -128,6 +128,18 @@ def pathological_partition(
     )
 
 
+def get_partition_path(dataset_name, partition, num_clients, alpha=0.5, n_classes=2):
+    if partition == "iid":
+        part_str = f"iid_n{num_clients}"
+    elif partition == "dirichlet":
+        part_str = f"dirichlet_n{num_clients}_a{alpha}"
+    elif partition == "pathological":
+        part_str = f"pathological_n{num_clients}_c{n_classes}"
+    else:
+        raise ValueError(f"Unknown partition method: {partition}")
+    return os.path.join("./datasets", dataset_name, part_str)
+
+
 def prepare_label_data(args, dataset_name, raw_data):
     partition_method = args.partition
     num_clients = args.num_clients
@@ -144,16 +156,8 @@ def prepare_label_data(args, dataset_name, raw_data):
             f"{num_clients} clients, setting n_class={args.n_class}"
         )
 
-    if partition_method == "iid":
-        part_str = f"iid_n{num_clients}"
-    elif partition_method == "dirichlet":
-        part_str = f"dirichlet_n{num_clients}_a{args.alpha}"
-    elif partition_method == "pathological":
-        part_str = f"pathological_n{num_clients}_c{args.n_class}"
-    else:
-        raise ValueError(f"未知分区方法: {partition_method}")
-
-    output_dir = os.path.join("./datasets", dataset_name, part_str)
+    output_dir = get_partition_path(dataset_name, partition_method, num_clients, args.alpha, args.n_class)
+    part_str = os.path.basename(output_dir)
 
     if os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients:
         print(f"-> {part_str} partition for {dataset_name} already exists. Skipping.")

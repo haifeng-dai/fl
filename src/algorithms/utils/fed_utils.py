@@ -42,8 +42,8 @@ def evaluate(
 
 class BaseServer:
     def __init__(self, pfl: bool, args):
-        self.model = get_model(args.model, args.dataset, args.feature_dim).cpu()
         self.args = args
+        self.model = get_model(args.model, args.dataset, args.feature_dim).cpu()
         self.rounds: int = args.rounds
 
         # 自适应 Round 调整逻辑
@@ -62,48 +62,27 @@ class BaseServer:
         self.acc_target: list[float] = []
         self.loss: list[float] = []
 
-        # 领域数据分支
-        self.domain_dataset = getattr(args, "domain_dataset", None)
-        self.effective_dataset = (
-            self.domain_dataset if self.domain_dataset is not None else args.dataset
-        )
+        self.is_domain = args.domain_partition is not None
         self.source_test = None
         self.target_test = None
 
-        if self.domain_dataset is not None:
-            (
-                self.train_sets,
-                self.test_set,
-                train_counts,
-                self.num_class,
-                self.source_test,
-                self.target_test,
-                self.domain_labels,
-            ) = load_data(
-                dataset_name=self.domain_dataset,
-                domain_partition=args.domain_partition,
-                num_clients=args.num_clients,
-                alpha=args.alpha,
-                pfl=self.pfl,
-                domain_aware=getattr(args, "domain_aware", True),
-            )
-        else:
-            (
-                self.train_sets,
-                self.test_set,
-                train_counts,
-                self.num_class,
-                _,
-                _,
-                _,
-            ) = load_data(
-                dataset_name=args.dataset,
-                partition=args.partition,
-                num_clients=args.num_clients,
-                alpha=args.alpha,
-                n_classes=args.n_class,
-                pfl=self.pfl,
-            )
+        (
+            self.train_sets,
+            self.test_set,
+            train_counts,
+            self.num_class,
+            self.source_test,
+            self.target_test,
+            self.domain_labels,
+        ) = load_data(
+            dataset_name=args.dataset,
+            partition=args.partition,
+            num_clients=args.num_clients,
+            alpha=args.alpha,
+            n_classes=args.n_class,
+            pfl=self.pfl,
+            domain_partition=args.domain_partition if self.is_domain else None,
+        )
         self.train_set_refs = [ray.put(ds) for ds in self.train_sets.values()]
 
         total_samples = sum(train_counts.values())
@@ -140,7 +119,7 @@ class BaseServer:
             self.test_set_refs = [global_test_ref for _ in range(self.num_clients)]
 
         # 4. 领域模式缓存源域/目标域测试集
-        if self.domain_dataset is not None:
+        if self.is_domain:
             self.source_test_ref = (
                 ray.put(self.source_test) if self.source_test is not None else None
             )
@@ -157,7 +136,7 @@ class BaseServer:
         self.model.load_state_dict(aggregated_state)
 
     def evaluate(self, model_states=None, protos=None):
-        if self.domain_dataset is not None:
+        if self.is_domain:
             # 领域模式：分别评估源域和目标域准确率
             if self.source_test is not None:
                 acc_src = evaluate_model(self.model, self.source_test, self.device)
@@ -220,7 +199,7 @@ class BaseServer:
                 self.model.state_dict(),
                 self.train_sets[i],
                 self.args.model,
-                self.effective_dataset,
+                self.args.dataset,
                 self.args.lr,
                 self.args.batch_size,
                 self.args.epochs,

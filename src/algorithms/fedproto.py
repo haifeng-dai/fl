@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -91,20 +90,17 @@ class Server(BaseServer):
         self.global_protos = None
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedProto Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
                 params.append(self.num_class)
                 params.append(self.args.mu)
@@ -119,7 +115,7 @@ class Server(BaseServer):
                 self.clients_state[cid] = res["state"]
                 selected_protos.append(res["protos"])
                 selected_counts.append(res["counts"])
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
 
             # 聚合原型向量：按样本计数加权
             self.global_protos = proto_aggregate(

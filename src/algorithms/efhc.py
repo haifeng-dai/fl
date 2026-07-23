@@ -185,20 +185,17 @@ class Server(BaseServer):
         return triggered_ids
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             lr = self.lr_schedule(r)
             print(f"\n--- EF-HC Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
                 params[6] = lr
                 params.append(self.hat_states[i])
@@ -228,7 +225,7 @@ class Server(BaseServer):
             n_triggered = len(triggered_ids)
 
             print(
-                f"Event Triggered: {n_triggered}/{len(selected_clients)} "
+                f"Event Triggered: {n_triggered}/{len(selected)} "
                 f"clients (IDs: {triggered_ids})"
             )
 

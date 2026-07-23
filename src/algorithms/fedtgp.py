@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -154,20 +153,17 @@ class Server(BaseServer):
         self.loss_proto = []
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedTGP Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
                 params.append(self.args.lamda_)
                 params.append(self.global_protos.cpu() if self.global_protos is not None else None)
@@ -187,8 +183,8 @@ class Server(BaseServer):
                 selected_protos.append(res["protos"])
                 selected_counts.append(res["counts"])
 
-            self.loss.append(total_loss_ce / num_join_clients)
-            self.loss_proto.append(total_loss_proto / num_join_clients)
+            self.loss.append(total_loss_ce / num_join)
+            self.loss_proto.append(total_loss_proto / num_join)
 
             uploaded_protos = []
             for p_tensor in selected_protos:

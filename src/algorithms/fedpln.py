@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -200,20 +199,17 @@ class Server(BaseServer):
         self.loss_p: list[float] = []
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedPLN Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
-            for params, _ in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params in p:
                 params.append(self.pln.state_dict())
                 params.append(self.num_class)
                 params.append(self.args.lambda_)
@@ -240,8 +236,8 @@ class Server(BaseServer):
                 selected_states.append(res["state"])
                 selected_plns.append(res["pln_state"])
                 current_weights.append(self.weights[cid])
-            self.loss.append(total_loss_model / num_join_clients)
-            self.loss_p.append(total_loss_pln / num_join_clients)
+            self.loss.append(total_loss_model / num_join)
+            self.loss_p.append(total_loss_pln / num_join)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 

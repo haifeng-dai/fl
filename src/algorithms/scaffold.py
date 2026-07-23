@@ -1,14 +1,13 @@
 import os
 import time
 
-import numpy as np
 import torch
 import torch.optim as optim
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
+    fmt_num,
     get_model,
     param_aggregate,
 )
@@ -132,20 +131,17 @@ class Server(BaseServer):
         ]
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- SCAFFOLD Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params.append(self.c_global)
                 params.append(self.c_local[i])
             results = self.run_clients(train, p)
@@ -165,7 +161,7 @@ class Server(BaseServer):
                     total_delta_c[n] += res["delta_c"][n]
                 # 更新存储在服务端的各个客户端的本地控制变量
                 self.c_local[cid] = res["local_c"]
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
 
             # 聚合模型参数
             # 取所有参与者本地模型的平均数作为聚合策略 (SCAFFOLD 要求统一权重)

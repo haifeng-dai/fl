@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -132,17 +131,14 @@ class Server(BaseServer):
         self.adj_matrix = A / A.sum(dim=1, keepdim=True)
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- ProxyFL Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
             # 预计算所有客户端的聚合代理状态（GPU 矩阵乘法）
             proxy_list = [self.client_states_p[i] for i in range(self.num_clients)]
@@ -150,8 +146,8 @@ class Server(BaseServer):
                 proxy_list, self.adj_matrix, self.device
             )
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = agg_proxy_list[i]
                 params.append(self.clients_state[i])
                 params.append(self.args.mu)
@@ -165,8 +161,8 @@ class Server(BaseServer):
                 total_loss_p += res["loss_proxy"]
                 self.clients_state[cid] = res["state"]
                 self.client_states_p[cid] = res["state_proxy"]
-            self.loss.append(total_loss / num_join_clients)
-            self.loss_p.append(total_loss_p / num_join_clients)
+            self.loss.append(total_loss / num_join)
+            self.loss_p.append(total_loss_p / num_join)
 
             # 4. 执行预测评估 (基于最新状态的本地个性化模型)
             self.evaluate()

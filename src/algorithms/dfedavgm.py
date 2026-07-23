@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -118,35 +117,20 @@ class Server(BaseServer):
         self.clients_state = {i: new_state_list[i] for i in range(self.num_clients)}
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- DFedAvgM Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
             # 1. 为每个选中的客户端准备参数
-            def get_client_param(i):
-                return [
-                    i,
-                    self.client_gpu[i],
-                    self.clients_state[i],
-                    self.train_sets[i],
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.lr,
-                    self.args.batch_size,
-                    self.args.epochs,
-                    self.args.feature_dim,
-                    self.opt_states[i],  # 新增：发送历史动量
-                ]
-
-            p = [get_client_param(i) for i in selected_clients]
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
+                params[2] = self.clients_state[i]
+                params.append(self.opt_states[i])
             # 2. 启动客户端多进程并行训练
             results = self.run_clients(train, p)
 
@@ -156,7 +140,7 @@ class Server(BaseServer):
                 total_loss += res["loss"]
                 self.clients_state[cid] = res["state"]
                 self.opt_states[cid] = res["opt_state"]  # 保存最新动量
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
 
             # 4. 执行分布式聚合
             self.aggregate_mh()

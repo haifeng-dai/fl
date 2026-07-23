@@ -2,7 +2,7 @@ import os
 
 import torch
 
-from src.data_gen import get_domain_partition_dir
+from src.data_gen import get_domain_partition_dir, get_partition_path
 
 
 class MetaDataset(torch.utils.data.Dataset):
@@ -13,40 +13,42 @@ class MetaDataset(torch.utils.data.Dataset):
         self.is_labeled = is_labeled
 
         if domains is not None:
+            # domains = ["sketch", "photo", "sketch", "photo", "cartoon"]
             uniq = sorted(set(domains))
-            self._domain_ids = torch.tensor(
-                [{d: i for i, d in enumerate(uniq)}[d] for d in domains],
+            # uniq = ["cartoon", "photo", "sketch"]
+            self.domain_map = {d: i for i, d in enumerate(uniq)}
+            # domain_map = {"cartoon": 0, "photo": 1, "sketch": 2}
+            #             ↑ 字符串域 → 整数 ID 的查表
+            self.domain_ids = torch.tensor(
+                [self.domain_map[d] for d in domains],
                 dtype=torch.long,
             )
-            self._domain_map = {d: i for i, d in enumerate(uniq)}
+            # domain_ids = tensor([2, 1, 2, 1, 0])
+            #             ↑ 每个样本对应的整数域 ID，可被 DataLoader batch、做 ==/!= 比较
         else:
-            self._domain_ids = None
-            self._domain_map = None
+            self.domain_ids = None
+            self.domain_map = None
 
     def __len__(self):
         return len(self.x)
 
     def __getitem__(self, idx):
+        domain_id = (
+            self.domain_ids[idx]
+            if self.domain_ids is not None
+            else torch.tensor(-1, dtype=torch.long)  # 非 DG 时填充 -1
+        )  # int
+        labeled = (
+            self.is_labeled[idx]
+            if self.is_labeled is not None
+            else torch.tensor(True)  # 默认全有标签
+        )  # bool
         return (
             self.x[idx],
             self.y[idx],
-            self._domain_ids[idx]
-            if self._domain_ids is not None
-            else torch.tensor(-1, dtype=torch.long),
-            self.is_labeled[idx] if self.is_labeled is not None else torch.tensor(True),
-        )
-
-
-def get_partition_path(dataset_name, partition, num_clients, alpha=0.5, n_classes=2):
-    if partition == "iid":
-        part_str = f"iid_n{num_clients}"
-    elif partition == "dirichlet":
-        part_str = f"dirichlet_n{num_clients}_a{alpha}"
-    elif partition == "pathological":
-        part_str = f"pathological_n{num_clients}_c{n_classes}"
-    else:
-        raise ValueError(f"Unknown partition method: {partition}")
-    return os.path.join("./datasets", dataset_name, part_str)
+            domain_id,
+            labeled,
+        )  # 样本, 标签, 域 ID, 是否有标签
 
 
 def load_data(
@@ -57,14 +59,11 @@ def load_data(
     n_classes=2,
     pfl=False,
     domain_partition=None,
-    domain_aware=True,
 ):
     is_domain = domain_partition is not None
 
     if is_domain:
-        part_str = get_domain_partition_dir(
-            domain_partition, num_clients, alpha, domain_aware=domain_aware
-        )
+        part_str = get_domain_partition_dir(domain_partition, num_clients, alpha)
         part_dir = os.path.join("./datasets", dataset_name, part_str)
     else:
         part_dir = get_partition_path(

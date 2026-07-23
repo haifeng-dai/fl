@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -95,20 +94,18 @@ class Server(BaseServer):
         ]
 
     def fit(self):
-        num_join_clients = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedRep Round {r + 1}/{self.rounds} ---")
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
 
             # 全局共享特征提取器 (Body)
             global_body_state = self.model.extractor.state_dict()
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = global_body_state
                 params.append(self.client_head_states[i])
                 params.append(self.args.epochs_head)
@@ -123,7 +120,7 @@ class Server(BaseServer):
                 self.client_head_states[cid] = res["head"]
                 current_weights.append(self.weights[cid])
 
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
             norm_weights = [w / sum(current_weights) for w in current_weights]
 
             # 仅聚合特征提取器 (Body)

@@ -290,8 +290,7 @@ class Server(BaseServer):
 
     def fit(self):
         """主训练流程"""
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -301,14 +300,12 @@ class Server(BaseServer):
             self.aggregate(round_masks=self.prev_masks)
 
             # 2. 随机选择参与的客户端
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
             # 3. 为每个选中的客户端准备参数（用聚合后的模型）
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
                 params.append(self.client_masks[i])
                 params.append(r)
@@ -325,7 +322,7 @@ class Server(BaseServer):
                 self.clients_state[cid] = res["state"]
                 self.client_masks[cid] = res["masks"]
 
-            self.loss.append(total_loss / len(selected_clients))
+            self.loss.append(total_loss / len(selected))
 
             # 6. 保存本轮掩码供下一轮聚合使用
             self.prev_masks = {

@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -88,20 +87,17 @@ class Server(BaseServer):
         self.global_protos = torch.zeros((self.num_class, self.args.feature_dim))
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedProc Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
-            for params, _ in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params in p:
                 params.append(self.global_protos)
                 params.append(1.0 - (r / self.rounds))
                 params.append(self.num_class)
@@ -116,10 +112,10 @@ class Server(BaseServer):
                 selected_states.append(res["state"])
                 all_local_protos.append(res["protos"])
                 all_local_counts.append(res["counts"])
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
 
             # 聚合模型参数
-            weights = [self.weights[i] for i in selected_clients]
+            weights = [self.weights[i] for i in selected]
             sum_w = sum(weights)
             weights = [w / sum_w for w in weights]
             self.aggregate(selected_states, weights=weights)

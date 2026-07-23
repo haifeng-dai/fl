@@ -1,7 +1,6 @@
 import os
 import time
 
-import numpy as np
 import torch
 
 from .utils import (
@@ -99,20 +98,17 @@ class Server(BaseServer):
         # 使用最初始的全局模型来初始化所有客户端作为其“上一轮状态”
 
     def fit(self):
-        num_join_clients = int(self.num_clients * self.args.join_ratio)
-        num_join_clients = max(1, num_join_clients)
+        num_join = max(1, int(self.num_clients * self.args.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- MOON Round {r + 1}/{self.rounds} ---")
 
-            selected_clients = np.random.choice(
-                self.num_clients, num_join_clients, replace=False
-            )
-            print(f"Selected clients: {selected_clients}")
+            selected = torch.randperm(self.num_clients)[:num_join].tolist()
+            print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
+            p = self.build_base_params(selected)
+            for params, i in zip(p, selected):
                 params.append(self.clients_state[i])
                 params.append(self.args.mu)
                 params.append(self.args.tau)
@@ -127,7 +123,7 @@ class Server(BaseServer):
                 selected_states.append(res["state"])
                 self.clients_state[cid] = res["state"]
                 current_weights.append(self.weights[cid])
-            self.loss.append(total_loss / num_join_clients)
+            self.loss.append(total_loss / num_join)
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
 
