@@ -110,13 +110,14 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         global_anchors,
         lambda_com,
         tau,
     ) = params
 
     # 1. 初始化模型
-    raw_model = get_model(model_name, dataset_name, feature_dim)
+    raw_model = get_model(model_name, dataset_name, num_class, feature_dim)
     model = FedLSAModel(raw_model)
     model.load_state_dict(model_state)
     model.to(device)

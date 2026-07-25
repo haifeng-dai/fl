@@ -50,7 +50,7 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
-        num_classes,
+        num_class,
         consensus_P,
         lambda_sa,
         lambda_so,
@@ -58,7 +58,7 @@ def train(params):
     ) = params
 
     # 1. 初始化模型
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
     consensus_P = consensus_P.to(device)
 
@@ -98,7 +98,7 @@ def train(params):
 
     # 4. 提取本地最新原型 (S 和 W)
     local_protos, local_counts = extract_prototypes(
-        model, loader, num_classes, feature_dim, device, return_counts=True
+        model, loader, num_class, feature_dim, device, return_counts=True
     )
     if confidence_mode == "count":
         confidence = local_counts.unsqueeze(-1).float()
@@ -185,7 +185,6 @@ class Server(BaseServer):
             p = self.build_base_params(selected_clients)
             for params, i in zip(p, selected_clients):
                 params[2] = self.clients_state[i]
-                params.append(self.num_class)
                 params.append(self.consensus_P[i])
                 params.append(self.args.lambda_sa)
                 params.append(self.args.lambda_so)

@@ -34,10 +34,11 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         global_head_state,
     ) = params
 
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
 
     # 加载子模块 (注意：字典中的键不应带前缀)
     model.extractor.load_state_dict(local_body_state)

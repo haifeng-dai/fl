@@ -29,13 +29,14 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         grad_prev,
         global_model_vector,
         alpha_coef,
     ) = params
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)

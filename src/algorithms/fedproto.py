@@ -36,7 +36,7 @@ def train(params):
         global_protos,
     ) = params
 
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_classes, feature_dim).to(device)
     model.load_state_dict(local_model_state)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
@@ -102,7 +102,6 @@ class Server(BaseServer):
             p = self.build_base_params(selected)
             for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
-                params.append(self.num_class)
                 params.append(self.args.mu)
                 params.append(self.global_protos.cpu() if self.global_protos is not None else None)
             results = self.run_clients(train, p)

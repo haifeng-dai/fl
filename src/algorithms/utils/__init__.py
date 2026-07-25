@@ -2,6 +2,7 @@ import numpy
 import torch
 
 from .aggregate import flattened_matrix_aggregate, param_aggregate, proto_aggregate
+from .augment import strong_augment, weak_augment
 from .evaluate import evaluate_model, evaluate_prototype
 from .fed_utils import BaseServer, evaluate, get_model
 from .loss import (
@@ -18,6 +19,8 @@ __all__ = [
     "flattened_matrix_aggregate",
     "param_aggregate",
     "proto_aggregate",
+    "strong_augment",
+    "weak_augment",
     "compare_model_parameters",
     "evaluate_model",
     "evaluate_prototype",

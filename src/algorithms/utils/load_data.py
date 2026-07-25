@@ -112,11 +112,11 @@ def load_data(
 
         if os.path.exists(source_test_path):
             st = torch.load(source_test_path, weights_only=False)
-            source_test = MetaDataset(st["x"], st["y"])
+            source_test = MetaDataset(st["x"], st["y"], domains=st.get("domains"))
 
         if os.path.exists(target_test_path):
             tt = torch.load(target_test_path, weights_only=False)
-            target_test = MetaDataset(tt["x"], tt["y"])
+            target_test = MetaDataset(tt["x"], tt["y"], domains=tt.get("domains"))
 
     return (
         train_datasets,

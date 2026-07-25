@@ -28,10 +28,11 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         local_head_state,
     ) = params
 
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.extractor.load_state_dict(global_body_state)
     model.classifier.load_state_dict(local_head_state)
 

@@ -36,6 +36,7 @@ class ALA:
         threshold: float = 0.1,
         num_pre_loss: int = 10,
         feature_dim: int = 512,
+        n_class: int = 10,
     ):
         self.client_id = client_id
         self.train_data = train_data
@@ -48,6 +49,7 @@ class ALA:
         self.threshold = threshold
         self.num_pre_loss = num_pre_loss
         self.feature_dim = feature_dim
+        self.n_class = n_class
         self.device = device
 
         self.weights = None  # 可学习的本地聚合权重
@@ -89,7 +91,7 @@ class ALA:
                 param.data = param_g.data.clone()
 
         # 初始化用于精炼聚合权重的辅助模型
-        model_t = get_model(self.model_name, self.dataset_name, self.feature_dim)
+        model_t = get_model(self.model_name, self.dataset_name, self.n_class, self.feature_dim)
         model_t.to(self.device)
         model_t.load_state_dict(local_model.state_dict())
         params_t = list(model_t.parameters())
@@ -123,7 +125,7 @@ class ALA:
         loss_t = []
         losses = []
         while True:
-            for x, y in rand_loader:
+            for x, y, *_ in rand_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 optimizer.zero_grad()
                 output = model_t(x)
@@ -179,6 +181,7 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         local_model_state,
         saved_weights,
         eta,
@@ -189,9 +192,9 @@ def train(params):
     ) = params
 
     # 初始化模型
-    global_model = get_model(model_name, dataset_name, feature_dim).to(device)
+    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     global_model.load_state_dict(global_model_state)
-    local_model = get_model(model_name, dataset_name, feature_dim).to(device)
+    local_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     local_model.load_state_dict(local_model_state)
 
     # 初始化 ALA 模块
@@ -208,6 +211,7 @@ def train(params):
         threshold=ala_threshold,
         num_pre_loss=num_pre_loss,
         feature_dim=feature_dim,
+        n_class=num_class,
     )
 
     # 如果存在（非首次参与），则加载先前学习到的聚合权重

@@ -28,10 +28,17 @@ def train(worker_func, params):
 
 @ray.remote
 def evaluate(
-    model_name, dataset_name, feature_dim, state_dict, test_set, device, prototype=None
+    model_name,
+    dataset_name,
+    feature_dim,
+    state_dict,
+    test_set,
+    device,
+    n_class,
+    prototype=None,
 ):
     """Ray Worker: 并行评估单个客户端的模型准确率与原型准确率。"""
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, n_class, feature_dim).to(device)
     model.load_state_dict(state_dict)
     acc = evaluate_model(model, test_set, device)
     p_acc = 0.0
@@ -43,7 +50,6 @@ def evaluate(
 class BaseServer:
     def __init__(self, pfl: bool, args):
         self.args = args
-        self.model = get_model(args.model, args.dataset, args.feature_dim).cpu()
         self.rounds: int = args.rounds
 
         # 自适应 Round 调整逻辑
@@ -89,6 +95,10 @@ class BaseServer:
         self.weights = [
             train_counts[i] / total_samples for i in range(len(train_counts))
         ]
+
+        self.model = get_model(
+            args.model, args.dataset, self.num_class, args.feature_dim
+        ).cpu()
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
         # 1. 解析 GPU 资源
@@ -183,6 +193,7 @@ class BaseServer:
                     target_states[i],
                     self.test_set_refs[i],
                     self.client_gpu[i],
+                    self.num_class,
                     client_proto,
                 )
             )
@@ -204,6 +215,7 @@ class BaseServer:
                 self.args.batch_size,
                 self.args.epochs,
                 self.args.feature_dim,
+                self.num_class,
             ]
             for i in selected_clients
         ]
@@ -258,43 +270,10 @@ class BaseServer:
         print(f"-> Params saved to: {params_path}")
 
 
-def get_model(model_name, dataset_name, feature_dim=512):
+def get_model(model_name, dataset_name, n_class, feature_dim):
     """
     模型工厂函数。
     """
-    if dataset_name == "mnist":
-        n_class = 10
-    elif dataset_name == "cifar10":
-        n_class = 10
-    elif dataset_name == "cinic10":
-        n_class = 10
-    elif dataset_name == "cifar100":
-        n_class = 100
-    elif dataset_name == "flowers102":
-        n_class = 102
-    elif dataset_name == "tiny_imagenet":
-        n_class = 200
-    elif dataset_name == "svhn":
-        n_class = 10
-    elif dataset_name == "femnist":
-        n_class = 62
-    elif dataset_name == "emnist":
-        n_class = 47
-    elif dataset_name == "har" or dataset_name == "har_feat":
-        n_class = 6
-    elif dataset_name == "pacs":
-        n_class = 7
-    elif dataset_name == "officehome":
-        n_class = 65
-    elif dataset_name == "vlcs":
-        n_class = 5
-    elif dataset_name == "domainnet":
-        n_class = 345
-    elif dataset_name == "cifar10_dg":
-        n_class = 10
-    else:
-        raise ValueError(f"Unknown dataset: {dataset_name}")
-
     input_channels = (
         3
         if (

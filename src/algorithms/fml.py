@@ -36,17 +36,18 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         local_state,
         alpha_fml,
         beta_fml,
     ) = params
 
     # 1. 初始化全局模型 (MEME)
-    global_model = get_model(model_name, dataset_name, feature_dim).to(device)
+    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     global_model.load_state_dict(global_state)
 
     # 2. 初始化本地模型 (个性化模型)
-    local_model = get_model(model_name, dataset_name, feature_dim).to(device)
+    local_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     local_model.load_state_dict(local_state)
 
     # 优化器设置

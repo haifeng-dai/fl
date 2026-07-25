@@ -68,18 +68,18 @@ def train(params):
         batch_size,
         _,
         feature_dim,
+        num_class,
         head_epochs,
         body_epochs,
         lr_head,
         lr_body,
         lamda_,
         global_protos,
-        num_class,
         lambda_p,
     ) = params
 
     # 初始化模型并加载本地持久化状态
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
     loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
@@ -225,7 +225,6 @@ class Server(BaseServer):
                 params.append(self.args.lr_body)
                 params.append(self.args.lamda_)
                 params.append(self.global_protos.cpu() if self.global_protos is not None else None)
-                params.append(self.num_class)
                 params.append(self.args.lambda_p)
             results = self.run_clients(train, p)
 

@@ -43,16 +43,17 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         local_state,
         mu,
     ) = params
 
     # 1. 初始化代理模型 (公共/共享模型)
-    proxy_model = get_model(model_name, dataset_name, feature_dim).to(device)
+    proxy_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     proxy_model.load_state_dict(proxy_state)
 
     # 2. 初始化本地模型 (私有/个性化模型)
-    local_model = get_model(model_name, dataset_name, feature_dim).to(device)
+    local_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     local_model.load_state_dict(local_state)
 
     # 优化器设置

@@ -55,7 +55,7 @@ def train(params):
     ) = params
 
     # 1. 初始化模型并加载参数
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_classes, feature_dim).to(device)
     model.load_state_dict(model_state)
     model.train()
 
@@ -181,7 +181,6 @@ class Server(BaseServer):
                 p = self.build_base_params(selected)
                 for params, i in zip(p, selected):
                     params[2] = self.clients_state[i]
-                    params.append(self.num_class)
                     params.append(self.args.momentum)
                     params.append(self.args.weight_decay)
                     params.append(self.args.lamda)

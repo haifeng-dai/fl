@@ -66,11 +66,12 @@ def train_phase1(params):
         batch_size,
         local_epochs,
         feature_dim,
+        num_class,
         val_ratio,
     ) = params
 
     # 1. 初始化模型并加载参数
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     # 保存初始状态用于计算 Delta
@@ -152,6 +153,7 @@ def train_phase2(params):
         batch_size,
         _,
         feature_dim,
+        num_class,
         theta_t,
         neighbor_deltas,
         alpha,
@@ -160,7 +162,7 @@ def train_phase2(params):
     ) = params
 
     # 1. 初始化模型
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     # 2. 准备验证集

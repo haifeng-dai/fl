@@ -32,9 +32,10 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
     ) = params
 
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)

@@ -30,13 +30,13 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         global_protos,
         alpha,
-        num_classes,
     ) = params
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
     global_protos = global_protos.data.clone().to(device)
 
@@ -70,7 +70,7 @@ def train(params):
 
     # 3. 提取本地原型及样本计数
     local_protos, local_counts = extract_prototypes(
-        model, loader, num_classes, feature_dim, device, return_counts=True
+        model, loader, num_class, feature_dim, device, return_counts=True
     )
 
     return {
@@ -100,7 +100,6 @@ class Server(BaseServer):
             for params in p:
                 params.append(self.global_protos)
                 params.append(1.0 - (r / self.rounds))
-                params.append(self.num_class)
             results = self.run_clients(train, p)
 
             total_loss = 0.0

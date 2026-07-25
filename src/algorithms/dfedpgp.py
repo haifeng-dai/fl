@@ -43,6 +43,7 @@ def train(params):
         batch_size,
         local_u_epochs,
         feature_dim,
+        num_class,
         mu,
         head_state,
         lr_v,
@@ -52,7 +53,7 @@ def train(params):
     ) = params
 
     # 1. 初始化模型并加载参数
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
 
     # 合并 body 和 head 参数以加载完整模型
     full_state = {}

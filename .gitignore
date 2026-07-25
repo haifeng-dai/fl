@@ -22,5 +22,4 @@ docs/
 uv.lock
 nohup.out
 .geminiignore
-fedtest.py
 AGENTS.md

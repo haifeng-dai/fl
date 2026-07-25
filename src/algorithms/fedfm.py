@@ -37,13 +37,13 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         mu,
-        num_classes,
         mode,
         global_anchors,
     ) = params
 
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
     loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
 
@@ -86,7 +86,7 @@ def train(params):
         return {"loss": avg_loss, "state": model_state}
     else:
         local_anchors, local_counts = extract_prototypes(
-            model, loader, num_classes, feature_dim, device, return_counts=True
+            model, loader, num_class, feature_dim, device, return_counts=True
         )
         return {"protos": local_anchors, "counts": local_counts}
 
@@ -110,7 +110,6 @@ class Server(BaseServer):
             p_train = self.build_base_params(selected)
             for params in p_train:
                 params.append(self.args.mu)
-                params.append(self.num_class)
                 params.append("train")
                 params.append(self.global_anchors)
             results_train = self.run_clients(train, p_train)
@@ -134,7 +133,6 @@ class Server(BaseServer):
             for params in p_extract:
                 params[2] = global_state
                 params.append(self.args.mu)
-                params.append(self.num_class)
                 params.append("extract")
                 params.append(None)
             results_extract = self.run_clients(train, p_extract)

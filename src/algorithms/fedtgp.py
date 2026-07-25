@@ -67,13 +67,13 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         lamda_,
         global_protos,
-        num_classes,
     ) = params
 
     # 初始化模型并加载全局状态
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     # 设置配置与优化器
@@ -118,7 +118,7 @@ def train(params):
 
     # 收集最新的本地原型及样本计数
     local_protos_avg, local_counts = extract_prototypes(
-        model, loader, num_classes, feature_dim, device, return_counts=True
+        model, loader, num_class, feature_dim, device, return_counts=True
     )
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
@@ -167,7 +167,6 @@ class Server(BaseServer):
                 params[2] = self.clients_state[i]
                 params.append(self.args.lamda_)
                 params.append(self.global_protos.cpu() if self.global_protos is not None else None)
-                params.append(self.num_class)
             results = self.run_clients(train, p)
 
             total_loss_ce = 0.0

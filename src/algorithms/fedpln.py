@@ -86,8 +86,8 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         pln_state,
-        num_classes,
         lambda_,
         epoch_pln,
         lr_pln,
@@ -101,12 +101,12 @@ def train(params):
     ) = params
 
     # 1. 初始化模型与 PLN 网络
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
-    pln = PLN(num_classes, width_pln, feature_dim, depth_pln, fixed_proto, init_emb)
+    pln = PLN(num_class, width_pln, feature_dim, depth_pln, fixed_proto, init_emb)
     pln.to(device)
     pln.load_state_dict(pln_state)
-    all_classes = torch.arange(0, num_classes).to(device)
+    all_classes = torch.arange(0, num_class).to(device)
 
     # 2. 阶段一：训练核心模型（特征提取器）
     avg_loss_m = 0.0
@@ -211,7 +211,6 @@ class Server(BaseServer):
             p = self.build_base_params(selected)
             for params in p:
                 params.append(self.pln.state_dict())
-                params.append(self.num_class)
                 params.append(self.args.lambda_)
                 params.append(self.args.epoch_pln)
                 params.append(self.args.lr_pln)

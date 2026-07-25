@@ -31,22 +31,23 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         prev_state,
         mu,
         tau,
     ) = params
 
     # 1. 初始化包含全局权重的当前本地模型
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(global_state)
 
     # 2. 初始化全局模型（冻结）用于计算对抗损失
-    global_model = get_model(model_name, dataset_name, feature_dim).to(device)
+    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     global_model.load_state_dict(global_state)
     global_model.eval()
 
     # 3. 初始化上一轮本地模型（冻结）用于计算对抗损失
-    prev_model = get_model(model_name, dataset_name, feature_dim).to(device)
+    prev_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     prev_model.load_state_dict(prev_state)
     prev_model.eval()
 

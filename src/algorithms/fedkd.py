@@ -122,6 +122,7 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         prev_local_state,
         wh_state,
         lr_g,
@@ -130,9 +131,9 @@ def train(params):
 
     # 1. 初始化模型
     # 本地个性化专家模型 (Student)
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     # 全局代理模型 (从压缩的 SVD 参数重建)
-    model_g = get_model(model_name, dataset_name, feature_dim).to(device)
+    model_g = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
 
     with torch.no_grad():
         # A. 从 SVD 参数中重建并加载全局代理模型参数

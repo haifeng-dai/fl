@@ -42,11 +42,12 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         optimizer_state,  # 新增：接收动量状态
     ) = params
 
     # 1. 初始化模型并加载最新的全局模型参数
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     # 2. 设置优化器与数据加载器

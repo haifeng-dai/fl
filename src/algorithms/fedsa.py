@@ -55,16 +55,16 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         prev_local_anchors,
         global_anchors,
         lambda_r,
         lambda_mcl,
         lambda_cc,
-        num_classes,
     ) = params
 
     # 1. 初始化模型
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
@@ -101,7 +101,7 @@ def train(params):
             loss_mcl = dist_contrastive_loss(features, global_anchors, y, margin=d_star)
 
             # 公式 (8): 分类器校准损失
-            loss_cc = ce_loss(output_cc, torch.arange(num_classes, device=device))
+            loss_cc = ce_loss(output_cc, torch.arange(num_class, device=device))
 
             # 公式 (9): 总体损失
             loss = (
@@ -118,7 +118,7 @@ def train(params):
 
     # 3. 计算最新的本地原型及样本计数
     local_anchors, local_counts = extract_prototypes(
-        model, loader, num_classes, feature_dim, device, return_counts=True
+        model, loader, num_class, feature_dim, device, return_counts=True
     )
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
@@ -163,7 +163,6 @@ class Server(BaseServer):
                 params.append(self.args.lambda_r)
                 params.append(self.args.lambda_mcl)
                 params.append(self.args.lambda_cc)
-                params.append(self.num_class)
             results = self.run_clients(train, p)
 
             total_loss = 0.0

@@ -44,12 +44,13 @@ def train(params):
         batch_size,
         epochs,
         feature_dim,
+        num_class,
         c_global_state,
         c_local_state,
     ) = params
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(model_name, dataset_name, feature_dim).to(device)
+    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
     model.load_state_dict(model_state)
 
     # 2. 准备控制变量 (Control Variates)
