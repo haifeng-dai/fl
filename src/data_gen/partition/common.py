@@ -91,40 +91,84 @@ def per_domain_train_test_split(all_domains, test_ratio):
     return domain_train_indices, domain_test_indices
 
 
+def _distribute_by_class(
+    indices_by_class, num_clients, partition, alpha=0.5, n_classes_per_client=2
+):
+    """按类分组的索引列表，以 partition 策略分布到 num_clients 个客户端。
+
+    这是 dirichlet / iid / pathological 三类异质分布的【唯一实现】，供类别划分
+    （label.py 的 prepare_label_data）与域内核质（hetero_split）共用，
+    消除两者之间的逻辑重复。
+
+    indices_by_class: list[np.ndarray]，按类索引（顺序无关）。
+    返回 client_idx: list[list[np.ndarray]]，client_idx[i] 为客户端 i 拿到的各分片，
+        调用方负责用 np.concatenate 拼成最终索引。
+    """
+    if partition not in ("iid", "dirichlet", "pathological"):
+        raise ValueError(f"未知分区方法: {partition}")
+
+    num_classes = len(indices_by_class)
+    client_idx = [[] for _ in range(num_clients)]
+
+    if partition == "pathological":
+        total_slots = num_clients * n_classes_per_client
+        if total_slots < num_classes:
+            raise ValueError(
+                f"[Pathological Partition Error] 总需求分片数 ({total_slots}) "
+                f"小于类别总数 ({num_classes})。"
+            )
+        shards_per_class_list = [total_slots // num_classes] * num_classes
+        remainder = total_slots % num_classes
+        for i in range(remainder):
+            shards_per_class_list[i] += 1
+
+        shards = []
+        for k in range(num_classes):
+            c_idx = indices_by_class[k]
+            if len(c_idx) == 0:
+                # 空类按槽位数补空分片，保持总数 = total_slots（索引对齐）
+                shards.extend([np.array([], dtype=int)] * shards_per_class_list[k])
+                continue
+            if len(c_idx) < shards_per_class_list[k]:
+                raise ValueError(
+                    f"[Pathological Partition Error] 类别 {k} 样本量不足以切分为 "
+                    f"{shards_per_class_list[k]} 个分片。"
+                )
+            shards.extend(np.array_split(c_idx, shards_per_class_list[k]))
+
+        np.random.shuffle(shards)  # 跨类全局打乱
+        for i in range(num_clients):
+            for j in range(n_classes_per_client):
+                client_idx[i].append(shards[i * n_classes_per_client + j])
+        return client_idx
+
+    # dirichlet / iid：逐类独立分布
+    for c_idx in indices_by_class:
+        if partition == "iid":
+            splits = np.array_split(c_idx, num_clients)
+        else:  # dirichlet
+            props = np.random.dirichlet([alpha] * num_clients)
+            counts = (np.cumsum(props) * len(c_idx)).astype(int)[:-1]
+            splits = np.split(c_idx, counts)
+        for i in range(num_clients):
+            client_idx[i].append(splits[i])
+    return client_idx
+
+
 def hetero_split(idx, n_clients, partition, alpha, Y, n_classes_per_client=2):
-    """域内核质：在 idx 所代表的单个域内，按类别做 dirichlet/iid/pathological 异质切分。"""
+    """域内核质：在 idx 所代表的单个域内，按类别做 dirichlet/iid/pathological 异质切分。
+
+    仅负责把域子集 idx 按 Y 重新按类分组，实际分布逻辑全部委托给
+    _distribute_by_class（与类别划分共用同一份实现）。
+    """
     if len(idx) == 0:
         return [np.array([], dtype=int) for _ in range(n_clients)]
     labels = Y[idx].numpy()
     uniq = np.unique(labels)  # 所有类
-    client_idx = [[] for _ in range(n_clients)]
-
-    if partition == "pathological":
-        total_slots = n_clients * n_classes_per_client  # 总类槽位数
-        shards_per_class = max(1, total_slots // len(uniq))  # 每个类切成几份碎片
-        shards = []  # 收集所有碎片
-        for c in uniq:
-            c_idx = np.random.permutation(idx[labels == c])  # 特定类随机打乱
-            for s in np.array_split(c_idx, shards_per_class):  # 某类样本切分
-                shards.append(s)
-        np.random.shuffle(shards)  # 打乱碎片
-        for i in range(n_clients):
-            for j in range(n_classes_per_client):
-                shard = shards[i * n_classes_per_client + j]
-                client_idx[i].append(shard)
-    else:  # dirichlet / iid
-        for c in uniq:
-            c_idx = idx[labels == c]
-            c_idx = np.random.permutation(c_idx)
-            if partition == "iid":
-                props = np.ones(n_clients) / n_clients  # 均匀比例
-            else:
-                props = np.random.dirichlet([alpha] * n_clients)  # 采样一个比例
-            counts = np.cumsum(props) * len(c_idx)  # 每个客户端分配的样本数
-            counts = counts.astype(int)[:-1]  # 转化成整数
-            splits = np.split(c_idx, counts)  # 分割数据
-            for i in range(n_clients):
-                client_idx[i].append(splits[i])
+    indices_by_class = [idx[labels == c] for c in uniq]
+    client_idx = _distribute_by_class(
+        indices_by_class, n_clients, partition, alpha, n_classes_per_client
+    )
     return [
         np.concatenate(c) if len(c) else np.array([], dtype=int) for c in client_idx
     ]

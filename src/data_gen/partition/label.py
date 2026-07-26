@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 
-from .common import get_output_dir, save_client_data
+from .common import _distribute_by_class, get_output_dir, save_client_data
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -25,115 +25,12 @@ def split_indices_by_class(targets, test_ratio):
     return train_indices_by_class, test_indices_by_class, num_classes
 
 
-def iid_partition(train_indices_by_class, test_indices_by_class, num_clients):
-    client_train_indices = [[] for _ in range(num_clients)]
-    client_test_indices = [[] for _ in range(num_clients)]
-
-    for k in range(len(train_indices_by_class)):
-        tr_k = train_indices_by_class[k]
-        tr_splits = np.array_split(tr_k, num_clients)
-        te_k = test_indices_by_class[k]
-        te_splits = np.array_split(te_k, num_clients)
-
-        for i in range(num_clients):
-            client_train_indices[i].append(tr_splits[i])
-            client_test_indices[i].append(te_splits[i])
-
-    return (
-        [np.concatenate(idx) for idx in client_train_indices],
-        [np.concatenate(idx) for idx in client_test_indices],
-    )
-
-
-def dirichlet_partition(
-    train_indices_by_class, test_indices_by_class, num_clients, alpha=0.5
-):
-    client_train_indices = [[] for _ in range(num_clients)]
-    client_test_indices = [[] for _ in range(num_clients)]
-    num_classes = len(train_indices_by_class)
-
-    for k in range(num_classes):
-        proportions = np.random.dirichlet([alpha] * num_clients)
-
-        tr_k = train_indices_by_class[k]
-        tr_counts = (np.cumsum(proportions) * len(tr_k)).astype(int)[:-1]
-        tr_splits = np.split(tr_k, tr_counts)
-
-        te_k = test_indices_by_class[k]
-        te_counts = (np.cumsum(proportions) * len(te_k)).astype(int)[:-1]
-        te_splits = np.split(te_k, te_counts)
-
-        for i in range(num_clients):
-            client_train_indices[i].append(tr_splits[i])
-            client_test_indices[i].append(te_splits[i])
-
-    return (
-        [np.concatenate(idx) for idx in client_train_indices],
-        [np.concatenate(idx) for idx in client_test_indices],
-    )
-
-
-def pathological_partition(
-    train_indices_by_class, test_indices_by_class, num_clients, n_classes_per_client=2
-):
-    num_classes = len(train_indices_by_class)
-    client_train_indices = [[] for _ in range(num_clients)]
-    client_test_indices = [[] for _ in range(num_clients)]
-
-    total_slots = num_clients * n_classes_per_client
-
-    if total_slots < num_classes:
-        raise ValueError(
-            f"[Pathological Partition Error] 总需求分片数 ({total_slots}) 小于类别总数 ({num_classes})。"
-        )
-
-    shards_per_class_list = [total_slots // num_classes] * num_classes
-    remainder = total_slots % num_classes
-    for i in range(remainder):
-        shards_per_class_list[i] += 1
-
-    train_shards = []
-    test_shards = []
-    for k in range(num_classes):
-        shards_for_this_class = shards_per_class_list[k]
-        if shards_for_this_class == 0:
-            train_shards.append([])
-            test_shards.append([])
-            continue
-        if len(train_indices_by_class[k]) < shards_for_this_class:
-            raise ValueError(
-                f"[Pathological Partition Error] 类别 {k} 样本量不足以切分为 {shards_for_this_class} 个分片。"
-            )
-        train_shards.append(
-            np.array_split(train_indices_by_class[k], shards_for_this_class)
-        )
-        test_shards.append(
-            np.array_split(test_indices_by_class[k], shards_for_this_class)
-        )
-
-    shard_ids = []
-    for k in range(num_classes):
-        for s in range(shards_per_class_list[k]):
-            shard_ids.append((k, s))
-    np.random.shuffle(shard_ids)
-
-    for i in range(num_clients):
-        for j in range(n_classes_per_client):
-            k, s = shard_ids[i * n_classes_per_client + j]
-            client_train_indices[i].append(train_shards[k][s])
-            client_test_indices[i].append(test_shards[k][s])
-
-    return (
-        [np.concatenate(idx) for idx in client_train_indices],
-        [np.concatenate(idx) for idx in client_test_indices],
-    )
-
-
 def prepare_label_data(args, dataset_name, raw_data):
     """类别划分（iid / dirichlet / pathological），承载数据分布异质。
 
-    仅做类别划分并落盘；ssl 掩码（sample/client）由调用方（__init__.py）在划分后
-    独立应用，本函数不感知 ssl 语义。DG / SFD 不经过此函数。
+    按类分组后委托 _distribute_by_class 完成异质分布（与域内核质 hetero_split
+    共用同一份实现）；ssl 掩码由调用方在划分后独立应用，本函数不感知 ssl 语义。
+    DG / SFD 不经过此函数。
     """
     partition_method = args.partition
     num_clients = args.num_clients
@@ -155,20 +52,19 @@ def prepare_label_data(args, dataset_name, raw_data):
 
     print(f"-> Partitioning data ({os.path.basename(output_dir)})...")
 
-    if partition_method == "iid":
-        cli_tr_idx, cli_te_idx = iid_partition(
-            tr_idx_by_cls, te_idx_by_cls, num_clients
-        )
-    elif partition_method == "dirichlet":
-        cli_tr_idx, cli_te_idx = dirichlet_partition(
-            tr_idx_by_cls, te_idx_by_cls, num_clients, args.alpha
-        )
-    elif partition_method == "pathological":
-        cli_tr_idx, cli_te_idx = pathological_partition(
-            tr_idx_by_cls, te_idx_by_cls, num_clients, args.n_class
-        )
-    else:
-        raise ValueError(f"未知分区方法: {partition_method}")
+    # 训练 / 测试各自按类分组后，共用同一份异质分布实现
+    train_client = _distribute_by_class(
+        tr_idx_by_cls, num_clients, partition_method, args.alpha, args.n_class
+    )
+    test_client = _distribute_by_class(
+        te_idx_by_cls, num_clients, partition_method, args.alpha, args.n_class
+    )
+    cli_tr_idx = [
+        np.concatenate(c) if len(c) else np.array([], dtype=int) for c in train_client
+    ]
+    cli_te_idx = [
+        np.concatenate(c) if len(c) else np.array([], dtype=int) for c in test_client
+    ]
 
     # 类别划分：无 domains 字段；is_labeled 默认全有标签（ssl 掩码时再写入）
     save_client_data(output_dir, X, Y, cli_tr_idx, cli_te_idx, num_classes)
