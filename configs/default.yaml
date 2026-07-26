@@ -2,10 +2,12 @@
 
 # 数据相关 (Data)
 dataset: # cifar10, cifar100, cinic10, tiny_imagenet, mnist, fashionmnist, emnist
-    - cifar10
+    # - cifar10
     # - cifar100
     # - cinic10
     # - tiny_imagenet
+    # - mnist
+    - cifar10_dg
 model:
     - cnn
     # - resnet18
@@ -16,9 +18,8 @@ num_clients:
 partition:
     - dirichlet
     # - pathological
-alpha:
-    - 0.1
-    # - 0.5
+    # - iid
+alpha: 1.0 # dirichlet 异质性强度；类别划分下控制客户端类分布，DG 模式下同时控制「每个域内部」的类分布异质
 n_class: 0 # 0 表示自动根据数据集选择
 test_ratio: 0.2
 
@@ -34,29 +35,42 @@ seed: 42
 times: 5
 
 # 资源与框架 (Resources & Ray)
-# gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
+gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
 # gpus: "0,1"
 # gpus: "2,3"
-gpus: "3,1,2"
+# gpus: "3,1,2"
 max_workers_per_gpu: 5
 test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)，可用 -t 在命令行中快速开启
 
-# 领域与半监督参数
-# ── 组合模式 ──────────────────────────────────────────────
-#  传统 FL:        domain_partition=~, label_ratio=1.0
-#  通用半监督:     domain_partition=~, label_ratio=0.x, lam=x
-#  DG:             domain_partition=domain_*, label_ratio=1.0
-#  DG+通用半监督:  domain_partition=domain_*, label_ratio=0.x, lam=x
-#  DG+域掩半监督:  domain_partition=domain_*, unlabeled_domain=X, lam=x
-#  DG+两者叠加:    domain_partition=domain_*, unlabeled_domain=X, label_ratio=0.x
-#  留一域评估:     domain_partition=domain_*, target_domain=X, label_ratio=1.0
-# ──────────────────────────────────────────────────────────
-domain_partition: ~ # ~ / domain_as_client / domain_mixed_aware / domain_mixed_blind
-selected_domains: ~ # list[str]，仅使用指定域；None=全用。与 target_domain 互斥。
-target_domain: ~ # str，从训练集剥离作为目标域（leave-one-domain-out），与 selected_domains 互斥。
-unlabeled_domain: ~ # str，将该域的标签全部掩掉以构造半监督场景。仅 domain_partition 非空时生效。
-label_ratio: 1.0 # float (0~1]，通用半监督中有标签样本比例。1.0 = 全监督。
-lam: 1.0 # float，无监督损失权重系数。0 = 退化为纯监督。
+# ── 维度一：数据划分（partition 布尔开关）────────────────────────────
+# 不适用数据分布异质性
+dg: false # true=开启域泛化 DG；false/缺省=类别划分
+selected_domains: "clean,rotate_cutout" # 逗号分隔字符串，仅使用指定域，仅 DG 模式生效。
+target_domain: rotate_cutout # str，仅 DG 模式生效：该域为测试
+
+# ── 维度二：半监督策略（ssl）─────────────────────────────────────────
+# 适用数据分布异质性
+#  none    : 全监督
+#  sample  : 场景B——每客户端同时含标签+未标签，按 label_ratio 比例掩码每客户端内样本（同分布）。仅类别划分。
+#  client  : 场景A——部分客户端全标签、其余全无标签，按 label_ratio 选有标签客户端（同分布）。仅类别划分。
+#  组合约束：
+#    类别划分下可用 ssl = none / sample / client
+#    ssl=sample/client 不与 DG 叠加
+ssl: none # none | sample | client
+label_ratio:
+    0.5 # float (0~1]
+    #   ssl=sample -> 每客户端内有标签样本比例
+    #   ssl=client -> 有标签客户端比例
+    #   ssl=none / domain -> 本项不参与
+lam: 1.0 # float，fedtest 无监督损失权重；0 = 退化为纯监督。
+confidence_threshold: 0.95 # float，fedtest FixMatch 伪标签置信度阈值。
+
+# —— 纬度三：
+# 适用数据分布异质性，两个域都适用
+sfd: true # bool，是否使用 SFD 策略，与上述两种互斥
+label_domain: ~ # str，指定训练域。
+unlabel_domain: ~ # str，指定无标签域。
+label_rate: 0.5 # float，标签域样本比例。有标签数据应该少于无标签数据，所以有标签域数据乘一个比例减少
 
 # 去中心化网络拓扑 (Network Topology)
 # ring, complete, random, small_world, scale_free, star

@@ -1,12 +1,17 @@
 import os
 
 import numpy as np
-import torch
+
+from .common import get_output_dir, save_client_data
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# 类别划分数学（iid / dirichlet / pathological）—— 与数据格式无关，可复用
+# ──────────────────────────────────────────────────────────────────────────
 def split_indices_by_class(targets, test_ratio):
-    num_classes = len(np.unique(targets))
-    indices_by_class = [np.where(targets == i)[0] for i in range(num_classes)]
+    targets_np = targets.numpy()
+    num_classes = len(np.unique(targets_np))
+    indices_by_class = [np.where(targets_np == i)[0] for i in range(num_classes)]
 
     train_indices_by_class = []
     test_indices_by_class = []
@@ -79,8 +84,7 @@ def pathological_partition(
 
     if total_slots < num_classes:
         raise ValueError(
-            f"[Pathological Partition Error] 总需求分片数 ({total_slots}) 小于类别总数 ({num_classes})。\n"
-            f"请增加 num_clients 或 n_classes_per_client。"
+            f"[Pathological Partition Error] 总需求分片数 ({total_slots}) 小于类别总数 ({num_classes})。"
         )
 
     shards_per_class_list = [total_slots // num_classes] * num_classes
@@ -96,13 +100,10 @@ def pathological_partition(
             train_shards.append([])
             test_shards.append([])
             continue
-
         if len(train_indices_by_class[k]) < shards_for_this_class:
             raise ValueError(
-                f"[Pathological Partition Error] 类别 {k} 的样本量 ({len(train_indices_by_class[k])}) "
-                f"不足以切分为 {shards_for_this_class} 个分片。"
+                f"[Pathological Partition Error] 类别 {k} 样本量不足以切分为 {shards_for_this_class} 个分片。"
             )
-
         train_shards.append(
             np.array_split(train_indices_by_class[k], shards_for_this_class)
         )
@@ -128,25 +129,19 @@ def pathological_partition(
     )
 
 
-def get_partition_path(dataset_name, partition, num_clients, alpha=0.5, n_classes=2):
-    if partition == "iid":
-        part_str = f"iid_n{num_clients}"
-    elif partition == "dirichlet":
-        part_str = f"dirichlet_n{num_clients}_a{alpha}"
-    elif partition == "pathological":
-        part_str = f"pathological_n{num_clients}_c{n_classes}"
-    else:
-        raise ValueError(f"Unknown partition method: {partition}")
-    return os.path.join("./datasets", dataset_name, part_str)
-
-
 def prepare_label_data(args, dataset_name, raw_data):
+    """类别划分（iid / dirichlet / pathological），承载数据分布异质。
+
+    仅做类别划分并落盘；ssl 掩码（sample/client）由调用方（__init__.py）在划分后
+    独立应用，本函数不感知 ssl 语义。DG / SFD 不经过此函数。
+    """
     partition_method = args.partition
     num_clients = args.num_clients
 
     X, Y = raw_data["x"], raw_data["y"]
+
     tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(
-        Y.numpy(), args.test_ratio
+        Y, args.test_ratio
     )
 
     if args.n_class == 0:
@@ -156,14 +151,9 @@ def prepare_label_data(args, dataset_name, raw_data):
             f"{num_clients} clients, setting n_class={args.n_class}"
         )
 
-    output_dir = get_partition_path(dataset_name, partition_method, num_clients, args.alpha, args.n_class)
-    part_str = os.path.basename(output_dir)
+    output_dir = get_output_dir(args, dataset_name)
 
-    if os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients:
-        print(f"-> {part_str} partition for {dataset_name} already exists. Skipping.")
-        return
-
-    print(f"-> Partitioning data ({part_str})...")
+    print(f"-> Partitioning data ({os.path.basename(output_dir)})...")
 
     if partition_method == "iid":
         cli_tr_idx, cli_te_idx = iid_partition(
@@ -180,17 +170,10 @@ def prepare_label_data(args, dataset_name, raw_data):
     else:
         raise ValueError(f"未知分区方法: {partition_method}")
 
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    for i in range(num_clients):
-        client_data = {
-            "train": {"x": X[cli_tr_idx[i]], "y": Y[cli_tr_idx[i]]},
-            "test": {"x": X[cli_te_idx[i]], "y": Y[cli_te_idx[i]]},
-            "num_classes": num_classes,
-        }
-        torch.save(client_data, os.path.join(output_dir, f"client_{i}.pt"))
+    # 类别划分：无 domains 字段；is_labeled 默认全有标签（ssl 掩码时再写入）
+    save_client_data(output_dir, X, Y, cli_tr_idx, cli_te_idx, num_classes)
 
     print(
         f"-> 成功为 {num_clients} 个客户端准备了 {dataset_name} ({partition_method})。"
     )
+    return output_dir

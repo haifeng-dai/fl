@@ -163,16 +163,29 @@ def _apply_ablation(configs, ablation_str):
 
 def get_pre_name(args):
     """设置并创建实验所需的保存路径和日志路径"""
-    domain_partition = getattr(args, 'domain_partition', None)
-    target_domain = getattr(args, 'target_domain', None)
+    sfd = getattr(args, "sfd", False)
+    dg = getattr(args, "dg", False)
 
-    if domain_partition is not None:
+    if sfd:
+        ld = getattr(args, "label_domain", None)
+        ud = getattr(args, "unlabel_domain", None)
+        lr = getattr(args, "label_rate", None)
         fold_path = os.path.join(
             f"{args.algo}",
-            f"dg_{args.dataset}_{args.model}_{domain_partition}_{args.num_clients}",
+            f"sfd_{args.dataset}_{args.model}_n{args.num_clients}_l{ld}_u{ud}_r{lr}",
         )
-        if target_domain is not None:
-            fold_path += f"_target_{target_domain}"
+    elif dg:
+        sd = args.selected_domains
+        sd_str = (
+            sd.replace(",", "_") if isinstance(sd, str) else "_".join(map(str, sd))
+        )
+        td = getattr(args, "target_domain", None)
+        fold_path = os.path.join(
+            f"{args.algo}",
+            f"dg_{args.dataset}_{args.model}_n{args.num_clients}_{sd_str}",
+        )
+        if td:
+            fold_path += f"_target_{td}"
     else:
         fold_path = os.path.join(
             f"{args.algo}",

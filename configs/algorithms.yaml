@@ -1,5 +1,9 @@
 # 算法专属配置 (Algorithm Specific Arguments)
 
+fedtest:
+    confidence_threshold: 0.95
+    mu: 0.01
+
 fedprox:
     mu: 0.01
 
@@ -106,6 +110,13 @@ efhc:
     event_r: 250
     bandwidth_mean: 5000
     bandwidth_std: 0.0
+
+protofssl:
+    support_size: 5
+    query_size: 20
+    unlabeled_query_size: 64
+    lambda_: 1.0
+    sharpen_T: 0.5
 
 dfedset:
     lambda_sa:
