@@ -65,13 +65,27 @@ def get_output_dir(args, dataset_name):
         ud = args.unlabel_domain
         lr = args.label_rate
         part_str = f"sfd_n{n}_a{args.alpha}_l{ld}_u{ud}_r{lr}"
-    elif args.dg:
+    elif args.fdg:
         dom = sanitize(args.selected_domains) if args.selected_domains else "all"
         td = sanitize(args.target_domain) if args.target_domain else "none"
-        part_str = f"dg_n{n}_{dom}_t{td}"
+        part_str = f"fdg_n{n}_{dom}_t{td}"
     else:
         part_str = partition_basename(args.partition, n, args.alpha, args.n_class)
     return os.path.join("./datasets", dataset_name, part_str)
+
+
+def is_fresh(output_dir, num_clients):
+    """划分是否已固化（即「非首次生成」）。
+
+    目录已存在且客户端文件数充足，则视为划分已完成，应跳过重复处理；
+    否则视为首次，需要执行划分与后处理。prepare_fdg_data / prepare_sfd_data
+    与 prepare_data 总入口共用同一判定，保证「重复处理」逻辑单一来源、
+    各场景后处理步骤口径完全一致，避免此前掩码被反复叠加执行、
+    把数据逐级啃空的 bug。
+    """
+    return not (
+        os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────

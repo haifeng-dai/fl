@@ -19,9 +19,9 @@ partition:
     - dirichlet
     # - pathological
     # - iid
-alpha: 1.0 # dirichlet 异质性强度；类别划分下控制客户端类分布，DG 模式下同时控制「每个域内部」的类分布异质
+alpha: 1.0 # dirichlet 异质性强度；类别划分下控制客户端类分布，FDG/SFD 模式下同时控制「每个域内部」的类分布异质
 n_class: 0 # 0 表示自动根据数据集选择
-test_ratio: 0.2
+test_ratio: 0.2 # FDG 下源域 test_ratio=0（不留存源域测试集，目标域整体打散进各客户端 test）；仅对 SFD / 类别划分生效
 
 # 训练相关 (Training)
 rounds: 1000 # pFL: 500, gFL: 1000, 0 表示自动调整
@@ -44,9 +44,14 @@ test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)，可用 -t 在命令�
 
 # ── 维度一：数据划分（partition 布尔开关）────────────────────────────
 # 不适用数据分布异质性
-dg: false # true=开启域泛化 DG；false/缺省=类别划分
-selected_domains: "clean,rotate_cutout" # 逗号分隔字符串，仅使用指定域，仅 DG 模式生效。
-target_domain: rotate_cutout # str，仅 DG 模式生效：该域为测试
+# FDG（Federated Domain Generalization）：源域全部作为训练集，目标域整体作为测试集。
+#   源域不保留测试集（test_ratio 对源域无效）；目标域样本均分打散到各客户端 test
+#   （不参与训练），评估时合并全局测试集即全目标域样本；二值互斥。
+fdg: false # true=开启域泛化 FDG；false/缺省=类别划分
+selected_domains: "clean,rotate_cutout" # 逗号分隔字符串，参与划分的域集合，仅 FDG 模式生效。
+#   FDG 下「源域」= selected_domains 中除 target_domain 外的域（全部用于训练）；
+#   「目标域」= target_domain（样本均分进各客户端 test，不进入训练）。
+target_domain: rotate_cutout # str，仅 FDG 模式生效：该域为测试
 
 # ── 维度二：半监督策略（ssl）─────────────────────────────────────────
 # 适用数据分布异质性
@@ -67,9 +72,9 @@ confidence_threshold: 0.95 # float，fedtest FixMatch 伪标签置信度阈值�
 
 # —— 纬度三：
 # 适用数据分布异质性，两个域都适用
-sfd: true # bool，是否使用 SFD 策略，与上述两种互斥
-label_domain: ~ # str，指定训练域。
-unlabel_domain: ~ # str，指定无标签域。
+sfd: true # bool，是否使用 SFD 策略，与上述两种互斥（当前配置走 DG/FDG）
+label_domain: clean # str，指定训练域。
+unlabel_domain: rotate_cutout # str，指定无标签域。
 label_rate: 0.5 # float，标签域样本比例。有标签数据应该少于无标签数据，所以有标签域数据乘一个比例减少
 
 # 去中心化网络拓扑 (Network Topology)

@@ -164,7 +164,7 @@ def _apply_ablation(configs, ablation_str):
 def get_pre_name(args):
     """设置并创建实验所需的保存路径和日志路径"""
     sfd = getattr(args, "sfd", False)
-    dg = getattr(args, "dg", False)
+    fdg = getattr(args, "fdg", False)
 
     if sfd:
         ld = getattr(args, "label_domain", None)
@@ -174,15 +174,13 @@ def get_pre_name(args):
             f"{args.algo}",
             f"sfd_{args.dataset}_{args.model}_n{args.num_clients}_l{ld}_u{ud}_r{lr}",
         )
-    elif dg:
+    elif fdg:
         sd = args.selected_domains
-        sd_str = (
-            sd.replace(",", "_") if isinstance(sd, str) else "_".join(map(str, sd))
-        )
+        sd_str = sd.replace(",", "_") if isinstance(sd, str) else "_".join(map(str, sd))
         td = getattr(args, "target_domain", None)
         fold_path = os.path.join(
             f"{args.algo}",
-            f"dg_{args.dataset}_{args.model}_n{args.num_clients}_{sd_str}",
+            f"fdg_{args.dataset}_{args.model}_n{args.num_clients}_{sd_str}",
         )
         if td:
             fold_path += f"_target_{td}"

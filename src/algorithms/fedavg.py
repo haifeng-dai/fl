@@ -96,9 +96,14 @@ class Server(BaseServer):
             # 根据客户端的数据量权重，对上传的模型参数进行加权平均汇聚
             self.aggregate(selected_states, weights=norm_weights)
             self.evaluate()
-            print(
-                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
-            )
+            if self.args.sfd:
+                src = f"{self.acc_source[-1]:.2f}%" if self.acc_source else "N/A"
+                tgt = f"{self.acc_target[-1]:.2f}%" if self.acc_target else "N/A"
+                print(f"Source Acc: {src}, Target Acc: {tgt}, Avg Loss: {self.loss[-1]:.4f}")
+            else:
+                print(
+                    f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+                )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):

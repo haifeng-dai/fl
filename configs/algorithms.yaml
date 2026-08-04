@@ -112,8 +112,7 @@ efhc:
     bandwidth_std: 0.0
 
 protofssl:
-    support_size: 5
-    query_size: 20
+    support_size: 10
     unlabeled_query_size: 64
     lambda_: 1.0
     sharpen_T: 0.5

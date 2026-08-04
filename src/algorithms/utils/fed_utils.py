@@ -2,6 +2,7 @@ import os
 
 import ray
 import torch
+from torch.utils.data import Subset
 
 from ...models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 from .aggregate import param_aggregate
@@ -64,31 +65,20 @@ class BaseServer:
         self.pfl = pfl
         self.acc: list[float] = []
         self.acc_proto: list[float] = []
-        self.acc_source: list[float] = []
-        self.acc_target: list[float] = []
         self.loss: list[float] = []
 
-        self.is_domain = args.domain_partition is not None
-        self.source_test = None
-        self.target_test = None
+        if args.sfd:
+            self.acc_source: list[float] = []
+            self.acc_target: list[float] = []
+            self.acc_source_p: list[float] = []
+            self.acc_target_p: list[float] = []
 
         (
             self.train_sets,
             self.test_set,
             train_counts,
             self.num_class,
-            self.source_test,
-            self.target_test,
-            self.domain_labels,
-        ) = load_data(
-            dataset_name=args.dataset,
-            partition=args.partition,
-            num_clients=args.num_clients,
-            alpha=args.alpha,
-            n_classes=args.n_class,
-            pfl=self.pfl,
-            domain_partition=args.domain_partition if self.is_domain else None,
-        )
+        ) = load_data(args, self.pfl)
         self.train_set_refs = [ray.put(ds) for ds in self.train_sets.values()]
 
         total_samples = sum(train_counts.values())
@@ -128,15 +118,6 @@ class BaseServer:
             global_test_ref = ray.put(self.test_set)
             self.test_set_refs = [global_test_ref for _ in range(self.num_clients)]
 
-        # 4. 领域模式缓存源域/目标域测试集
-        if self.is_domain:
-            self.source_test_ref = (
-                ray.put(self.source_test) if self.source_test is not None else None
-            )
-            self.target_test_ref = (
-                ray.put(self.target_test) if self.target_test is not None else None
-            )
-
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
     ):
@@ -146,24 +127,34 @@ class BaseServer:
         self.model.load_state_dict(aggregated_state)
 
     def evaluate(self, model_states=None, protos=None):
-        if self.is_domain:
-            # 领域模式：分别评估源域和目标域准确率
-            if self.source_test is not None:
-                acc_src = evaluate_model(self.model, self.source_test, self.device)
+        if self.args.sfd:
+            # SFD：按 unlabel_domain 切分测试集（label 域 -> acc_source，unlabel 域 -> acc_target）
+            test_set = self.test_set
+            unlabel_domain = self.args.unlabel_domain
+            mask_tgt = torch.tensor(
+                [d == unlabel_domain for d in test_set.domains]
+            )
+            tgt_idx = torch.where(mask_tgt)[0].tolist()
+            src_idx = torch.where(~mask_tgt)[0].tolist()
+            if src_idx:
+                src_eval = Subset(test_set, src_idx)
+                acc_src = evaluate_model(self.model, src_eval, self.device)
                 self.acc_source.append(acc_src)
-                self.acc.append(acc_src)
-            if self.target_test is not None:
-                acc_tgt = evaluate_model(self.model, self.target_test, self.device)
+            if tgt_idx:
+                tgt_eval = Subset(test_set, tgt_idx)
+                acc_tgt = evaluate_model(self.model, tgt_eval, self.device)
                 self.acc_target.append(acc_tgt)
             if protos is not None:
-                if self.source_test is not None:
+                if src_idx:
                     p_acc = evaluate_prototype(
-                        self.model,
-                        protos.to(self.device),
-                        self.source_test,
-                        self.device,
+                        self.model, protos.to(self.device), src_eval, self.device
                     )
-                    self.acc_proto.append(p_acc)
+                    self.acc_source_p.append(p_acc)
+                if tgt_idx:
+                    p_acc = evaluate_prototype(
+                        self.model, protos.to(self.device), tgt_eval, self.device
+                    )
+                    self.acc_target_p.append(p_acc)
             return
 
         if not self.pfl:
@@ -244,14 +235,27 @@ class BaseServer:
         return results_map
 
     def deal_save(self, metrics, params):
-        max_a = max(self.acc) if self.acc else 0.0
-        summary_str = f"\n[Summary] Max Acc: {max_a:.2f}%"
-        if self.acc_target:
-            max_ta = max(self.acc_target)
-            summary_str += f" | Max Target Acc: {max_ta:.2f}%"
-        if self.acc_proto:
-            max_pa = max(self.acc_proto)
-            summary_str += f" | Max Proto Acc: {max_pa:.2f}%"
+        if self.args.sfd:
+            # SFD：分别显示 source/target 准确率
+            summary_str = "\n[Summary]"
+            if self.acc_source:
+                summary_str += f" Max Source Acc: {max(self.acc_source):.2f}%"
+            if self.acc_target:
+                summary_str += f" | Max Target Acc: {max(self.acc_target):.2f}%"
+            if self.acc_source_p:
+                summary_str += (
+                    f" | Max Source Proto Acc: {max(self.acc_source_p):.2f}%"
+                )
+            if self.acc_target_p:
+                summary_str += (
+                    f" | Max Target Proto Acc: {max(self.acc_target_p):.2f}%"
+                )
+        else:
+            # FDG / 类别划分：标准全局准确率
+            max_a = max(self.acc) if self.acc else 0.0
+            summary_str = f"\n[Summary] Max Acc: {max_a:.2f}%"
+            if self.acc_proto:
+                summary_str += f" | Max Proto Acc: {max(self.acc_proto):.2f}%"
         print(summary_str)
 
         name = f"{self.args.file_name}_{self.args.cur_time}.pt"
@@ -301,8 +305,10 @@ def get_model(model_name, dataset_name, n_class, feature_dim):
     elif model_name == "resnet50":
         return ResNet50(n_class, feature_dim, dataset_name)
     elif model_name == "harcnn":
-        return HARCNN(n_class, feature_dim)
+        # HARCNN(in_channels, num_classes, feature_dim)：HAR 传感器数据为 9 通道
+        return HARCNN(in_channels=9, num_classes=n_class, feature_dim=feature_dim)
     elif model_name == "harmlp":
-        return HARMLP(n_class, feature_dim)
+        # HARMLP(input_dim, num_classes, feature_dim)：har_feat 特征维度为 561
+        return HARMLP(input_dim=561, num_classes=n_class, feature_dim=feature_dim)
     else:
         raise ValueError(f"Unknown model: {model_name}")
