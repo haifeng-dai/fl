@@ -16,10 +16,10 @@ num_clients:
     - 20
     # - 100
 partition:
-    - dirichlet
+    # - dirichlet
     # - pathological
-    # - iid
-alpha: 1.0 # dirichlet 异质性强度；类别划分下控制客户端类分布，FDG/SFD 模式下同时控制「每个域内部」的类分布异质
+    - iid
+alpha: 0.1 # dirichlet 异质性强度；类别划分下控制客户端类分布，FDG/SFD 模式下同时控制「每个域内部」的类分布异质
 n_class: 0 # 0 表示自动根据数据集选择
 test_ratio: 0.2 # FDG 下源域 test_ratio=0（不留存源域测试集，目标域整体打散进各客户端 test）；仅对 SFD / 类别划分生效
 
@@ -32,7 +32,7 @@ weight_decay: 0.0
 batch_size: 64
 join_ratio: 1.0
 seed: 42
-times: 5
+times: 1
 
 # 资源与框架 (Resources & Ray)
 gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔

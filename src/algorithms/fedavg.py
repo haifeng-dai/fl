@@ -99,7 +99,11 @@ class Server(BaseServer):
             if self.args.sfd:
                 src = f"{self.acc_source[-1]:.2f}%" if self.acc_source else "N/A"
                 tgt = f"{self.acc_target[-1]:.2f}%" if self.acc_target else "N/A"
-                print(f"Source Acc: {src}, Target Acc: {tgt}, Avg Loss: {self.loss[-1]:.4f}")
+                acc = f"{self.acc[-1]:.2f}%" if self.acc else "N/A"
+                print(
+                    f"Global Acc: {acc}, Source Acc: {src}, Target Acc: {tgt}, "
+                    f"Avg Loss: {self.loss[-1]:.4f}"
+                )
             else:
                 print(
                     f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"

@@ -129,32 +129,34 @@ class BaseServer:
     def evaluate(self, model_states=None, protos=None):
         if self.args.sfd:
             # SFD：按 unlabel_domain 切分测试集（label 域 -> acc_source，unlabel 域 -> acc_target）
-            test_set = self.test_set
+            assert isinstance(self.test_set.domains, list)
             unlabel_domain = self.args.unlabel_domain
             mask_tgt = torch.tensor(
-                [d == unlabel_domain for d in test_set.domains]
+                [d == unlabel_domain for d in self.test_set.domains]
             )
             tgt_idx = torch.where(mask_tgt)[0].tolist()
             src_idx = torch.where(~mask_tgt)[0].tolist()
-            if src_idx:
-                src_eval = Subset(test_set, src_idx)
-                acc_src = evaluate_model(self.model, src_eval, self.device)
-                self.acc_source.append(acc_src)
-            if tgt_idx:
-                tgt_eval = Subset(test_set, tgt_idx)
-                acc_tgt = evaluate_model(self.model, tgt_eval, self.device)
-                self.acc_target.append(acc_tgt)
+            src_eval = Subset(self.test_set, src_idx)
+            acc_src = evaluate_model(self.model, src_eval, self.device)
+            self.acc_source.append(acc_src)
+            tgt_eval = Subset(self.test_set, tgt_idx)
+            acc_tgt = evaluate_model(self.model, tgt_eval, self.device)
+            self.acc_target.append(acc_tgt)
+            acc_all = evaluate_model(self.model, self.test_set, self.device)
+            self.acc.append(acc_all)
             if protos is not None:
-                if src_idx:
-                    p_acc = evaluate_prototype(
-                        self.model, protos.to(self.device), src_eval, self.device
-                    )
-                    self.acc_source_p.append(p_acc)
-                if tgt_idx:
-                    p_acc = evaluate_prototype(
-                        self.model, protos.to(self.device), tgt_eval, self.device
-                    )
-                    self.acc_target_p.append(p_acc)
+                p_acc = evaluate_prototype(
+                    self.model, protos.to(self.device), src_eval, self.device
+                )
+                self.acc_source_p.append(p_acc)
+                p_acc = evaluate_prototype(
+                    self.model, protos.to(self.device), tgt_eval, self.device
+                )
+                self.acc_target_p.append(p_acc)
+                p_acc = evaluate_prototype(
+                    self.model, protos.to(self.device), self.test_set, self.device
+                )
+                self.acc_proto.append(p_acc)
             return
 
         if not self.pfl:
@@ -212,7 +214,7 @@ class BaseServer:
         ]
 
     def run_clients(self, worker_func, parameters):
-        """强制通过 Ray 运行客户端训练。"""
+        """通过 Ray 运行客户端训练。"""
         # 根据 max_workers_per_gpu 计算 Ray 需要的显存比例 (1/n)
         ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
 
@@ -235,27 +237,19 @@ class BaseServer:
         return results_map
 
     def deal_save(self, metrics, params):
+        # acc 恒存在；proto 精度可选；source/target 仅 SFD 场景
+        summary_str = f"\n[Summary] Max Acc: {max(self.acc):.2f}%"
+        if self.acc_proto:
+            summary_str += f" | Max Proto Acc: {max(self.acc_proto):.2f}%"
         if self.args.sfd:
-            # SFD：分别显示 source/target 准确率
-            summary_str = "\n[Summary]"
-            if self.acc_source:
-                summary_str += f" Max Source Acc: {max(self.acc_source):.2f}%"
-            if self.acc_target:
-                summary_str += f" | Max Target Acc: {max(self.acc_target):.2f}%"
+            summary_str += (
+                f" | Max Source Acc: {max(self.acc_source):.2f}%"
+                f" | Max Target Acc: {max(self.acc_target):.2f}%"
+            )
             if self.acc_source_p:
-                summary_str += (
-                    f" | Max Source Proto Acc: {max(self.acc_source_p):.2f}%"
-                )
+                summary_str += f" | Max Source Proto Acc: {max(self.acc_source_p):.2f}%"
             if self.acc_target_p:
-                summary_str += (
-                    f" | Max Target Proto Acc: {max(self.acc_target_p):.2f}%"
-                )
-        else:
-            # FDG / 类别划分：标准全局准确率
-            max_a = max(self.acc) if self.acc else 0.0
-            summary_str = f"\n[Summary] Max Acc: {max_a:.2f}%"
-            if self.acc_proto:
-                summary_str += f" | Max Proto Acc: {max(self.acc_proto):.2f}%"
+                summary_str += f" | Max Target Proto Acc: {max(self.acc_target_p):.2f}%"
         print(summary_str)
 
         name = f"{self.args.file_name}_{self.args.cur_time}.pt"
