@@ -2,10 +2,16 @@ import os
 import time
 
 import torch
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Subset, TensorDataset
 
-from .utils import BaseServer, fmt_num, get_model, proto_aggregate
+from .utils import (
+    BaseServer,
+    dist_contrastive_loss,
+    extract_prototypes,
+    fmt_num,
+    get_model,
+    proto_aggregate,
+)
 
 
 def get_path(args):
@@ -19,27 +25,6 @@ def get_path(args):
 # --------------------------------------------------------------------------- #
 # 论文公式对应的核心函数
 # --------------------------------------------------------------------------- #
-def proto_logits(emb, protos, temperature=1.0):
-    """
-    Eq.(6): 基于欧氏距离的负指数得到类概率 logits。
-    emb:   [B, D]   嵌入向量
-    protos:[K, D]   原型
-    返回:  [B, K]   即 -dist(emb, protos) / temperature
-    PyTorch 的 F.cross_entropy 直接接受该 logits（支持 hard/soft 目标）。
-    """
-    dist = torch.cdist(emb, protos.to(emb.device), p=2.0)  # [B, K]
-    return -dist / temperature
-
-
-def sharpen(probs, T):
-    """
-    Eq.(5): 锐化概率分布以降低熵。
-    probs: [B, K]  →  p̄_k = p_k^(1/T) / Σ_{k'} p_{k'}^(1/T)
-    """
-    probs = probs ** (1.0 / T)
-    return probs / probs.sum(dim=1, keepdim=True)
-
-
 def pseudolabel(emb_u, helper_protos, T):
     """
     Eq.(6)+Eq.(7)+Eq.(5): 用辅助客户端原型给无标签样本生成 soft 伪标签。
@@ -52,57 +37,24 @@ def pseudolabel(emb_u, helper_protos, T):
     hp = helper_protos.to(emb_u.device)  # [H, K, D]
     H = hp.shape[0]
     per_helper = torch.stack(
-        [F.softmax(proto_logits(emb_u, hp[j], 1.0), dim=1) for j in range(H)],
+        [
+            torch.softmax(-torch.cdist(emb_u, hp[j], p=2.0), dim=1)  # Eq.(6) j=i
+            for j in range(H)
+        ],
         dim=0,
     )  # [H, B, K]
     avg = per_helper.mean(dim=0)  # Eq.(7) 跨 helper 平均 → [B, K]
-    return sharpen(avg, T)  # Eq.(5) 锐化 → p̄_i(u)
-
-
-def _group_prototypes(
-    model, x, idx, y, num_class, feature_dim, device, batch_size=None
-):
-    """
-    Eq.(2): 按类求嵌入特征的均值构造原型 → [K, D]。
-    某类无样本时返回零向量（后续聚合会被 mask 忽略）。
-    batch_size: 非空时按 mini-batch 前向，避免大全集一次性进显存（OOM 防护）。
-    """
-    protos = torch.zeros(num_class, feature_dim, device=device)
-    counts = torch.zeros(num_class, dtype=torch.long, device=device)
-    if len(idx) == 0:
-        return protos
-    with torch.no_grad():
-        if not batch_size or batch_size <= 0:
-            feats = model.extractor(x[idx].to(device))  # [N, D]
-            for k in range(num_class):
-                mask_k = y == k
-                if mask_k.any():
-                    protos[k] = feats[mask_k].mean(0)
-        else:
-            n_total = len(idx)
-            for start in range(0, n_total, batch_size):
-                end = min(start + batch_size, n_total)
-                chunk_idx = idx[start:end]
-                feats = model.extractor(x[chunk_idx].to(device))
-                chunk_y = y[start:end]
-                for k in range(num_class):
-                    mask_k = chunk_y == k
-                    if mask_k.any():
-                        protos[k] += feats[mask_k].sum(0)
-                        counts[k] += int(mask_k.sum())
-            for k in range(num_class):
-                if counts[k] > 0:
-                    protos[k] /= counts[k]
-    return protos
+    probs = avg ** (1.0 / T)  # Eq.(5) 锐化降低熵
+    return probs / probs.sum(dim=1, keepdim=True)
 
 
 def sample_per_class(labeled_idx_by_class, support_size):
     """
     每类随机采样支持集 S，查询集 Q 取该类全部剩余有标签样本（论文 D_k \\ S_k，不封顶）。
     S 大小受保护：s = min(support_size, max(1, n // 2))，保证每类至少留一半给 Q。
-    返回: sup_idx, sup_y, que_idx, que_y（均为一维张量；空时返回空张量）
+    返回: sup_idx, que_idx, que_y（均为一维张量；空时返回空张量）
     """
-    sup_idx, sup_y, que_idx, que_y = [], [], [], []
+    sup_idx, que_idx, que_y = [], [], []
     for k, idx in labeled_idx_by_class.items():
         n = len(idx)
         if n == 0:
@@ -111,15 +63,13 @@ def sample_per_class(labeled_idx_by_class, support_size):
         s = min(support_size, max(1, n // 2))
         q = n - s
         sup_idx.append(idx[perm[:s]])
-        sup_y.append(torch.full((s,), k, dtype=torch.long))
         que_idx.append(idx[perm[s : s + q]])
         que_y.append(torch.full((q,), k, dtype=torch.long))
     if not sup_idx:
         empty = torch.empty(0, dtype=torch.long)
-        return empty, empty.clone(), empty.clone(), empty.clone()
+        return empty, empty.clone(), empty.clone()
     return (
         torch.cat(sup_idx),
-        torch.cat(sup_y),
         torch.cat(que_idx),
         torch.cat(que_y),
     )
@@ -154,15 +104,7 @@ def train(params):
     model.load_state_dict(model_state)
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 
-    # 2. 半监督分割：优先读取数据层已给定的 is_labeled；
-    #    若数据未提供（标准划分默认全有标签），则回退到全局 label_ratio 生成。
-    if train_set.is_labeled is None:
-        g = torch.Generator().manual_seed(1000 + cid)
-        rand = torch.rand(len(train_set.y), generator=g)
-        train_set.is_labeled = rand < label_ratio  # 逐样本伯努利划分
-    # 否则直接使用数据集自带的 is_labeled（自定义/数据层已落好的分割）
-
-    # 3. 构造按类索引：有标签样本索引（按类分组）与无标签样本索引
+    # 2. 构造按类索引：有标签样本索引（按类分组）与无标签样本索引
     y = train_set.y
     labeled_mask = train_set.is_labeled
     labeled_idx = torch.where(labeled_mask)[0]
@@ -171,91 +113,83 @@ def train(params):
         k: labeled_idx[y[labeled_idx] == k] for k in range(num_class)
     }
 
+    # 全量 Dataset（零拷贝引用），供各子集 loader 复用
+    full_ds = TensorDataset(train_set.x, train_set.y)
+
     total_loss = 0.0
     num_batches = 0
-    model.train()
     for _ in range(epochs):
         # 每类采样支持集 S；查询集 Q 取全部剩余有标签样本（论文 D_k \ S_k）
-        sup_idx, sup_y, que_idx, que_y = sample_per_class(
-            labeled_idx_by_class, support_size
-        )
+        sup_idx, que_idx, que_y = sample_per_class(labeled_idx_by_class, support_size)
 
-        # 本地原型（基于支持集, Eq.2）；分批前向以防大全集 OOM
-        C_local = _group_prototypes(
+        # 本地原型（基于支持集, Eq.2）；extract_prototypes 内部 index_add_ 向量化累加
+        C_local = extract_prototypes(
             model,
-            train_set.x,
-            sup_idx,
-            sup_y,
+            DataLoader(Subset(full_ds, sup_idx), batch_size),
             num_class,
             feature_dim,
             device,
-            batch_size,
-        )
+        ).to(device)  # extract_prototypes 返回 CPU，这里一次性搬回
+        model.train()  # 其内部置 eval，须恢复训练态（否则破坏后续 BN/随机失活）
 
         # 监督项（Eq.8 第一项）：全部剩余查询集按 batch_size 分批
         # → 本地原型距离概率 → CE(真实标签)，每 batch 一次更新
-        if len(que_idx) > 0:
-            q_loader = DataLoader(
-                TensorDataset(train_set.x[que_idx], que_y),
-                batch_size=batch_size,
-                shuffle=True,
-            )
-            for xq_b, yq_b in q_loader:
-                f_q = model.extractor(xq_b.to(device))  # [B_q, D]
-                p_ii_x = proto_logits(f_q, C_local, 1.0)  # Eq.(6) j=i
-                loss = F.cross_entropy(p_ii_x, yq_b.to(device))
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item()
-                num_batches += 1
+        q_loader = DataLoader(
+            TensorDataset(train_set.x[que_idx], que_y),
+            batch_size=batch_size,
+            shuffle=True,
+        )
+        for xq_b, yq_b in q_loader:
+            f_q = model.extractor(xq_b.to(device))  # [B_q, D]
+            # 本地原型距离概率 → CE(真实标签)（dist_contrastive_loss = Eq.(6)+CE）
+            loss = dist_contrastive_loss(f_q, C_local, yq_b.to(device))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            num_batches += 1
 
         # 无监督项（Eq.8 第二项）：无标签子集分批 → 伪标签 → 本地原型距离概率 → CE
-        if helper_protos is not None and len(unlabeled_idx) > 0:
-            u_idx = unlabeled_idx[
-                torch.randperm(len(unlabeled_idx))[:unlabeled_query_size]
-            ]
-            u_loader = DataLoader(
-                TensorDataset(train_set.x[u_idx]),
-                batch_size=batch_size,
-                shuffle=True,
-            )
-            for (xu_b,) in u_loader:
-                f_u = model.extractor(xu_b.to(device))  # [B_u, D]
-                p_bar_u = pseudolabel(f_u, helper_protos, sharpen_T)  # [B_u, K] soft
-                p_ii_u = proto_logits(f_u, C_local, 1.0)  # Eq.(6) j=i
-                loss_unsup = lambda_ * F.cross_entropy(p_ii_u, p_bar_u)
-                optimizer.zero_grad()
-                loss_unsup.backward()
-                optimizer.step()
-                total_loss += loss_unsup.item()
-                num_batches += 1
+        u_idx = unlabeled_idx[torch.randperm(len(unlabeled_idx))[:unlabeled_query_size]]
+        u_loader = DataLoader(
+            TensorDataset(train_set.x[u_idx]),
+            batch_size=batch_size,
+            shuffle=True,
+        )
+        for (xu_b,) in u_loader:
+            f_u = model.extractor(xu_b.to(device))  # [B_u, D]
+            p_bar_u = pseudolabel(f_u, helper_protos, sharpen_T)  # [B_u, K] soft
+            if p_bar_u is None:
+                # 首轮 H_r 为空（无辅助客户端原型），无监督项跳过
+                continue
+            # 本地原型距离概率 → CE(soft 伪标签)（dist_contrastive_loss = Eq.(6)+CE）
+            loss_unsup = lambda_ * dist_contrastive_loss(f_u, C_local, p_bar_u)
+            optimizer.zero_grad()
+            loss_unsup.backward()
+            optimizer.step()
+            total_loss += loss_unsup.item()
+            num_batches += 1
 
     avg_loss = total_loss / max(1, num_batches)
 
-    # 4. 最终原型：用全量有标签数据 D_{i,k}^L（RunClient 步骤3, Eq.2 全量版）
-    final_protos = _group_prototypes(
+    # 3. 最终原型：用全量有标签数据 D_{i,k}^L（RunClient 步骤3, Eq.2 全量版）
+    #    counts = 每类有标签样本数，由 extract_prototypes 的 bincount 直接给出
+    final_protos, final_counts = extract_prototypes(
         model,
-        train_set.x,
-        labeled_idx,
-        y[labeled_idx],
+        DataLoader(Subset(full_ds, labeled_idx), batch_size=batch_size),
         num_class,
         feature_dim,
         device,
-        batch_size,
-    )
-    final_counts = torch.tensor(
-        [len(labeled_idx_by_class.get(k, [])) for k in range(num_class)],
-        dtype=torch.float32,
+        return_counts=True,
     )
 
-    # 5. 整理返回（CPU 化以防 Ray 对象存储悬空引用）
+    # 4. 整理返回
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     return {
         "loss": avg_loss,
         "state": model_state,
-        "protos": final_protos.cpu(),
-        "counts": final_counts.cpu(),
+        "protos": final_protos,
+        "counts": final_counts,
     }
 
 
@@ -331,10 +265,11 @@ class Server(BaseServer):
             if self.args.sfd:
                 src = f"{self.acc_source[-1]:.2f}%" if self.acc_source else "N/A"
                 tgt = f"{self.acc_target[-1]:.2f}%" if self.acc_target else "N/A"
+                acc = f"{self.acc[-1]:.2f}%" if self.acc else "N/A"
                 sp = f"{self.acc_source_p[-1]:.2f}%" if self.acc_source_p else "N/A"
                 tp = f"{self.acc_target_p[-1]:.2f}%" if self.acc_target_p else "N/A"
                 print(
-                    f"Source Acc: {src}, Target Acc: {tgt}, "
+                    f"Global Acc: {acc}, Source Acc: {src}, Target Acc: {tgt}, "
                     f"Source Proto: {sp}, Target Proto: {tp}, "
                     f"Avg Loss: {self.loss[-1]:.4f}"
                 )
