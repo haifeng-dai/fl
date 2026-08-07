@@ -69,7 +69,7 @@ def beautify_label(name):
 
 
 class ResultLoader:
-    def __init__(self, base_dir="results_ray"):
+    def __init__(self, base_dir="results"):
         self.base_dir = base_dir
         self.algo_patterns = {
             "fedala": lambda args: (

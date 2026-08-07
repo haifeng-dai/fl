@@ -195,8 +195,8 @@ def get_pre_name(args):
             fold_path += f"_{args.n_class}"
 
     args.common_name = f"{args.epochs}_{args.batch_size}_{args.lr}"
-    base_save = os.path.join("results_ray", fold_path)
-    base_log = os.path.join("logs_ray", fold_path)
+    base_save = os.path.join("results", fold_path)
+    base_log = os.path.join("logs", fold_path)
     ablate_name = getattr(args, "ablate_name", None)
     if ablate_name:
         args.save_path = os.path.join(base_save, ablate_name)

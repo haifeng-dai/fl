@@ -44,8 +44,6 @@ def init_ray(args):
             "__pycache__",
             "results",
             "logs",
-            "results_ray",
-            "logs_ray",
             "datasets",
             "*.pth",
             "*.pt",

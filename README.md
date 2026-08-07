@@ -42,8 +42,8 @@ uv run main.py -a fedavg -t 1
 
 - **全局默认配置**: `configs/default.yaml`
 - **算法专属配置**: `configs/algorithms.yaml`（支持超参数搜索，只需将参数设为列表即可自动展开）。
-- **实验结果存储**: `results_ray/`
-- **运行日志存储**: `logs_ray/`
+- **实验结果存储**: `results/`
+- **运行日志存储**: `logs/`
 
 ## 🧩 域划分与半监督（测试集生成规则）
 
