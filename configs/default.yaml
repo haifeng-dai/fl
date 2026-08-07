@@ -1,0 +1,103 @@
+# 全局默认配置 (Global Defaults)
+
+# 数据相关 (Data)
+dataset: # cifar10, cifar100, cinic10, tiny_imagenet, mnist, fashionmnist, emnist
+    # - cifar10
+    # - cifar100
+    # - cinic10
+    # - tiny_imagenet
+    # - mnist
+    - cifar10_dg
+model:
+    - cnn
+    # - resnet18
+feature_dim: 512
+num_clients:
+    - 20
+    # - 100
+partition:
+    # - dirichlet
+    # - pathological
+    - iid
+alpha: 0.1 # dirichlet 异质性强度；类别划分下控制客户端类分布，FDG/SFD 模式下同时控制「每个域内部」的类分布异质
+n_class: 0 # 0 表示自动根据数据集选择
+test_ratio: 0.2 # FDG 下源域 test_ratio=0（不留存源域测试集，目标域整体打散进各客户端 test）；仅对 SFD / 类别划分生效
+
+# 训练相关 (Training)
+rounds: 1000 # pFL: 500, gFL: 1000, 0 表示自动调整
+epochs: 1
+lr: 0.01
+momentum: 0.0
+weight_decay: 0.0
+batch_size: 64
+join_ratio: 1.0
+seed: 42
+times: 1
+
+# 资源与框架 (Resources & Ray)
+gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
+# gpus: "0,1"
+# gpus: "2,3"
+# gpus: "3,1,2"
+max_workers_per_gpu: 5
+test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)，可用 -t 在命令行中快速开启
+
+# ── 维度一：数据划分（partition 布尔开关）────────────────────────────
+# 不适用数据分布异质性
+# FDG（Federated Domain Generalization）：源域全部作为训练集，目标域整体作为测试集。
+#   源域不保留测试集（test_ratio 对源域无效）；目标域样本均分打散到各客户端 test
+#   （不参与训练），评估时合并全局测试集即全目标域样本；二值互斥。
+fdg: false # true=开启域泛化 FDG；false/缺省=类别划分
+selected_domains: "clean,rotate_cutout" # 逗号分隔字符串，参与划分的域集合，仅 FDG 模式生效。
+#   FDG 下「源域」= selected_domains 中除 target_domain 外的域（全部用于训练）；
+#   「目标域」= target_domain（样本均分进各客户端 test，不进入训练）。
+target_domain: rotate_cutout # str，仅 FDG 模式生效：该域为测试
+
+# ── 维度二：半监督策略（ssl）─────────────────────────────────────────
+# 适用数据分布异质性
+#  none    : 全监督
+#  sample  : 场景B——每客户端同时含标签+未标签，按 label_ratio 比例掩码每客户端内样本（同分布）。仅类别划分。
+#  client  : 场景A——部分客户端全标签、其余全无标签，按 label_ratio 选有标签客户端（同分布）。仅类别划分。
+#  组合约束：
+#    类别划分下可用 ssl = none / sample / client
+#    ssl=sample/client 不与 DG 叠加
+ssl: none # none | sample | client
+label_ratio:
+    0.5 # float (0~1]
+    #   ssl=sample -> 每客户端内有标签样本比例
+    #   ssl=client -> 有标签客户端比例
+    #   ssl=none / domain -> 本项不参与
+lam: 1.0 # float，fedtest 无监督损失权重；0 = 退化为纯监督。
+confidence_threshold: 0.95 # float，fedtest FixMatch 伪标签置信度阈值。
+
+# —— 纬度三：
+# 适用数据分布异质性，两个域都适用
+sfd: true # bool，是否使用 SFD 策略，与上述两种互斥（当前配置走 DG/FDG）
+label_domain: clean # str，指定训练域。
+unlabel_domain: rotate_cutout # str，指定无标签域。
+label_rate: 0.5 # float，标签域样本比例。有标签数据应该少于无标签数据，所以有标签域数据乘一个比例减少
+
+# 去中心化网络拓扑 (Network Topology)
+# ring, complete, random, small_world, scale_free, star
+adj_type: ring
+edge_p: 0.0 # random / small_world
+k_small_world: # small_world
+    - 2
+    # - 4
+    # - 6
+    # - 8
+    # - 10
+    # - 12
+    # - 14
+    # - 16
+    # - 18
+m_scale_free: # scale_free
+    - 2
+    # - 4
+    # - 6
+    # - 8
+    # - 10
+    # - 12
+    # - 14
+    # - 16
+    # - 18
