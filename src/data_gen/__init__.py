@@ -1,211 +1,55 @@
-import importlib
 import os
 
-import numpy as np
 import torch
 
+from .partition import (
+    apply_label_ratio_client,
+    apply_label_ratio_sample,
+    prepare_fdg_data,
+    prepare_label_data,
+    prepare_sfd_data,
+)
+from .partition.common import get_output_dir, is_fresh
+from .process import process_dataset
 
-def split_indices_by_class(targets, test_ratio):
+__all__ = [
+    "prepare_data",
+    "get_output_dir",
+]
+
+
+def prepare_data(args):
+    """数据划分总入口（三维模型，优先级 sfd > fdg > category）。
+
+    - sfd=true ：SFD 双域半监督场景（域偏移 + 类异质 + 半监督），
+        完整流程内聚于 partition/sfd.py（域划分 + is_labeled 掩码）。
+    - fdg=true ：FDG 纯域泛化，源域全训练、目标域作测试，
+        完整流程内聚于 partition/fdg.py。
+    - 其余     ：类别划分（iid/dirichlet/pathological）+ 可选 ssl 掩码。
     """
-    先按类别对所有索引进行划分，每个类别内部按 test_ratio 分成训练和测试。
-    """
-    num_classes = len(np.unique(targets))
-    indices_by_class = [np.where(targets == i)[0] for i in range(num_classes)]
-
-    train_indices_by_class = []
-    test_indices_by_class = []
-
-    for c_idx in indices_by_class:
-        np.random.shuffle(c_idx)
-        split = int(len(c_idx) * (1 - test_ratio))
-        train_indices_by_class.append(c_idx[:split])
-        test_indices_by_class.append(c_idx[split:])
-
-    return train_indices_by_class, test_indices_by_class, num_classes
-
-
-# --- 分区方法 ---
-
-
-def iid_partition(train_indices_by_class, test_indices_by_class, num_clients):
-    client_train_indices = [[] for _ in range(num_clients)]
-    client_test_indices = [[] for _ in range(num_clients)]
-
-    for k in range(len(train_indices_by_class)):
-        # Train
-        tr_k = train_indices_by_class[k]
-        tr_splits = np.array_split(tr_k, num_clients)
-        # Test
-        te_k = test_indices_by_class[k]
-        te_splits = np.array_split(te_k, num_clients)
-
-        for i in range(num_clients):
-            client_train_indices[i].append(tr_splits[i])
-            client_test_indices[i].append(te_splits[i])
-
-    return (
-        [np.concatenate(idx) for idx in client_train_indices],
-        [np.concatenate(idx) for idx in client_test_indices],
-    )
-
-
-def dirichlet_partition(
-    train_indices_by_class, test_indices_by_class, num_clients, alpha=0.5
-):
-    client_train_indices = [[] for _ in range(num_clients)]
-    client_test_indices = [[] for _ in range(num_clients)]
-    num_classes = len(train_indices_by_class)
-
-    for k in range(num_classes):
-        proportions = np.random.dirichlet([alpha] * num_clients)
-
-        # 划分训练集
-        tr_k = train_indices_by_class[k]
-        tr_counts = (np.cumsum(proportions) * len(tr_k)).astype(int)[:-1]
-        tr_splits = np.split(tr_k, tr_counts)
-
-        # 划分测试集（使用相同的比例）
-        te_k = test_indices_by_class[k]
-        te_counts = (np.cumsum(proportions) * len(te_k)).astype(int)[:-1]
-        te_splits = np.split(te_k, te_counts)
-
-        for i in range(num_clients):
-            client_train_indices[i].append(tr_splits[i])
-            client_test_indices[i].append(te_splits[i])
-
-    return (
-        [np.concatenate(idx) for idx in client_train_indices],
-        [np.concatenate(idx) for idx in client_test_indices],
-    )
-
-
-def pathological_partition(
-    train_indices_by_class, test_indices_by_class, num_clients, n_classes_per_client=2
-):
-    num_classes = len(train_indices_by_class)
-    client_train_indices = [[] for _ in range(num_clients)]
-    client_test_indices = [[] for _ in range(num_clients)]
-
-    total_slots = num_clients * n_classes_per_client
-
-    if total_slots < num_classes:
-        raise ValueError(
-            f"[Pathological Partition Error] 总需求分片数 ({total_slots}) 小于类别总数 ({num_classes})。\n"
-            f"请增加 num_clients 或 n_classes_per_client。"
-        )
-
-    # 计算每个类别应该被分成的片数
-    # 例如：total_slots=50, num_classes=43 => 7个类2片, 36个类1片
-    shards_per_class_list = [total_slots // num_classes] * num_classes
-    remainder = total_slots % num_classes
-    for i in range(remainder):
-        shards_per_class_list[i] += 1
-
-    train_shards = []
-    test_shards = []
-    for k in range(num_classes):
-        shards_for_this_class = shards_per_class_list[k]
-        if shards_for_this_class == 0:
-            train_shards.append([])
-            test_shards.append([])
-            continue
-
-        if len(train_indices_by_class[k]) < shards_for_this_class:
-            raise ValueError(
-                f"[Pathological Partition Error] 类别 {k} 的样本量 ({len(train_indices_by_class[k])}) "
-                f"不足以切分为 {shards_for_this_class} 个分片。"
-            )
-
-        train_shards.append(np.array_split(train_indices_by_class[k], shards_for_this_class))
-        test_shards.append(np.array_split(test_indices_by_class[k], shards_for_this_class))
-
-    shard_ids = []
-    for k in range(num_classes):
-        for s in range(shards_per_class_list[k]):
-            shard_ids.append((k, s))
-
-    np.random.shuffle(shard_ids)
-
-    for i in range(num_clients):
-        for j in range(n_classes_per_client):
-            k, s = shard_ids[i * n_classes_per_client + j]
-            client_train_indices[i].append(train_shards[k][s])
-            client_test_indices[i].append(test_shards[k][s])
-
-    return (
-        [np.concatenate(idx) for idx in client_train_indices],
-        [np.concatenate(idx) for idx in client_test_indices],
-    )
-
-
-def prepare_data(dataset_name, partition_method, num_clients, **kwargs):
+    dataset_name = args.dataset
     raw_dir = "./datasets/raw"
     raw_path = os.path.join(raw_dir, f"{dataset_name}_raw.pt")
-
     if not os.path.exists(raw_path):
         print(f"-> Raw data for {dataset_name} not found. Processing...")
-        module = importlib.import_module(f"src.data_gen.process_{dataset_name}")
-        module.process(raw_dir)
+        process_dataset(dataset_name, raw_dir)
+    raw_data = torch.load(raw_path, weights_only=False)
 
-    # 2. 准备分区文件夹名
-    if partition_method == "iid":
-        part_str = f"iid_n{num_clients}"
-    elif partition_method == "dirichlet":
-        alpha = kwargs.get("alpha", 0.5)
-        part_str = f"dirichlet_n{num_clients}_a{alpha}"
-    elif partition_method == "pathological":
-        n_classes = kwargs.get("n_classes", 2)
-        part_str = f"pathological_n{num_clients}_c{n_classes}"
+    if args.sfd:
+        prepare_sfd_data(args, dataset_name, raw_data)
+    elif args.fdg:
+        prepare_fdg_data(args, dataset_name, raw_data)
     else:
-        raise ValueError(f"未知分区方法: {partition_method}")
-
-    output_dir = os.path.join("./datasets", dataset_name, part_str)
-
-    if os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients:
-        print(f"-> {part_str} partition for {dataset_name} already exists. Skipping.")
-        return
-
-    print(f"-> Partitioning data ({part_str})...")
-    data = torch.load(raw_path, weights_only=False)
-    X, Y = data["x"], data["y"]
-
-    test_ratio = kwargs.get("test_ratio", 0.2)
-
-    # 1. 首先按类别划分训练和测试索引
-    tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(
-        Y.numpy(), test_ratio
-    )
-
-    # 2. 执行分区逻辑
-    if partition_method == "iid":
-        cli_tr_idx, cli_te_idx = iid_partition(
-            tr_idx_by_cls, te_idx_by_cls, num_clients
-        )
-    elif partition_method == "dirichlet":
-        alpha = kwargs.get("alpha", 0.5)
-        cli_tr_idx, cli_te_idx = dirichlet_partition(
-            tr_idx_by_cls, te_idx_by_cls, num_clients, alpha
-        )
-    elif partition_method == "pathological":
-        n_classes = kwargs.get("n_classes", 2)
-        cli_tr_idx, cli_te_idx = pathological_partition(
-            tr_idx_by_cls, te_idx_by_cls, num_clients, n_classes
-        )
-    else:
-        raise ValueError(f"未知分区方法: {partition_method}")
-
-    # 3. 保存客户端数据
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    for i in range(num_clients):
-        client_data = {
-            "train": {"x": X[cli_tr_idx[i]], "y": Y[cli_tr_idx[i]]},
-            "test": {"x": X[cli_te_idx[i]], "y": Y[cli_te_idx[i]]},
-            "num_classes": num_classes,
-        }
-        torch.save(client_data, os.path.join(output_dir, f"client_{i}.pt"))
-
-    print(
-        f"-> 成功为 {num_clients} 个客户端准备了 {dataset_name} ({partition_method})。"
-    )
+        # 默认：类别划分（维度二）；ssl 掩码作为完全独立的后处理步骤
+        output_dir = get_output_dir(args, dataset_name)
+        # 统一判定复用 is_fresh，避免与 domain 分支各自维护一份重复逻辑。
+        fresh = is_fresh(output_dir, args.num_clients)
+        if fresh:
+            prepare_label_data(args, dataset_name, raw_data)
+        # ssl 掩码幂等且与当前 config 绑定（apply_label_ratio_* 每次重算 is_labeled），
+        # 缓存目录名未编码 ssl/label_ratio，故必须按当前配置重新应用，确保配置即时生效。
+        ssl = getattr(args, "ssl", "none")
+        if ssl == "sample":
+            apply_label_ratio_sample(output_dir, args.num_clients, args.label_ratio)
+        elif ssl == "client":
+            apply_label_ratio_client(output_dir, args.num_clients, args.label_ratio)

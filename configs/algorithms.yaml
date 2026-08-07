@@ -1,0 +1,168 @@
+# 算法专属配置 (Algorithm Specific Arguments)
+
+fedtest:
+    confidence_threshold: 0.95
+    mu: 0.01
+
+fedprox:
+    mu: 0.01
+
+scaffold:
+    global_lr: 1.0
+
+feddyn:
+    alpha_coef: 0.1
+
+fedpln:
+    lambda_: 10.0
+    epoch_pln: 10
+    lr_pln: 0.01
+    batch_size_pln: 64
+    depth_pln: 1
+    width_pln: 512
+    mode: normal
+    fixed_proto: 0
+    init_emb: 0
+    har: 0
+
+fedfm:
+    mu: 0.1
+
+moon:
+    mu: 0.01
+    tau: 0.5
+
+fedlsa:
+    lambda_com: 0.1
+    alpha_sep: 0.02
+    server_epochs: 500
+    server_lr: 0.01
+    tau: 0.1
+
+fedrep:
+    epochs_head: 5
+
+fedproto:
+    mu: 0.1
+
+fedala:
+    eta: 1.0
+    rand_percent: 20
+    layer_idx: 1
+    ala_threshold: 0.1
+    num_pre_loss: 10
+
+fedtgp:
+    lamda_: 10.0
+    server_epochs: 10
+    server_lr: 0.01
+    margin_threshold: 1.0
+
+feddpc:
+    lamda_: 100.0
+    lambda_p: 1.0
+    lambda_acl: 0.01
+    head_epochs: 10
+    body_epochs: 1
+    lr_head: 0.01
+    lr_body: 0.01
+    server_epochs: 100
+    server_lr: 0.01
+
+fedkd:
+    lr_g: 0.01
+    energy: 0.9
+
+fml:
+    alpha_fml: 1.0
+    beta_fml: 1.0
+
+fedsa:
+    alpha_sa: 0.9999
+    lambda_r: 0.1
+    lambda_mcl: 0.01
+    lambda_cc: 1.0
+
+l2c:
+    val_ratio: 0.1
+    lr_alpha: 0.1
+    prune_round: 20
+    prune_num: 0
+
+dispfl:
+    dense_ratio: 0.5
+    anneal_factor: 0.5
+    erk_power_scale: 1.0
+
+pearfl:
+    lamda: 0.1
+
+dfedpgp:
+    local_v_epochs: 1
+    lr_v: 0.01
+    momentum_v: 0.0
+    weight_decay_v: 0.0
+
+proxyfl:
+    mu: 0.01
+
+efhc:
+    event_r: 250
+    bandwidth_mean: 5000
+    bandwidth_std: 0.0
+
+protofssl:
+    support_size: 10
+    unlabeled_query_size: 64
+    lambda_: 1.0
+    sharpen_T: 0.5
+
+dfedset:
+    lambda_sa:
+        # - 0
+        - 10
+        # - 20
+        # - 30
+        # - 40
+        # - 50
+        # - 60
+        # - 70
+        # - 80
+        # - 90
+        # - 100
+    eta:
+        # - 0.1
+        # - 0.2
+        # - 0.3
+        # - 0.4
+        # - 0.5
+        # - 0.6
+        # - 0.7
+        # - 0.8
+        - 0.9
+        # - 0.99
+        # - 0.999
+        # - 1
+    lambda_so:
+        # - 0
+        # - 1
+        # - 2
+        # - 3
+        # - 4
+        # - 5
+        # - 6
+        # - 7
+        # - 8
+        # - 9
+        # - 10
+        # - 12
+        # - 14
+        # - 16
+        # - 18
+        - 20
+    ablate:
+        relay: true # false → 无中继，无样本类别直接清零
+        aggregator: true # true → Redirect（默认） | false → Plain 聚合（丢弃沉默边）
+        confidence: count # "count" → 原始样本量  |  "none" → 无置信度
+        trigger: all # "global" → 固定阈值 gamma_global  |  "all" → 全员触发
+        gamma_global: 0.001 # trigger="global" 时使用的固定 GSD 阈值

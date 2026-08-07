@@ -1,147 +1,173 @@
-# 多 GPU 并行联邦学习框架 (Unified Pipeline)
+# Unified Federated Learning Framework (Ray Powered)
 
-本项目是一个高效、可扩展的联邦学习研究框架，旨在简化不同算法在各种数据分布下的实验流程。
+本项目是一个高性能、一站式的多 GPU 并行联邦学习研究框架。它集成了 29 种主流联邦学习算法，并采用 **Ray** 分布式计算后端，为大规模客户端模拟（尤其是 ResNet 等深度模型）提供工业级的稳定性与效率。
 
-## 核心特性
+## 🚀 快速开始
 
-- **一站式入口**: 所有的实验流程（数据下载、划分、训练、评估）均通过 `main.py` 统一管理。
-- **自动数据管理**: 系统会自动检查数据集是否存在。若缺失，将自动调用 `src/data_gen` 中的逻辑进行下载、预处理和按需划分。
-- **高性能模拟**: 内置多 GPU 并行支持，能够显著加速大规模客户端模拟过程，支持为客户端动态分配 GPU 资源。
-- **算法解耦设计**: 算法实现与核心框架解耦，通过动态参数加载机制，支持轻松扩展新算法。
-- **批量实验支持**: 提供 `run.sh` 脚本，支持通过环境变量进行多参数网格搜索和批量实验。
+### 1. 环境准备
 
-## 支持列表
-
-### 📚 算法 (23种)
-
-本项目目前支持以下主流及前沿联邦学习算法：
-
-| 类别 | 算法 | 简介 | 论文/来源 |
-|------|------|------|----------|
-| **基础** | **FedAvg** | 联邦平均算法 | AISTATS 2017 |
-| | **FedProx** | 针对异构数据的近端项优化 | MLSys 2020 |
-| | **LG-FedAvg** | 本地/全局表示解耦 | arXiv 2020 |
-| | **Scaffold** | 使用控制变量缓解客端偏移 | ICML 2020 |
-| | **FedDyn** | 动态正则化联邦学习 | ICLR 2021 |
-| **个性化** | **FedPer** | 个性化层（Base + Personalized Head） | arXiv 2019 |
-| | **FedRep** | 学习表示（Representation Learning） | ICML 2021 |
-| | **FedProto** | 基于原型的联邦学习 | AAAI 2022 |
-| | **FedALA** | 自适应本地聚合 (Adaptive Local Aggregation) | AAAI 2023 |
-| | **FedTGP** | 可训练全局原型 (Trainable Global Prototypes) | -- |
-| | **FedPLN** | 原型学习网络 | -- |
-| | **FedDPL** | 双重原型学习 | -- |
-| | **FedDPL1** | 双重原型学习变体 | -- |
-| | **FedFM** | 特征匹配联邦学习 | -- |
-| | **FedProc** | 原型对比联邦学习 | -- |
-| **蒸馏** | **FedKD** | 知识蒸馏 | -- |
-| | **FML** | 联邦互学习 (Federated Mutual Learning) | -- |
-| | **ProxyFL** | 代理模型互学习 | -- |
-| **对比学习** | **MOON** | 模型对比学习 | CVPR 2021 |
-| **语义/锚点** | **FedSA** | 语义锚点 (Semantic Anchors) | -- |
-| | **FedLSA** | 位置感知语义锚点 | -- |
-| **其他** | **FedTest** | 测试/实验性算法 | -- |
-| | **Local** | 本地训练基准 (Baseline) | -- |
-
-### 💾 数据集
-
-- **MNIST**: 手写数字识别 (28x28, 1通道)
-- **CIFAR-10**: 通用物体识别 (32x32, 3通道)
-- **CIFAR-100**: 细粒度物体识别 (32x32, 3通道)
-- **HAR**: 人类活动识别 (UCI HAR Dataset)
-- **HAR-Feat**: 预处理的 HAR 特征数据
-
-### 🧬 数据划分策略
-
-- **IID**: 独立同分布，随机均匀划分。
-- **Dirichlet (Non-IID)**: 基于狄利克雷分布划分 (`--alpha` 参数控制异构程度)。
-- **Pathological (Non-IID)**: 病态非独立同分布，每个客户端只拥有有限个类别 (`--n_class` 参数控制)。
-
-## 目录结构
-
-```text
-├── main.py              # 项目唯一运行入口，负责解析参数与调度
-├── run.sh               # 批量实验启动脚本 (推荐入口)
-├── src/                 # 核心代码
-│   ├── data_gen/        # 数据处理脚本 (MNIST, CIFAR, HAR等)
-│   ├── models/          # 模型架构定义 (CNN, ResNet18/50, HARCNN等)
-│   ├── utils/           # 通用工具 (BaseServer, 并行化, 聚合, 评估)
-│   ├── fedavg.py        # 算法实现示例
-│   ├── fedproto.py      # ...
-│   ├── fedala.py        # ...
-│   ├── fedtgp.py        # ...
-│   └── ...              # 其他算法文件
-├── scripts/             # 算法专属运行脚本 (由 run.sh 调用)
-└── datasets/            # 存储生成的持久化数据集
-```
-
-## 快速开始
-
-### 1. 环境配置
-
-本项目推荐使用 [uv](https://github.com/astral-sh/uv) 管理 Python 依赖：
+推荐使用 `uv` 进行依赖管理：
 
 ```bash
+git checkout ray  # 确保在 Ray 分支
 uv sync
 ```
 
-### 2. 运行单个实验
+### 2. 运行实验
 
-通过 `uv run main.py` 启动实验，可以灵活配置各项参数：
-
-```bash
-# 运行 FedAvg (Dirichlet 划分, alpha=0.5)
-uv run main.py --algo fedavg --dataset mnist --partition dirichlet --alpha 0.5 --num_clients 10 --gpus 0
-
-# 运行 FedALA (自定义参数)
-uv run main.py --algo fedala --dataset cifar10 --partition dirichlet --alpha 0.1 \
-    --eta 1.0 --rand_percent 80 --layer_idx 2
-```
-
-### 3. 运行批量实验 (推荐)
-
-使用 `run.sh` 可以方便地配置多组参数进行批量实验。
+现在系统采用 **Config-First** 架构，所有参数优先从 YAML 加载，并支持命令行动态覆盖。
 
 ```bash
-# 编辑 run.sh 配置参数
-# export ALGO="fedavg,fedproto,fedala"
-# export DATASETS="mnist,cifar10"
+# 基本运行 (使用 configs/default.yaml 中的默认配置)
+uv run main.py --algo fedavg
 
-# 启动实验
-./run.sh
+# 大规模并行运行 (指定 4 块 GPU, 每块卡跑 3 个并发, 使用 ResNet18)
+uv run main.py --algo fedprox --model resnet18 --dataset cifar100 --gpus 0,1,2,3 --max_workers_per_gpu 3
+
+# 快速测试模式 (不记录文件，直接输出到终端)
+uv run main.py -a fedavg -t 1
 ```
 
-## 参数说明
+## 🛠️ 核心参数说明
 
-实验参数分为以下几组：
+- `-a, --algo`: 算法名称（支持 FedAvg, FedProx, Scaffold, FedRep, FedALA 等 23 种）。
+- `--model`: 模型架构（支持 cnn, resnet18, resnet50, harcnn 等）。
+- `--dataset`: 数据集（支持 cifar10/100, mnist, tiny_imagenet 等）。
+- `--max_workers_per_gpu`: **关键资源参数**。每块 GPU 上同时运行的 Worker 数量（如 2 表示单卡 2 并行）。
+- `--gpus`: 指定物理 GPU 编号（如 `0,1,2,3`）。
+- `-t, --test 1`: 开启测试模式，日志将直接输出到终端而非文件。
+- `-r, --num_runs`: 覆盖实验重复次数（对应 YAML 中的 `times`）。
 
-- **通用参数**:
-    - `--algo`: 算法名称 (如 `fedavg`, `fedproto`, `fedala`)。
-    - `--dataset`: 数据集名称。
-    - `--model`: 模型架构 (`cnn`, `resnet18`, `resnet50`, `harcnn` 等)。
-    - `--partition`: 数据划分策略。
-    - `--num_clients`: 客户端总数。
-    - `--rounds`: 通信轮数。
-    - `--epochs`: 本地训练轮数。
-    - `--batch_size`: 批次大小。
-    - `--lr`: 学习率。
-    - `--gpus`: 使用的 GPU (如 `0,1`)。
-    - `--mp`: 是否启用多进程 (1=开启, 0=关闭)。
+## 📂 配置与结果管理
 
-- **算法特定参数**:
-    - **FedProto**: `--mu` (原型损失权重)
-    - **FedALA**: `--eta`, `--rand_percent`, `--layer_idx`
-    - **FedTGP**: `--lamda` (TGP损失权重), `--server_epochs`
-    - (更多参数请参考各算法源码中的 `add_args` 函数)
+- **全局默认配置**: `configs/default.yaml`
+- **算法专属配置**: `configs/algorithms.yaml`（支持超参数搜索，只需将参数设为列表即可自动展开）。
+- **实验结果存储**: `results_ray/`
+- **运行日志存储**: `logs_ray/`
 
-## 扩展指南
+## 🧩 域划分与半监督（测试集生成规则）
 
-### 添加新算法
-1. 在 `src/` 目录下创建算法文件 (例如 `src/new_algo.py`)。
-2. 实现 `add_args(parser)` 注册参数。
-3. 实现 `client_worker(params)` 定义客户端行为。
-4. 实现 `Server(BaseServer)` 定义服务器行为。
-5. 在 `main.py` 的算法列表中注册新算法名。
-6. (可选) 在 `scripts/` 下创建脚本并在 `run.sh` 中添加支持。
+框架为 Config-First，域相关行为由 `configs/default.yaml` 的 `domain_partition` / `selected_domains` / `unlabeled_domain` / `target_domain` 控制。测试集文件按以下规则生成（与 `src/algorithms/utils/load_data.py` 行为一致）：
+
+- **`source_test.pt`**：只要设置了 `domain_partition`（非空），划分生成时**恒会**产出，包含全部域测试样本的拼接。
+- **`target_test.pt`**：仅当设置 `target_domain`（留一域评估）时生成——该域被移出训练集、单独留作测试；未设置时文件不存在，对应 `self.target_test` 为 `None`，切勿直接遍历。
+- **`selected_domains`**：逗号分隔字符串，仅保留指定域参与训练/测试；与 `target_domain` 互斥（勿用列表，会被框架误判为参数扫描）。
+- **`unlabeled_domain`**：在 `domain_partition` 非空时生效，将该域样本标签掩掉以构造半监督场景。
+
+常见参数组合（传统 FL / 通用半监督 / DG / DG+域掩半监督 / 留一域评估等）见 `configs/default.yaml` 的"组合模式"注释块。
+
+## 📦 数据集支持
+
+### 数据集一览
+
+| 类型 | 数据集 | 分辨率 | 类别 | 推荐模型 |
+|---|---|---|---|---|
+| **通用** | cifar10, cifar100, mnist, fashionmnist, svhn, emnist, femnist | 28×28 ~ 32×32 | 10 ~ 100 | cnn |
+| **高分辨率** | tiny_imagenet, cars, flowers102, gtsrb, cinic10 | 32×32 ~ 224×224 | 10 ~ 200 | resnet18 |
+| **传感器** | har (UCI-HAR) | 9ch 时序 | 6 | harcnn / harmlp |
+| **域泛化** | cifar10_dg, pacs, officehome, vlcs, domainnet | 32×32 ~ 224×224 | 5 ~ 345 | resnet18 |
+
+### 域泛化数据集详情
+
+#### CIFAR-10 DG（合成域，自动下载）
+
+由 CIFAR-10 通过 4 种增广策略生成，无需手动下载。
+
+| 领域 | 增广策略 |
+|---|---|
+| `clean` | 仅 ToTensor + Normalize |
+| `color_jitter` | ColorJitter(亮度/对比度/饱和度/色相) |
+| `blur_noise` | GaussianBlur(3×3) |
+| `rotate_cutout` | RandomRotation(30°) + RandomResizedCrop(32) |
+
+```yaml
+# 配置示例：以 rotate_cutout 为无标签域做半监督
+dataset: cifar10_dg
+model: cnn
+domain_partition: domain_mixed_aware
+unlabeled_domain: rotate_cutout
+```
+
+#### PACS
+
+下载 `pacs.zip` 放到 `./datasets/raw/pacs.zip`：
+
+- 官网：https://sketchx.eecs.qmul.ac.uk/downloads/
+- 4 个域，7 类（dog / elephant / giraffe / guitar / horse / house / person），分辨率 224×224
+
+| 领域 | 说明 |
+|---|---|
+| `photo` | 照片 |
+| `art_painting` | 艺术绘画 |
+| `cartoon` | 卡通 |
+| `sketch` | 素描 |
+
+```yaml
+# 配置示例：mask sketch 域做半监督自训练
+dataset: pacs
+model: resnet18
+domain_partition: domain_as_client
+unlabeled_domain: sketch
+```
+
+#### OfficeHome
+
+下载 `officehome.zip` 放到 `./datasets/raw/officehome.zip`：
+
+- 官网：https://www.hemanthdv.org/officeHomeDataset.html
+- 4 个域，65 类，分辨率 224×224
+
+| 领域 | 说明 |
+|---|---|
+| `Art` | 艺术品 |
+| `Clipart` | 剪贴画 |
+| `Product` | 商品照片 |
+| `RealWorld` | 真实世界 |
+
+#### VLCS
+
+4 个域，5 个共享类（bird / car / chair / dog / person），分辨率 224×224
+
+| 领域 | 来源 |
+|---|---|
+| `VOC2007` | PASCAL VOC 2007 |
+| `LabelMe` | LabelMe |
+| `Caltech101` | Caltech-101 |
+| `SUN09` | SUN09 |
+
+#### DomainNet
+
+自动下载，6 个域，345 类
+
+| 领域 | 说明 |
+|---|---|
+| `clipart` | 剪贴画 |
+| `infograph` | 信息图 |
+| `painting` | 绘画 |
+| `quickdraw` | 涂鸦（灰度，自动转伪 RGB） |
+| `real` | 真实照片 |
+| `sketch` | 素描 |
+
+### 配置切换要点
+
+切换数据集时需调整以下参数：
+
+| 参数 | 通用 → DG | DG → 通用 |
+|---|---|---|
+| `dataset` | `cifar10` → `pacs` | `domainnet` → `mnist` |
+| `model` | `cnn` → `resnet18`（224px 数据集） | `resnet18` → `cnn` |
+| `domain_partition` | `~` → `domain_as_client`（启用域划分） | `domain_as_client` → `~`（关闭） |
+| `partition` | 域划分下无效，可保留 | 生效（`iid` / `dirichlet`） |
+| `unlabeled_domain` | 指定要掩标签的域名 | 不适用，置 `~` |
+| `selected_domains` | 过滤仅保留部分域 | 不适用，置 `~` |
+
+## 📚 支持算法
+
+| 类别           | 算法                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
+| **个性化算法** | FedRep, FedProto, FedALA, FedPer, LG-FedAvg, FedDPC, FedPLN, FedProc, FedTGP, FedKD, FML, ProxyFL, FedFM |
+| **全局基础**   | FedAvg, FedProx, Scaffold, FedDyn, MOON, Local, EFHC, FedSA, FedLSA                                      |
+| **去中心化**   | L2C, PearFL, DispFL, DFedAvgM, DFedPGP, DFedSet                                                          |
+| **双域半监督** | FedTest                                                                                                  |
 
 ---
-*本项目旨在为联邦学习研究提供一个高效且易于扩展的实验平台。*
