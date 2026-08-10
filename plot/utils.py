@@ -76,7 +76,7 @@ class ResultLoader:
                 f"_{_fmt_num(args['eta'])}_{_fmt_num(args['rand_percent'])}_{_fmt_num(args['layer_idx'])}_{_fmt_num(args['ala_threshold'])}_{_fmt_num(args['num_pre_loss'])}"
             ),
             "fedavg": lambda args: "",
-            "feddyn": lambda args: f"_alpha{_fmt_num(args['alpha_coef'])}",
+            "feddyn": lambda args: f"_{_fmt_num(args['alpha_coef'])}",
             "fedfm": lambda args: f"_{_fmt_num(args['mu'])}",
             "fedkd": lambda args: (
                 f"_{_fmt_num(args['lr_g'])}_{_fmt_num(args['energy'])}"
@@ -95,7 +95,7 @@ class ResultLoader:
             "fedsa": lambda args: (
                 f"_{_fmt_num(args['alpha_sa'])}_{_fmt_num(args['lambda_r'])}_{_fmt_num(args['lambda_mcl'])}_{_fmt_num(args['lambda_cc'])}"
             ),
-            "scaffold": lambda args: f"_glr{_fmt_num(args['global_lr'])}",
+            "scaffold": lambda args: f"_{_fmt_num(args['global_lr'])}",
             "fedtgp": lambda args: (
                 f"_{_fmt_num(args['lamda_'])}_{_fmt_num(args['server_epochs'])}_{_fmt_num(args['server_lr'])}_{_fmt_num(args['margin_threshold'])}"
             ),
@@ -107,7 +107,7 @@ class ResultLoader:
             ),
             "lgfedavg": lambda args: "",
             "moon": lambda args: f"_{_fmt_num(args['mu'])}_{_fmt_num(args['tau'])}",
-            "fedtest": lambda args: f"_ray_{_fmt_num(args['use_ray'])}",
+            "fedtest": lambda args: f"_{_fmt_num(args['mu'])}",
             "local": lambda args: "",
             # Decentralized Algorithms
             "l2c": lambda args: (
@@ -126,7 +126,7 @@ class ResultLoader:
                 f"_{get_adj_suffix(args)}_{_fmt_num(args.get('lambda_sa', args.get('mu')))}_{_fmt_num(args['eta'])}_{_fmt_num(args.get('lambda_so', args.get('lambda_cos')))}"
             ),
             "efhc": lambda args: (
-                f"_{get_adj_suffix(args)}_r{_fmt_num(args['event_r'])}_bw{_fmt_num(args['bandwidth_mean'])}"
+                f"_{get_adj_suffix(args)}_{_fmt_num(args['event_r'])}_{_fmt_num(args['bandwidth_mean'])}"
             ),
         }
 
@@ -176,30 +176,6 @@ class ResultLoader:
                 print(f"  [提示] 实验目录不存在: {folder_path}")
             return None
 
-<<<<<<< HEAD
-        # 支持将 times 也作为基础文件名的一部分
-        base_name = f"{kwargs.get('epochs', 10)}_{kwargs.get('batch_size', 64)}_{kwargs.get('lr', 0.01)}"
-
-        suffix_gen = self.algo_patterns.get(algo)
-        if suffix_gen:
-            try: base_name += suffix_gen(kwargs)
-            except KeyError as e:
-                print(f"  [Error] Missing parameter {e} for algo {algo}")
-                return None
-
-        if specific_run is not None:
-            # 如果指定了 specific_run，先检查文件是否存在，避免 torch.load 报错
-            file_path = os.path.join(folder_path, f"{base_name}_{specific_run}.pt")
-            if not os.path.exists(file_path):
-                return None
-            run_indices = [specific_run]
-        else:
-            run_indices = []
-            idx = 0
-            while os.path.exists(os.path.join(folder_path, f"{base_name}_{idx}.pt")):
-                run_indices.append(idx)
-                idx += 1
-=======
         # 构造基础文件名 (包含公共参数前缀)
         common_name = f"{_fmt_num(kwargs['epochs'])}_{_fmt_num(kwargs['batch_size'])}_{_fmt_num(kwargs['lr'])}"
         base_name = common_name
@@ -232,8 +208,6 @@ class ResultLoader:
 
         # 严格匹配
         run_indices = get_indices(base_name)
->>>>>>> 9d133b0d0a0f0f9c5f26c53ce8a9082ae8895029
-
         if not run_indices:
             if specific_run is None or specific_run == 0:
                 print(
@@ -244,28 +218,11 @@ class ResultLoader:
         loaded_data = []
         for idx in run_indices:
             file_path = os.path.join(folder_path, f"{base_name}_{idx}.pt")
-            metrics_path = file_path + ".metrics"
             try:
-<<<<<<< HEAD
-                if os.path.exists(metrics_path):
-                    # 优先加载轻量化缓存
-                    loaded_data.append(torch.load(metrics_path, map_location="cpu", weights_only=True))
-                else:
-                    # 加载原始大文件并生成缓存
-                    data = torch.load(file_path, map_location="cpu", weights_only=False)
-                    if isinstance(data, dict):
-                        metrics = {k: data[k] for k in ["acc", "loss"] if k in data}
-                        if metrics:
-                            try:
-                                torch.save(metrics, metrics_path)
-                            except: pass
-                    loaded_data.append(data)
-=======
                 data = torch.load(file_path, map_location="cpu", weights_only=True)
                 if keys is not None:
                     data = {k: data[k] for k in keys if k in data}
                 loaded_data.append(data)
->>>>>>> 9d133b0d0a0f0f9c5f26c53ce8a9082ae8895029
             except Exception as e:
                 # 真正的加载错误（如文件损坏）才报错
                 print(f"  [Error] Failed to load {file_path}: {e}")
@@ -312,12 +269,6 @@ def plot_results(
                 max_val = max(y)
                 last_10_avg = np.mean(y[-10:]) if len(y) >= 10 else np.mean(y)
                 display_label = beautify_label(label)
-<<<<<<< HEAD
-                plt.plot(y, label=f"{display_label}-Model (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})")
-                summary.append({"Algorithm": f"{display_label}-Model", "Max": max_val, "Last10": last_10_avg})
-
-            pk = "proto" if "proto" in metric_data else "global" if "global" in metric_data else None
-=======
                 plt.plot(
                     y,
                     label=f"{display_label}-Model (Max: {max_val:.4f}, Last10: {last_10_avg:.4f})",
@@ -337,7 +288,6 @@ def plot_results(
                 if "global" in metric_data
                 else None
             )
->>>>>>> 9d133b0d0a0f0f9c5f26c53ce8a9082ae8895029
             if pk:
                 y = metric_data[pk][0:x_lim]
                 max_val = max(y)

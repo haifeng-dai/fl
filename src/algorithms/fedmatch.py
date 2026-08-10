@@ -20,22 +20,20 @@ from .utils import (
 
 
 def get_path(args):
-    """构造实验日志文件名（区分数据划分、学习率、batch size、置信度阈值等关键设定）。"""
+    """构造实验日志文件名（含域配置与算法超参值）。"""
     dp = "sfd" if args.sfd else ("fdg" if args.fdg else None)
     sd = args.selected_domains
     ud = args.unlabel_domain
 
     parts = [args.common_name]
     if dp is not None:
-        parts.append(f"dp{dp}")
+        parts.append(dp)
     if sd:
         sd_str = sd.replace(",", "_") if isinstance(sd, str) else "_".join(map(str, sd))
-        parts.append(f"sd{sd_str}")
+        parts.append(sd_str)
     if ud is not None:
-        parts.append(f"ud{ud}")
-    parts.append(f"lr{fmt_num(args.lr)}")
-    parts.append(f"bs{args.batch_size}")
-    parts.append(f"ci{fmt_num(args.confidence)}")
+        parts.append(ud)
+    parts.append(fmt_num(args.confidence))
 
     args.file_name = "_".join(parts)
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
@@ -48,32 +46,18 @@ class DecomposedModel(nn.Module):
     （保留计算图，梯度可回传至 σ/ψ），评估时 ψ 可按 l1_thres 稀疏化。
     """
 
-    def __init__(self, model, psi_factor, l1_thres):
+    def __init__(self, model, l1_thres):
         super().__init__()
         self.theta = model
         self.sigma = copy.deepcopy(model)
         self.psi = copy.deepcopy(model)
         self.l1_thres = l1_thres
-        # ψ 初始化为 σ 的 psi_factor 倍（官方 0.2），此后 σ 与 ψ 分别被
-        # 两个独立优化器驱动，实现 disjoint learning（监督只动 σ、无监督只动 ψ）。
-        with torch.no_grad():
-            for p, s in zip(self.psi.parameters(), self.sigma.parameters()):
-                p.copy_(s * psi_factor)
-        self.sync_theta()
 
-    def sync_theta(self, sparsify=False):
-        """将 θ 的每个参数重建为 σ + ψ（此时合并结果仍是张量表达式，保留计算图）。
-
-        sparsify=True 时先对 ψ 做硬阈值：|ψ| <= l1_thres 的权重归零（评估阶段用）。
-        θ 的参数改为 Buffer 挂载：
-          - 前向 θ(x) 可正常执行；
-          - 由于 σ/ψ 仍是可求导叶子，θ 前向产生的梯度能经 merged 表达式回传。
-        """
+    def sync_theta(self):
+        """将 θ 的每个参数重建为 σ + ψ（保留计算图，梯度可回传至 σ/ψ）。"""
         for name, sp in self.sigma.named_parameters():
             pp = self.psi.get_parameter(name)
-            merged = sp + (
-                pp * (pp.abs() > self.l1_thres).to(pp.dtype) if sparsify else pp
-            )
+            merged = sp + pp
             target = self.theta
             *mod_path, attr = name.split(".")
             for part in mod_path:
@@ -87,11 +71,10 @@ class DecomposedModel(nn.Module):
         self.psi.load_state_dict(psi_state)
         self.sync_theta()
 
-    def sigma_state_dict_cpu(self):
-        # 回传前搬回 CPU 并克隆，防止 Ray 对象存储出现悬空引用
+    def sigma_state_dict(self):
         return {k: v.cpu().detach().clone() for k, v in self.sigma.state_dict().items()}
 
-    def psi_state_dict_cpu(self):
+    def psi_state_dict(self):
         return {k: v.cpu().detach().clone() for k, v in self.psi.state_dict().items()}
 
 
@@ -114,14 +97,12 @@ def pseudo_labeling(local_logits, helper_logits_list, num_classes):
     """
     votes = F.one_hot(local_logits.argmax(dim=1), num_classes).float()
     for h_logits in helper_logits_list:
-        votes = votes + F.one_hot(h_logits.argmax(dim=1), num_classes).float()
+        votes += F.one_hot(h_logits.argmax(dim=1), num_classes).float()
     return votes.argmax(dim=1)
 
 
 def unsupervised_loss(
-    theta,
-    sigma,
-    psi,
+    dm,
     x,
     helper_models,
     curr_round,
@@ -140,29 +121,28 @@ def unsupervised_loss(
        监督强增强输出，× lambda_a；
     3. L1(ψ) × lambda_l1：稀疏化正则（配合评估时的 l1_thres 硬阈值）；
     4. L2(σ − ψ) × lambda_l2：限制 ψ 偏离 σ 过大（disjoint 约束）。
-    返回 (loss, num_conf)，num_conf 供调用方观测高置信样本规模。
+    返回 loss。
     """
     loss = torch.tensor(0.0, device=x.device)
     # 置信度过滤：仅 max softmax 概率达标的样本进入无监督训练
-    y_probs = torch.softmax(theta(x), dim=1)
+    y_probs = torch.softmax(dm.theta(x), dim=1)
     conf_mask = y_probs.max(dim=1).values >= confidence
     num_conf = int(conf_mask.sum().item())
     if num_conf > 0:
         x_conf = x[conf_mask]
-        y_conf_logits = theta(x_conf)
+        y_conf_logits = dm.theta(x_conf)
         helper_logits = [h(x_conf).detach() for h in helper_models]
         if helper_logits and curr_round > 0:
+            n_helper = len(helper_logits)
             for h_logits in helper_logits:
-                loss = loss + lambda_i * kl_loss(y_conf_logits, h_logits) / len(
-                    helper_logits
-                )
-        y_hard_logits = theta(strong_augment(x_conf))
+                loss += lambda_i * kl_loss(y_conf_logits, h_logits) / n_helper
+        y_hard_logits = dm.theta(strong_augment(x_conf))
         y_pseudo = pseudo_labeling(y_conf_logits.detach(), helper_logits, num_classes)
         loss = loss + lambda_a * ce_loss(y_hard_logits, y_pseudo)
-    for sp, pp in zip(sigma.parameters(), psi.parameters()):
+    for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters()):
         loss = loss + lambda_l1 * pp.abs().sum()
         loss = loss + lambda_l2 * (sp - pp).square().sum()
-    return loss, num_conf
+    return loss
 
 
 def train(params):
@@ -171,7 +151,7 @@ def train(params):
     参数与 Server.fit 中 build_base_params + append 的追加顺序严格对应：
     base 11 项（cid/gpu/states/train_set/model/dataset/lr/batch_size/epochs/
     feature_dim/num_class）+ 轮次动态 2 项（curr_round/helper_psi_states）
-    + 算法专属超参 8 项（confidence/psi_factor/lambda_s/lambda_i/lambda_a/
+    + 算法专属超参 7 项（confidence/lambda_s/lambda_i/lambda_a/
     lambda_l2/lambda_l1/l1_thres）。
     """
     (
@@ -189,7 +169,6 @@ def train(params):
         curr_round,
         helper_psi_states,
         confidence,
-        psi_factor,
         lambda_s,
         lambda_i,
         lambda_a,
@@ -201,7 +180,7 @@ def train(params):
 
     # 1. 重建分解模型：θ 前向实体 + σ/ψ 可训练副本
     model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    dm = DecomposedModel(model, psi_factor, l1_thres)
+    dm = DecomposedModel(model, l1_thres)
     dm.load_sigma_psi(sigma_state, psi_state)
 
     # 2. 两个独立优化器实现 disjoint learning：σ ← 监督损失，ψ ← 无监督损失
@@ -220,18 +199,12 @@ def train(params):
             hm.eval()
             helper_models.append(hm)
 
-    # 4. 按 is_labeled 掩码切出有标签/无标签数据（SFD：label_domain 有标签、unlabel_domain 无标签）
-    labeled_mask = (
-        train_set.is_labeled
-        if train_set.is_labeled is not None
-        else torch.ones(len(train_set), dtype=torch.bool)
-    )
-    x_l = train_set.x[labeled_mask]
-    y_l = train_set.y[labeled_mask]
-    x_u = train_set.x[~labeled_mask]
+    # 4. 按 is_labeled 掩码切出有标签/无标签数据
+    x_l = train_set.x[train_set.is_labeled]
+    y_l = train_set.y[train_set.is_labeled]
+    x_u = train_set.x[~train_set.is_labeled]
 
-    # 5. 无标签批大小按步数反推：两个 loader 长度一致 → zip 严格 1:1 配对，
-    #    保证无标签数据在 num_steps 步内被完整遍历一遍（官方遍历语义）
+    # 5. 无标签批大小按步数反推：两个 loader 长度一致 → zip 严格 1:1 配对，保证无标签数据在 num_steps 步内被完整遍历一遍
     num_steps = round(len(x_l) / batch_size)
     bsize_u = math.ceil(len(x_u) / max(1, num_steps))
 
@@ -252,10 +225,8 @@ def train(params):
             dm.sync_theta()
 
             optimizer_u.zero_grad()
-            loss_u, _ = unsupervised_loss(
-                dm.theta,
-                dm.sigma,
-                dm.psi,
+            loss_u = unsupervised_loss(
+                dm,
                 x_ub,
                 helper_models,
                 curr_round,
@@ -275,8 +246,8 @@ def train(params):
     # 7. 回传：σ/ψ 独立上传（服务端分别聚合），均为 CPU 克隆
     return {
         "loss": total_loss / max(1, num_batches),
-        "sigma": dm.sigma_state_dict_cpu(),
-        "psi": dm.psi_state_dict_cpu(),
+        "sigma": dm.sigma_state_dict(),
+        "psi": dm.psi_state_dict(),
     }
 
 
@@ -295,24 +266,22 @@ class Server(BaseServer):
         self.num_helpers = args.num_helpers  # 每客户端 helper 数量
         self.l1_thres = args.l1_thres  # ψ 稀疏化硬阈值
 
-        # 全局 σ/ψ（等权平均聚合维护）；ψ 初始 = σ × psi_factor
+        # 全局 σ/ψ（等权平均聚合维护）；ψ 初始为零，θ = σ + 0 = σ
         self.sigma_state = {
             k: v.cpu().detach().clone() for k, v in self.model.state_dict().items()
         }
-        self.psi_state = {k: v * args.psi_factor for k, v in self.sigma_state.items()}
+        self.psi_state = {k: torch.zeros_like(v) for k, v in self.sigma_state.items()}
         # 固定噪声输入，用于把客户端模型映射为嵌入向量
         gen = torch.Generator().manual_seed(42)
         self.embedding_noise = torch.randn(1, 3, 32, 32, generator=gen)
-        # 每轮客户端状态缓存（用于嵌入计算与 helper 选取，仅跨一轮有效）
-        self.cid_to_vector = {}
-        self.cid_to_sigma_state = {}
-        self.cid_to_psi_state = {}
+        # 本轮各客户端缓存（helper 选取用，每轮刷新）
+        self.embeddings = {}  # cid -> 客户端模型嵌入向量
+        self.sigmas = {}  # cid -> 客户端上传的共享部分 σ
+        self.psis = {}  # cid -> 客户端上传的个性化部分 ψ（可作他人 helper）
 
     def embed_client(self, cid):
         """将客户端模型映射为嵌入向量：合并 σ+ψ 后对固定噪声输入前向取输出。"""
-        merged = merge_state(
-            self.cid_to_sigma_state[cid], self.cid_to_psi_state[cid], self.l1_thres
-        )
+        merged = merge_state(self.sigmas[cid], self.psis[cid], self.l1_thres)
         self.model.load_state_dict(merged)
         with torch.no_grad():
             vec = self.model(self.embedding_noise).squeeze(0)
@@ -320,11 +289,11 @@ class Server(BaseServer):
 
     def get_helpers(self, cid):
         """按嵌入欧氏距离取该客户端的最近邻 num_helpers 个客户端，返回其 ψ。"""
-        if cid not in self.cid_to_vector:
+        if cid not in self.embeddings:
             return None
-        ids = list(self.cid_to_vector.keys())
-        vectors = torch.stack([self.cid_to_vector[i] for i in ids])
-        dists = torch.cdist(vectors, self.cid_to_vector[cid].unsqueeze(0)).squeeze(1)
+        ids = list(self.embeddings.keys())
+        vectors = torch.stack([self.embeddings[i] for i in ids])
+        dists = torch.cdist(vectors, self.embeddings[cid].unsqueeze(0)).squeeze(1)
         order = torch.argsort(dists).tolist()
         hids = []
         for idx in order:
@@ -333,7 +302,7 @@ class Server(BaseServer):
             hids.append(ids[idx])
             if len(hids) == self.num_helpers:
                 break
-        return [self.cid_to_psi_state[h] for h in hids]
+        return [self.psis[h] for h in hids]
 
     def fit(self):
         num_join = max(1, int(self.num_clients * self.args.join_ratio))
@@ -347,7 +316,7 @@ class Server(BaseServer):
             print(f"Selected clients: {selected}")
 
             # 2. helper 选取：每 h_interval 轮重建一次（基于上一轮嵌入，首轮无）
-            use_helpers = (r + 1) % self.h_interval == 0 and self.cid_to_vector
+            use_helpers = (r + 1) % self.h_interval == 0 and self.embeddings
             helper_map = (
                 {cid: self.get_helpers(cid) for cid in selected} if use_helpers else {}
             )
@@ -360,7 +329,6 @@ class Server(BaseServer):
                     r,
                     helper_map.get(params[0]),
                     self.args.confidence,
-                    self.args.psi_factor,
                     self.args.lambda_s,
                     self.args.lambda_i,
                     self.args.lambda_a,
@@ -375,16 +343,16 @@ class Server(BaseServer):
             sigma_list = []
             psi_list = []
             total_loss = 0.0
-            self.cid_to_vector = {}
-            self.cid_to_sigma_state = {}
-            self.cid_to_psi_state = {}
+            self.embeddings = {}
+            self.sigmas = {}
+            self.psis = {}
             for cid, res in results.items():
                 total_loss += res["loss"]
                 sigma_list.append(res["sigma"])
                 psi_list.append(res["psi"])
-                self.cid_to_sigma_state[cid] = res["sigma"]
-                self.cid_to_psi_state[cid] = res["psi"]
-                self.cid_to_vector[cid] = self.embed_client(cid)
+                self.sigmas[cid] = res["sigma"]
+                self.psis[cid] = res["psi"]
+                self.embeddings[cid] = self.embed_client(cid)
 
             # 5. 等权平均聚合全局 σ 与 ψ
             self.loss.append(total_loss / num_join)
@@ -394,7 +362,10 @@ class Server(BaseServer):
 
             # 6. 评估：ψ 硬阈值稀疏化后合并 σ+ψ 重建 θ
             merged = merge_state(
-                self.sigma_state, self.psi_state, self.l1_thres, sparsify=True
+                self.sigma_state,
+                self.psi_state,
+                self.l1_thres,
+                sparsify=True,
             )
             self.model.load_state_dict(merged)
             self.evaluate()
@@ -410,10 +381,8 @@ class Server(BaseServer):
     def save(self):
         """保存指标与最终参数（global = σ+ψ 合并、sigma、psi 分开存档）。"""
         metrics = {"acc": self.acc, "loss": self.loss}
-        if self.acc_target:
-            metrics["acc_target"] = self.acc_target
-        if self.acc_source:
-            metrics["acc_source"] = self.acc_source
+        metrics["acc_target"] = self.acc_target
+        metrics["acc_source"] = self.acc_source
         params = {
             "global": merge_state(self.sigma_state, self.psi_state, self.l1_thres),
             "sigma": self.sigma_state,

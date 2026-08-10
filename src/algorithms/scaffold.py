@@ -14,7 +14,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_glr{fmt_num(args.global_lr)}"
+    args.file_name = f"{args.common_name}_{fmt_num(args.global_lr)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

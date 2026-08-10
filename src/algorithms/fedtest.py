@@ -17,21 +17,20 @@ from .utils import (
 
 
 def get_path(args):
-    # 仅纳入 fedtest 实际用到的域相关配置，便于区分不同域设定下的实验结果。
+    """构造实验日志文件名（含域配置与算法超参值）。"""
     dp = "sfd" if args.sfd else ("fdg" if args.fdg else None)
     sd = args.selected_domains
     ud = args.unlabel_domain
-    mu = args.mu
 
     parts = [args.common_name]
     if dp is not None:
-        parts.append(f"dp{dp}")
+        parts.append(dp)
     if sd:
         sd_str = sd.replace(",", "_") if isinstance(sd, str) else "_".join(map(str, sd))
-        parts.append(f"sd{sd_str}")
+        parts.append(sd_str)
     if ud is not None:
-        parts.append(f"ud{ud}")
-    parts.append(f"mu{fmt_num(mu)}")
+        parts.append(ud)
+    parts.append(fmt_num(args.mu))
 
     args.file_name = "_".join(parts)
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")

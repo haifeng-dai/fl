@@ -13,7 +13,7 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_alpha{fmt_num(args.alpha_coef)}"
+    args.file_name = f"{args.common_name}_{fmt_num(args.alpha_coef)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

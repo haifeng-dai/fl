@@ -27,7 +27,7 @@ def get_path(args):
 
     args.file_name = (
         f"{args.common_name}_{adj_suffix}"
-        f"_r{fmt_num(args.event_r)}_bw{fmt_num(args.bandwidth_mean)}"
+        f"_{fmt_num(args.event_r)}_{fmt_num(args.bandwidth_mean)}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 

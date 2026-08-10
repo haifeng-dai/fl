@@ -55,7 +55,7 @@ class BaseServer:
 
         # 自适应 Round 调整逻辑
         if self.rounds == 0:
-            self.rounds = 500 if pfl else 1000
+            self.rounds = 1000 if pfl else 200
             args.rounds = self.rounds
             print(
                 f"-> Adaptive Rounds: detected {'PFL' if pfl else 'GFL'} algorithm, setting rounds={self.rounds}"
@@ -272,26 +272,19 @@ def get_model(model_name, dataset_name, n_class, feature_dim):
     """
     模型工厂函数。
     """
-    input_channels = (
-        3
-        if (
-            "cifar" in dataset_name
-            or dataset_name
-            in [
-                "tiny_imagenet",
-                "flowers102",
-                "cars",
-                "gtsrb",
-                "cinic10",
-                "svhn",
-                "pacs",
-                "officehome",
-                "vlcs",
-                "domainnet",
-            ]
-        )
-        else 1
-    )
+    sets = [
+        "tiny_imagenet",
+        "flowers102",
+        "cars",
+        "gtsrb",
+        "cinic10",
+        "svhn",
+        "pacs",
+        "officehome",
+        "vlcs",
+        "domainnet",
+    ]
+    input_channels = 3 if ("cifar" in dataset_name or dataset_name in sets) else 1
     if model_name == "cnn":
         return CNN(input_channels, n_class, feature_dim, dataset_name)
     elif model_name == "resnet18":

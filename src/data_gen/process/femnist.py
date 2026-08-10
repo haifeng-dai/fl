@@ -16,7 +16,11 @@ def process(output_dir="./datasets/raw"):
     )
 
     train_set = datasets.EMNIST(
-        root=output_dir, split="byclass", train=True, download=True, transform=transform
+        root=output_dir,
+        split="byclass",
+        train=True,
+        download=True,
+        transform=transform,
     )
     test_set = datasets.EMNIST(
         root=output_dir,

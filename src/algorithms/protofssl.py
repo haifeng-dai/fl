@@ -16,8 +16,8 @@ from .utils import (
 
 def get_path(args):
     args.file_name = (
-        f"{args.common_name}_lr{fmt_num(args.label_ratio)}"
-        f"_lam{fmt_num(args.lambda_)}_T{fmt_num(args.sharpen_T)}"
+        f"{args.common_name}_{fmt_num(args.label_ratio)}"
+        f"_{fmt_num(args.lambda_)}_{fmt_num(args.sharpen_T)}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
