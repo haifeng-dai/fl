@@ -41,36 +41,43 @@ def save_client_data(
 # ──────────────────────────────────────────────────────────────────────────
 # 目录命名
 # ──────────────────────────────────────────────────────────────────────────
-def partition_basename(partition, num_clients, alpha=0.5, n_classes=2):
-    """仅返回划分短名（不含 dataset_name 前缀），供路径拼接复用。"""
-    if partition == "iid":
-        return f"iid_n{num_clients}"
-    elif partition == "dirichlet":
-        return f"dirichlet_n{num_clients}_a{alpha}"
-    elif partition == "pathological":
-        return f"pathological_n{num_clients}_c{n_classes}"
-    else:
-        raise ValueError(f"Unknown partition method: {partition}")
-
-
 def sanitize(s):
     return s.replace(",", "_").replace(" ", "").replace("/", "_")
+
+
+def resolve_n_class(args, num_classes):
+    """n_class 自适应解析（唯一实现，幂等）。
+
+    args.n_class == 0 表示自动根据数据集类别数与客户端数计算；
+    用户显式指定 (>0) 时保持不变。解析结果写回 args，确保下游
+    （划分目录 / is_fresh 检查 / get_pre_name 路径命名）口径一致。
+    """
+    if args.n_class == 0:
+        args.n_class = max(2, -(-num_classes // args.num_clients))
+    return args.n_class
 
 
 def get_output_dir(args, dataset_name):
     """数据划分输出目录（唯一真源），编码完整场景以避免缓存串味。"""
     n = args.num_clients
-    if args.sfd:
-        ld = args.label_domain
-        ud = args.unlabel_domain
-        lr = args.label_rate
-        part_str = f"sfd_n{n}_a{args.alpha}_l{ld}_u{ud}_r{lr}"
-    elif args.fdg:
-        dom = sanitize(args.selected_domains) if args.selected_domains else "all"
-        td = sanitize(args.target_domain) if args.target_domain else "none"
-        part_str = f"fdg_n{n}_{dom}_t{td}"
+    if args.partition == "iid":
+        part_seg = f"iid_{n}"
+    elif args.partition == "dirichlet":
+        part_seg = f"dirichlet_{n}_{args.alpha}"
+    elif args.partition == "pathological":
+        part_seg = f"pathological_{n}_{args.n_class}"
     else:
-        part_str = partition_basename(args.partition, n, args.alpha, args.n_class)
+        raise ValueError(f"Unknown partition method: {args.partition}")
+    if args.sfd:
+        ld = sanitize(args.label_domain)
+        ud = sanitize(args.unlabel_domain)
+        part_str = f"sfd_{part_seg}_{ld}_{ud}_{args.label_rate}"
+    elif args.fdg:
+        dom = sanitize(args.selected_domains)
+        td = sanitize(args.target_domain)
+        part_str = f"fdg_{part_seg}_{dom}_{td}"
+    else:
+        part_str = part_seg
     return os.path.join("./datasets", dataset_name, part_str)
 
 
@@ -105,7 +112,7 @@ def per_domain_train_test_split(all_domains, test_ratio):
     return domain_train_indices, domain_test_indices
 
 
-def _distribute_by_class(
+def distribute_by_class(
     indices_by_class, num_clients, partition, alpha=0.5, n_classes_per_client=2
 ):
     """按类分组的索引列表，以 partition 策略分布到 num_clients 个客户端。
@@ -173,14 +180,14 @@ def hetero_split(idx, n_clients, partition, alpha, Y, n_classes_per_client=2):
     """域内核质：在 idx 所代表的单个域内，按类别做 dirichlet/iid/pathological 异质切分。
 
     仅负责把域子集 idx 按 Y 重新按类分组，实际分布逻辑全部委托给
-    _distribute_by_class（与类别划分共用同一份实现）。
+    distribute_by_class（与类别划分共用同一份实现）。
     """
     if len(idx) == 0:
         return [np.array([], dtype=int) for _ in range(n_clients)]
     labels = Y[idx].numpy()
     uniq = np.unique(labels)  # 所有类
     indices_by_class = [idx[labels == c] for c in uniq]
-    client_idx = _distribute_by_class(
+    client_idx = distribute_by_class(
         indices_by_class, n_clients, partition, alpha, n_classes_per_client
     )
     return [

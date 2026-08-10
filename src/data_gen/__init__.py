@@ -9,7 +9,7 @@ from .partition import (
     prepare_label_data,
     prepare_sfd_data,
 )
-from .partition.common import get_output_dir, is_fresh
+from .partition.common import get_output_dir, is_fresh, resolve_n_class
 from .process import process_dataset
 
 __all__ = [
@@ -34,6 +34,7 @@ def prepare_data(args):
         print(f"-> Raw data for {dataset_name} not found. Processing...")
         process_dataset(dataset_name, raw_dir)
     raw_data = torch.load(raw_path, weights_only=False)
+    resolve_n_class(args, raw_data["num_classes"])
 
     if args.sfd:
         prepare_sfd_data(args, dataset_name, raw_data)
@@ -48,7 +49,7 @@ def prepare_data(args):
             prepare_label_data(args, dataset_name, raw_data)
         # ssl 掩码幂等且与当前 config 绑定（apply_label_ratio_* 每次重算 is_labeled），
         # 缓存目录名未编码 ssl/label_ratio，故必须按当前配置重新应用，确保配置即时生效。
-        ssl = getattr(args, "ssl", "none")
+        ssl = args.ssl
         if ssl == "sample":
             apply_label_ratio_sample(output_dir, args.num_clients, args.label_ratio)
         elif ssl == "client":

@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import yaml
 
+from .data_gen.partition.common import sanitize
+
 
 def load_yaml(path):
     if not os.path.exists(path):
@@ -129,6 +131,9 @@ def expand_sweep(config_dict):
 
 
 def _apply_ablation(configs, ablation_str):
+    for cfg in configs:
+        cfg.ablate_name = None
+        cfg.ablate = {}
     if ablation_str is None:
         return configs
     fields = [f.strip() for f in ablation_str.split(",")]
@@ -163,41 +168,42 @@ def _apply_ablation(configs, ablation_str):
 
 def get_pre_name(args):
     """设置并创建实验所需的保存路径和日志路径"""
-    sfd = getattr(args, "sfd", False)
-    fdg = getattr(args, "fdg", False)
+    sfd = args.sfd
+    fdg = args.fdg
+    ssl = args.ssl
+
+    # partition 片段：{partition}_{n} + dirichlet 加 alpha / pathological 加 n_class
+    part_seg = f"{args.partition}_{args.num_clients}"
+    if args.partition == "dirichlet":
+        part_seg += f"_{args.alpha}"
+    elif args.partition == "pathological":
+        part_seg += f"_{args.n_class}"
 
     if sfd:
-        ld = getattr(args, "label_domain", None)
-        ud = getattr(args, "unlabel_domain", None)
-        lr = getattr(args, "label_rate", None)
         fold_path = os.path.join(
             f"{args.algo}",
-            f"sfd_{args.dataset}_{args.model}_n{args.num_clients}_l{ld}_u{ud}_r{lr}",
+            f"{args.dataset}_{args.label_domain}_{args.unlabel_domain}_{args.model}_{part_seg}_{args.label_rate}",
         )
     elif fdg:
-        sd = args.selected_domains
-        sd_str = sd.replace(",", "_") if isinstance(sd, str) else "_".join(map(str, sd))
-        td = getattr(args, "target_domain", None)
         fold_path = os.path.join(
             f"{args.algo}",
-            f"fdg_{args.dataset}_{args.model}_n{args.num_clients}_{sd_str}",
+            f"{args.dataset}_{sanitize(args.selected_domains)}_{sanitize(args.target_domain)}_{args.model}_{part_seg}",
         )
-        if td:
-            fold_path += f"_target_{td}"
+    elif ssl not in (None, "none"):
+        fold_path = os.path.join(
+            f"{args.algo}",
+            f"{args.dataset}_{args.model}_{part_seg}_{args.label_ratio}_{args.lam}_{args.confidence_threshold}",
+        )
     else:
         fold_path = os.path.join(
             f"{args.algo}",
-            f"{args.dataset}_{args.model}_{args.partition}_{args.num_clients}",
+            f"{args.dataset}_{args.model}_{part_seg}",
         )
-        if args.partition == "dirichlet":
-            fold_path += f"_{args.alpha}"
-        elif args.partition == "pathological":
-            fold_path += f"_{args.n_class}"
 
     args.common_name = f"{args.epochs}_{args.batch_size}_{args.lr}"
     base_save = os.path.join("results", fold_path)
     base_log = os.path.join("logs", fold_path)
-    ablate_name = getattr(args, "ablate_name", None)
+    ablate_name = args.ablate_name
     if ablate_name:
         args.save_path = os.path.join(base_save, ablate_name)
         args.log_path = os.path.join(base_log, ablate_name)

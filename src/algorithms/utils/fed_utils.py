@@ -257,7 +257,7 @@ class BaseServer:
         params_path = os.path.join(
             self.args.save_path, name.replace(".pt", "_params.pt")
         )
-        if getattr(self.args, "test", False):
+        if self.args.test:
             print(f"\n-> [Test Mode] Would save metrics to: {metrics_path}")
             print(f"\n-> [Test Mode] Would save params to: {params_path}")
             return

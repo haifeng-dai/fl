@@ -316,8 +316,8 @@ class Server(BaseServer):
 
             # --- 拓扑演化：Top-K 剪枝 (对应伪代码 Line 20-22) ---
             # 仅在特定的 prune_round (T0) 执行
-            prune_round = getattr(self.args, "prune_round", -1)
-            prune_num = getattr(self.args, "prune_num", 0)
+            prune_round = self.args.prune_round
+            prune_num = self.args.prune_num
 
             if round_idx + 1 == prune_round and prune_num > 0:
                 logger.info(

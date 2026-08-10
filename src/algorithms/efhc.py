@@ -89,14 +89,14 @@ class Server(BaseServer):
         self.adj_matrix = generate_adjacency_matrix(args)
         self.mh_weights = compute_mh_weights(self.adj_matrix, device=self.device)
 
-        b_M = getattr(args, "bandwidth_mean", 5000)
-        sigma_N = getattr(args, "bandwidth_std", 0.9)
+        b_M = args.bandwidth_mean
+        sigma_N = args.bandwidth_std
         low = (1.0 - sigma_N) * b_M
         high = (1.0 + sigma_N) * b_M
         rng = np.random.default_rng(42)
         self.bandwidths = rng.uniform(low, high, size=self.num_clients)
         self.rho = [1.0 / b for b in self.bandwidths]
-        self.r = getattr(args, "event_r", 250)
+        self.r = args.event_r
 
         init_sd = self.model.state_dict()
         self.clients_state = [

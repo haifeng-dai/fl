@@ -45,10 +45,7 @@ def run_experiment(args, t):
                 f"Seed: {args.seed} | Start Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             )
 
-            # 4. 数据准备（如果是首次运行则会生成划分，否则直接加载）
-            src.prepare_data(args)
-
-            # 5. 实例化 Server 并执行训练与保存
+            # 4. 实例化 Server 并执行训练与保存
             server = server_cls(args=args)
             server.fit()
             server.save()
@@ -78,10 +75,14 @@ def main():
             f"\n{'#' * 40}\n# Running Task {cfg_idx + 1}/{len(configs)}: {args.algo}\n{'#' * 40}"
         )
 
-        # 2. 初始化实验保存路径
+        # 2. 数据准备（首次运行生成划分并解析 n_class；否则命中缓存直接加载）。
+        #    必须先于 get_pre_name，确保日志/结果路径中的 n_class 为解析后的值。
+        src.prepare_data(args)
+
+        # 3. 初始化实验保存路径（n_class 已解析，可在此编码场景名）
         src.get_pre_name(args)
 
-        # 3. 循环执行多次实验：支持通过 -r/--run_time 指定索引子集
+        # 4. 循环执行多次实验：支持通过 -r/--run_time 指定索引子集
         rt_str = getattr(args, "run_time", None)
         if rt_str is not None:
             trial_indices = [int(x.strip()) for x in rt_str.split(",")]

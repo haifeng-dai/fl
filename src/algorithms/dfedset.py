@@ -177,7 +177,7 @@ class Server(BaseServer):
             #     self.num_clients, num_join_clients, replace=False
             # )
 
-            ablate = getattr(self.args, "ablate", {})
+            ablate = self.args.ablate
             confidence_mode = ablate.get("confidence", "log")
             trigger_mode = ablate.get("trigger", "adaptive")
             use_redirect = ablate.get("aggregator", True)
@@ -279,7 +279,7 @@ class Server(BaseServer):
                 local_trigger.fill_(True)
                 print("  [Ablation] All clients force triggered.")
             elif trigger_mode == "global":
-                gamma_global = getattr(self.args, "gamma_global")
+                gamma_global = self.args.gamma_global
                 if r == 0:
                     local_trigger.fill_(True)
                     lines = [

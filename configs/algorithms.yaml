@@ -119,7 +119,6 @@ protofssl:
 
 fedmatch:
     confidence: 0.75
-    psi_factor: 0.2
     h_interval: 1
     num_helpers: 2
     lambda_s: 1.0

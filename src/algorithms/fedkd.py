@@ -233,10 +233,12 @@ class Server(BaseServer):
     def __init__(self, args):
         super().__init__(True, args)
 
-        # 初始分解运算
+        # 初始分解运算（迁移到 GPU 上执行 SVD）
         self.compressed_params = {}
         for name, param in self.model.state_dict().items():
-            self.compressed_params[name] = decompose_param(param, args.energy)
+            self.compressed_params[name] = decompose_param(
+                param.to(self.device), args.energy
+            )
 
         self.client_wh_states = [None for _ in range(self.num_clients)]
 
@@ -283,29 +285,33 @@ class Server(BaseServer):
 
     def aggregate_svd(self, client_params_list, weights):
         """聚合通过 SVD 压缩的模型参数"""
-        # 1. 在 CPU 上重建所有参数
+        # 1. 在 GPU 上重建并加权聚合所有参数
         aggregated_state_dict = {}
         ref_params = client_params_list[0]
 
         # 从首个客户端开始初始化
         for name in ref_params.keys():
-            param_0 = reconstruct_param(ref_params[name], torch.device("cpu"))
+            param_0 = reconstruct_param(ref_params[name], self.device)
             aggregated_state_dict[name] = param_0 * weights[0]
 
         # 累加剩余的客户端数据
         for i in range(1, len(client_params_list)):
             client_params = client_params_list[i]
             for name in client_params.keys():
-                param = reconstruct_param(client_params[name], torch.device("cpu"))
+                param = reconstruct_param(client_params[name], self.device)
                 aggregated_state_dict[name] += param * weights[i]
 
-        # 2. 更新服务端全局模型
-        self.model.load_state_dict(aggregated_state_dict)
+        # 2. 更新服务端全局模型（CPU 上持有模型）
+        self.model.load_state_dict(
+            {k: v.cpu() for k, v in aggregated_state_dict.items()}
+        )
 
-        # 3. 为下一轮次分发重新进行压缩
+        # 3. 为下一轮次分发重新进行压缩（迁移到 GPU 上执行 SVD）
         self.compressed_params = {}
         for name, param in self.model.state_dict().items():
-            self.compressed_params[name] = decompose_param(param, self.args.energy)
+            self.compressed_params[name] = decompose_param(
+                param.to(self.device), self.args.energy
+            )
 
     def save(self):
         metrics = {"acc": self.acc, "loss": self.loss}

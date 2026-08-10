@@ -21,21 +21,7 @@ from .utils import (
 
 def get_path(args):
     """构造实验日志文件名（含域配置与算法超参值）。"""
-    dp = "sfd" if args.sfd else ("fdg" if args.fdg else None)
-    sd = args.selected_domains
-    ud = args.unlabel_domain
-
-    parts = [args.common_name]
-    if dp is not None:
-        parts.append(dp)
-    if sd:
-        sd_str = sd.replace(",", "_") if isinstance(sd, str) else "_".join(map(str, sd))
-        parts.append(sd_str)
-    if ud is not None:
-        parts.append(ud)
-    parts.append(fmt_num(args.confidence))
-
-    args.file_name = "_".join(parts)
+    args.file_name = f"{args.common_name}_{fmt_num(args.confidence)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 

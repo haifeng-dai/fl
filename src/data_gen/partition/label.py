@@ -2,7 +2,12 @@ import os
 
 import numpy as np
 
-from .common import _distribute_by_class, get_output_dir, save_client_data
+from .common import (
+    distribute_by_class,
+    get_output_dir,
+    resolve_n_class,
+    save_client_data,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -28,7 +33,7 @@ def split_indices_by_class(targets, test_ratio):
 def prepare_label_data(args, dataset_name, raw_data):
     """类别划分（iid / dirichlet / pathological），承载数据分布异质。
 
-    按类分组后委托 _distribute_by_class 完成异质分布（与域内核质 hetero_split
+    按类分组后委托 distribute_by_class 完成异质分布（与域内核质 hetero_split
     共用同一份实现）；ssl 掩码由调用方在划分后独立应用，本函数不感知 ssl 语义。
     DG / SFD 不经过此函数。
     """
@@ -42,7 +47,7 @@ def prepare_label_data(args, dataset_name, raw_data):
     )
 
     if args.n_class == 0:
-        args.n_class = max(2, -(-num_classes // num_clients))
+        args.n_class = resolve_n_class(args, num_classes)
         print(
             f"-> Adaptive n_class: dataset has {num_classes} classes, "
             f"{num_clients} clients, setting n_class={args.n_class}"
@@ -53,10 +58,10 @@ def prepare_label_data(args, dataset_name, raw_data):
     print(f"-> Partitioning data ({os.path.basename(output_dir)})...")
 
     # 训练 / 测试各自按类分组后，共用同一份异质分布实现
-    train_client = _distribute_by_class(
+    train_client = distribute_by_class(
         tr_idx_by_cls, num_clients, partition_method, args.alpha, args.n_class
     )
-    test_client = _distribute_by_class(
+    test_client = distribute_by_class(
         te_idx_by_cls, num_clients, partition_method, args.alpha, args.n_class
     )
     cli_tr_idx = [
