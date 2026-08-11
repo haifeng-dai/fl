@@ -13,7 +13,7 @@ from .common import (
 # ──────────────────────────────────────────────────────────────────────────
 # 类别划分数学（iid / dirichlet / pathological）—— 与数据格式无关，可复用
 # ──────────────────────────────────────────────────────────────────────────
-def split_indices_by_class(targets, test_ratio):
+def split_indices_by_class(targets, test_ratio, rng):
     targets_np = targets.numpy()
     num_classes = len(np.unique(targets_np))
     indices_by_class = [np.where(targets_np == i)[0] for i in range(num_classes)]
@@ -22,7 +22,7 @@ def split_indices_by_class(targets, test_ratio):
     test_indices_by_class = []
 
     for c_idx in indices_by_class:
-        np.random.shuffle(c_idx)
+        rng.shuffle(c_idx)
         split = int(len(c_idx) * (1 - test_ratio))
         train_indices_by_class.append(c_idx[:split])
         test_indices_by_class.append(c_idx[split:])
@@ -41,9 +41,10 @@ def prepare_label_data(args, dataset_name, raw_data):
     num_clients = args.num_clients
 
     X, Y = raw_data["x"], raw_data["y"]
+    rng = np.random.default_rng(args.seed)
 
     tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(
-        Y, args.test_ratio
+        Y, args.test_ratio, rng
     )
 
     if args.n_class == 0:
@@ -54,15 +55,14 @@ def prepare_label_data(args, dataset_name, raw_data):
         )
 
     output_dir = get_output_dir(args, dataset_name)
-
     print(f"-> Partitioning data ({os.path.basename(output_dir)})...")
 
     # 训练 / 测试各自按类分组后，共用同一份异质分布实现
     train_client = distribute_by_class(
-        tr_idx_by_cls, num_clients, partition_method, args.alpha, args.n_class
+        tr_idx_by_cls, num_clients, partition_method, rng, args.alpha, args.n_class
     )
     test_client = distribute_by_class(
-        te_idx_by_cls, num_clients, partition_method, args.alpha, args.n_class
+        te_idx_by_cls, num_clients, partition_method, rng, args.alpha, args.n_class
     )
     cli_tr_idx = [
         np.concatenate(c) if len(c) else np.array([], dtype=int) for c in train_client

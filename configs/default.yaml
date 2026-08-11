@@ -2,29 +2,32 @@
 
 # 数据相关 (Data)
 dataset: # cifar10, cifar100, cinic10, tiny_imagenet, mnist, fashionmnist, emnist
-    # - cifar10
-    # - cifar100
+    - cifar10
+    - cifar100
     # - cinic10
     # - tiny_imagenet
-    # - mnist
-    - cifar10_dg
+    - mnist
+    - fashionmnist
+    # - emnist
+    # - cifar10_dg
 model:
     - cnn
     # - resnet18
 feature_dim: 512
 num_clients:
-    - 20
+    - 10
+    # - 20
     # - 100
 partition:
-    # - dirichlet
-    # - pathological
-    - iid
+    - dirichlet
+    - pathological
+    # - iid
 alpha: 0.1 # dirichlet 异质性强度；类别划分下控制客户端类分布，FDG/SFD 模式下同时控制「每个域内部」的类分布异质
 n_class: 0 # 0 表示自动根据数据集选择
 test_ratio: 0.2 # FDG 下源域 test_ratio=0（不留存源域测试集，目标域整体打散进各客户端 test）；仅对 SFD / 类别划分生效
 
 # 训练相关 (Training)
-rounds: 1000 # pFL: 500, gFL: 1000, 0 表示自动调整
+rounds: 0 # pFL: 1000, gFL: 200, 0 表示自动调整
 epochs: 1
 lr: 0.01
 momentum: 0.0
@@ -32,11 +35,11 @@ weight_decay: 0.0
 batch_size: 64
 join_ratio: 1.0
 seed: 42
-times: 1
+times: 5
 
 # 资源与框架 (Resources & Ray)
-gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
-# gpus: "0,1"
+# gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
+gpus: "0,1"
 # gpus: "2,3"
 # gpus: "3,1,2"
 max_workers_per_gpu: 5
@@ -72,7 +75,7 @@ confidence_threshold: 0.95 # float，fedtest FixMatch 伪标签置信度阈值�
 
 # —— 纬度三：
 # 适用数据分布异质性，两个域都适用
-sfd: true # bool，是否使用 SFD 策略，与上述两种互斥（当前配置走 DG/FDG）
+sfd: false # bool，是否使用 SFD 策略，与上述两种互斥（当前配置走 DG/FDG）
 label_domain: clean # str，指定训练域。
 unlabel_domain: rotate_cutout # str，指定无标签域。
 label_rate: 0.5 # float，标签域样本比例。有标签数据应该少于无标签数据，所以有标签域数据乘一个比例减少

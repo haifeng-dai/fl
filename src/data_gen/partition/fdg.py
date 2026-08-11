@@ -20,6 +20,7 @@ def prepare_fdg_data(args, dataset_name, raw_data):
     - 客户端数据不保存 domains 字段（FDG 训练侧无按域消费方，保持最精简）。
     """
     num_clients = args.num_clients
+    rng = np.random.default_rng(args.seed)
 
     # ── 必要参数检查与处理 ──
     if not args.selected_domains:
@@ -77,7 +78,7 @@ def prepare_fdg_data(args, dataset_name, raw_data):
     )
 
     # 源域全部作为训练集，不留源域测试集（test_ratio=0）
-    tr_idx_by_domain, te_idx_by_domain = per_domain_train_test_split(src_domains, 0.0)
+    tr_idx_by_domain, te_idx_by_domain = per_domain_train_test_split(src_domains, 0.0, rng)
 
     cli_tr, cli_te = domain_as_client_partition(
         tr_idx_by_domain,
@@ -88,6 +89,7 @@ def prepare_fdg_data(args, dataset_name, raw_data):
         partition=args.partition,
         alpha=args.alpha,
         n_classes_per_client=args.n_class,
+        rng=rng,
     )
 
     # 源域索引为源域数组空间，映射回完整索引空间（与目标域索引对齐）

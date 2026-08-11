@@ -25,6 +25,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     """
     num_clients = args.num_clients
     test_ratio = args.test_ratio
+    rng = np.random.default_rng(args.seed)
 
     # ════════════════════════════════════════════════════════════════
     # 第一阶段：参数校验与数据过滤
@@ -79,7 +80,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     #     分配给所有客户端，确保每个客户端同时拿到两个域的数据
     # ════════════════════════════════════════════════════════════════
     tr_idx_by_domain, te_idx_by_domain = per_domain_train_test_split(
-        all_domains, test_ratio
+        all_domains, test_ratio, rng
     )
 
     # label_domain：有标签域，其训练样本后续会被 label_rate 掩码
@@ -89,6 +90,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
         args.partition,
         args.alpha,
         Y,
+        rng,
         args.n_class,
     )
     lbl_te = hetero_split(
@@ -97,6 +99,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
         args.partition,
         args.alpha,
         Y,
+        rng,
         args.n_class,
     )
     # unlabel_domain：无标签域，全部保留但标记为无标签
@@ -106,6 +109,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
         args.partition,
         args.alpha,
         Y,
+        rng,
         args.n_class,
     )
     unlbl_te = hetero_split(
@@ -114,6 +118,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
         args.partition,
         args.alpha,
         Y,
+        rng,
         args.n_class,
     )
 
@@ -131,7 +136,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     #   - unlabel_domain 样本：全部保留，标记为无标签
     # ════════════════════════════════════════════════════════════════
     train_is_labeled = []
-    rng = torch.Generator().manual_seed(42)
+    rng = torch.Generator().manual_seed(args.seed)
     for i in range(num_clients):
         tr = np.array(cli_tr[i], dtype=int)
         arr = np.array([all_domains[idx] for idx in tr])  # 该客户端训练样本的域数组

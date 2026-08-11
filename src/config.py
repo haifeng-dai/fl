@@ -168,10 +168,6 @@ def _apply_ablation(configs, ablation_str):
 
 def get_pre_name(args):
     """设置并创建实验所需的保存路径和日志路径"""
-    sfd = args.sfd
-    fdg = args.fdg
-    ssl = args.ssl
-
     # partition 片段：{partition}_{n} + dirichlet 加 alpha / pathological 加 n_class
     part_seg = f"{args.partition}_{args.num_clients}"
     if args.partition == "dirichlet":
@@ -179,17 +175,17 @@ def get_pre_name(args):
     elif args.partition == "pathological":
         part_seg += f"_{args.n_class}"
 
-    if sfd:
+    if args.sfd:
         fold_path = os.path.join(
             f"{args.algo}",
             f"{args.dataset}_{args.label_domain}_{args.unlabel_domain}_{args.model}_{part_seg}_{args.label_rate}",
         )
-    elif fdg:
+    elif args.fdg:
         fold_path = os.path.join(
             f"{args.algo}",
             f"{args.dataset}_{sanitize(args.selected_domains)}_{sanitize(args.target_domain)}_{args.model}_{part_seg}",
         )
-    elif ssl not in (None, "none"):
+    elif args.ssl not in (None, "none"):
         fold_path = os.path.join(
             f"{args.algo}",
             f"{args.dataset}_{args.model}_{part_seg}_{args.label_ratio}_{args.lam}_{args.confidence_threshold}",

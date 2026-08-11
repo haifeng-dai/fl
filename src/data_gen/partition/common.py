@@ -98,14 +98,14 @@ def is_fresh(output_dir, num_clients):
 # ──────────────────────────────────────────────────────────────────────────
 # 域划分基础工具
 # ──────────────────────────────────────────────────────────────────────────
-def per_domain_train_test_split(all_domains, test_ratio):
+def per_domain_train_test_split(all_domains, test_ratio, rng):
     """每个域内部按 test_ratio 切分训练/测试索引。"""
     unique_domains = sorted(set(all_domains))
     domain_train_indices = {}
     domain_test_indices = {}
     for domain in unique_domains:
         idx = np.where(np.array(all_domains) == domain)[0]
-        np.random.shuffle(idx)
+        rng.shuffle(idx)
         split = int(len(idx) * (1 - test_ratio))
         domain_train_indices[domain] = idx[:split].tolist()
         domain_test_indices[domain] = idx[split:].tolist()
@@ -113,7 +113,7 @@ def per_domain_train_test_split(all_domains, test_ratio):
 
 
 def distribute_by_class(
-    indices_by_class, num_clients, partition, alpha=0.5, n_classes_per_client=2
+    indices_by_class, num_clients, partition, rng, alpha=0.5, n_classes_per_client=2
 ):
     """按类分组的索引列表，以 partition 策略分布到 num_clients 个客户端。
 
@@ -157,7 +157,7 @@ def distribute_by_class(
                 )
             shards.extend(np.array_split(c_idx, shards_per_class_list[k]))
 
-        np.random.shuffle(shards)  # 跨类全局打乱
+        rng.shuffle(shards)  # 跨类全局打乱
         for i in range(num_clients):
             for j in range(n_classes_per_client):
                 client_idx[i].append(shards[i * n_classes_per_client + j])
@@ -168,7 +168,7 @@ def distribute_by_class(
         if partition == "iid":
             splits = np.array_split(c_idx, num_clients)
         else:  # dirichlet
-            props = np.random.dirichlet([alpha] * num_clients)
+            props = rng.dirichlet([alpha] * num_clients)
             counts = (np.cumsum(props) * len(c_idx)).astype(int)[:-1]
             splits = np.split(c_idx, counts)
         for i in range(num_clients):
@@ -176,7 +176,7 @@ def distribute_by_class(
     return client_idx
 
 
-def hetero_split(idx, n_clients, partition, alpha, Y, n_classes_per_client=2):
+def hetero_split(idx, n_clients, partition, alpha, Y, rng, n_classes_per_client=2):
     """域内核质：在 idx 所代表的单个域内，按类别做 dirichlet/iid/pathological 异质切分。
 
     仅负责把域子集 idx 按 Y 重新按类分组，实际分布逻辑全部委托给
@@ -188,7 +188,7 @@ def hetero_split(idx, n_clients, partition, alpha, Y, n_classes_per_client=2):
     uniq = np.unique(labels)  # 所有类
     indices_by_class = [idx[labels == c] for c in uniq]
     client_idx = distribute_by_class(
-        indices_by_class, n_clients, partition, alpha, n_classes_per_client
+        indices_by_class, n_clients, partition, rng, alpha, n_classes_per_client
     )
     return [
         np.concatenate(c) if len(c) else np.array([], dtype=int) for c in client_idx
@@ -199,6 +199,7 @@ def domain_as_client_partition(
     domain_train_indices,  # 域训练集 idx
     domain_test_indices,  # 域测试集 idx
     num_clients,
+    rng,
     Y=None,  # 样本标签
     heterogeneous=False,
     partition="dirichlet",
@@ -228,10 +229,10 @@ def domain_as_client_partition(
 
         if heterogeneous and Y is not None and len(tr_idx) > 0:
             tr_splits = hetero_split(
-                tr_idx, n_for, partition, alpha, Y, n_classes_per_client
+                tr_idx, n_for, partition, alpha, Y, rng, n_classes_per_client
             )
             te_splits = hetero_split(
-                te_idx, n_for, partition, alpha, Y, n_classes_per_client
+                te_idx, n_for, partition, alpha, Y, rng, n_classes_per_client
             )
         else:
             tr_splits = np.array_split(tr_idx, n_for)
