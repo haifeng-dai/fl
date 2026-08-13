@@ -29,6 +29,15 @@ dev = [
 ]
 
 [tool.basedpyright]
+exclude = [
+    "**/__pycache__",
+    ".git",
+    ".venv",
+    "datasets",
+    "logs",
+    "results",
+    "scratch",
+]
 typeCheckingMode = "standard"
 reportPrivateImportUsage = false
 reportPrivateLocalImportUsage = false

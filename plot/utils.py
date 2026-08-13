@@ -107,7 +107,11 @@ class ResultLoader:
             ),
             "lgfedavg": lambda args: "",
             "moon": lambda args: f"_{_fmt_num(args['mu'])}_{_fmt_num(args['tau'])}",
-            "fedtest": lambda args: f"_{_fmt_num(args['mu'])}",
+            "fedtest": lambda args: (
+                f"_{_fmt_num(args['confidence_threshold'])}_{_fmt_num(args['beta'])}"
+                f"_{_fmt_num(args['lambda_pl'])}_{_fmt_num(args['lambda_mixup'])}"
+                f"_{_fmt_num(args['mixup_alpha'])}_{_fmt_num(args['lambda_pa'])}"
+            ),
             "local": lambda args: "",
             # Decentralized Algorithms
             "l2c": lambda args: (

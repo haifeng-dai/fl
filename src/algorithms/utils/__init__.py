@@ -39,6 +39,7 @@ __all__ = [
     "orthogonality_loss",
     "fmt_num",
     "mixup",
+    "extract_protos_ss",
 ]
 
 
@@ -85,6 +86,53 @@ def extract_prototypes(
     if return_counts:
         return protos_cpu, proto_count.cpu().detach().clone()
     return protos_cpu
+
+
+def extract_protos_ss(
+    model, loader, num_class, feature_dim, device, threshold, labeled
+):
+    """按「有标签 / 无标签」分别提取本地原型与样本计数。
+
+    - labeled=True : 使用样本真实标签 y。
+    - labeled=False: 对无标签样本做弱增强取伪标签，仅保留高置信样本。
+    返回 [num_class, feature_dim] 与 [num_class] 的 CPU 张量。
+    """
+    proto_sum = torch.zeros(num_class, feature_dim, device=device)
+    counts = torch.zeros(num_class, device=device)
+
+    model.eval()
+    with torch.no_grad():
+        for x, y, _, is_labeled in loader:
+            x, y, is_labeled = x.to(device), y.to(device), is_labeled.to(device)
+
+            mask = is_labeled if labeled else ~is_labeled
+            if not mask.any():
+                continue
+            x_sel = x[mask]
+            y_sel = y[mask]
+
+            if labeled:
+                targets = y_sel
+                feat = model.extractor(weak_augment(x_sel))
+            else:
+                feat_w = model.extractor(weak_augment(x_sel))
+                logits_w = model.classifier(feat_w)
+                probs = torch.softmax(logits_w[:, num_class:], dim=1)
+                max_probs, pseudo = torch.max(probs, dim=1)
+                conf = max_probs >= threshold
+                if not conf.any():
+                    continue
+                targets = pseudo[conf]
+                feat = feat_w[conf]
+
+            proto_sum.index_add_(0, targets, feat)
+            counts += torch.bincount(targets, minlength=num_class)
+
+    active = counts > 0
+    safe = torch.where(active, counts, torch.ones_like(counts))
+    protos = proto_sum / safe.unsqueeze(1)
+    protos[~active] = 0.0
+    return protos.cpu().detach().clone(), counts.cpu().detach().clone()
 
 
 def mixup(x1, y1, x2, y2, alpha=1.0):

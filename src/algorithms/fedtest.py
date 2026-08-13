@@ -1,24 +1,31 @@
+import math
 import os
 import time
 
 import torch
-from torch.utils.data import ConcatDataset, DataLoader, Subset
+from torch.nn.functional import one_hot
+from torch.utils.data import DataLoader, Subset, TensorDataset
 
 from .utils import (
     BaseServer,
     ce_loss,
+    extract_protos_ss,
     fmt_num,
     get_model,
+    mixup,
     mse_loss,
     proto_aggregate,
-    strong_augment,
-    weak_augment,
 )
 
 
 def get_path(args):
     """构造实验日志文件名（含域配置与算法超参值）。"""
-    args.file_name = f"{args.common_name}_{fmt_num(args.mu)}"
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.confidence_threshold)}"
+        f"_{fmt_num(args.beta)}_{fmt_num(args.lambda_pl)}"
+        f"_{fmt_num(args.lambda_mixup)}_{fmt_num(args.mixup_alpha)}"
+        f"_{fmt_num(args.lambda_pa)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -35,102 +42,16 @@ def extend_classifier(model):
     return model
 
 
-# ═══════════════════════════════════════════════════════════════
-# FixMatch 一致性损失（半监督核心）
-#   有标签: weak_aug → CE(y_true)
-#   无标签: weak_aug → pseudo_label（置信度过滤）
-#           strong_aug → CE(pseudo)
-# ═══════════════════════════════════════════════════════════════
-def fixmatch_loss(
-    model,
-    x,
-    y,
-    is_labeled,
-    n_classes,
-    threshold,
-    lam,
-    global_proto_sup=None,
-    global_proto_unsup=None,
-    mu=0.0,
-):
-    # 原型校准损失分别与「有标签 / 无标签」样本对齐：
-    #   有标签样本 → 全局监督原型 (global_proto_sup[y])
-    #   高置信无标签样本 → 全局无监督原型 (global_proto_unsup[pseudo])
-    loss = torch.tensor(0.0, device=x.device, requires_grad=True)
+def make_2n(block, num_class, label=True):
+    """构造 2n 分类器软目标：label=True -> [block, zeros]，否则 -> [zeros, block]。
 
-    if is_labeled.any():
-        x_l = weak_augment(x[is_labeled])
-        feat = model.extractor(x_l)
-        logits_l = model.classifier(feat)
-        loss = loss + ce_loss(logits_l, y[is_labeled])
-        if global_proto_sup is not None:
-            loss = loss + mu * mse_loss(feat, global_proto_sup[y[is_labeled]])
-
-    unlabeled_mask = ~is_labeled
-    if unlabeled_mask.any() and lam > 0:
-        x_u = x[unlabeled_mask]
-        x_w = weak_augment(x_u)
-        x_s = strong_augment(x_u)
-
-        with torch.no_grad():
-            feat_w = model.extractor(x_w)
-            logits_w = model.classifier(feat_w)
-            probs = torch.softmax(logits_w[:, :n_classes], dim=1)
-            max_probs, pseudo = torch.max(probs, dim=1)
-            confident = max_probs >= threshold
-
-        feat_s = model.extractor(x_s[confident])
-        logits_s = model.classifier(feat_s)
-        loss = loss + lam * ce_loss(logits_s[:, :n_classes], pseudo[confident])
-        if global_proto_unsup is not None and confident.any():
-            loss = loss + mu * mse_loss(feat_s, global_proto_unsup[pseudo[confident]])
-
-    return loss
-
-
-def extract_protos(model, loader, num_class, feature_dim, device, threshold, labeled):
-    """按「有标签 / 无标签」分别提取本地原型与样本计数。
-
-    - labeled=True : 使用样本真实标签 y。
-    - labeled=False: 对无标签样本做弱增强取伪标签，仅保留高置信样本。
-    返回 [num_class, feature_dim] 与 [num_class] 的 CPU 张量。
+    block: [B, num_class] 张量（one-hot 标签 / ema 软概率）。
     """
-    proto_sum = torch.zeros(num_class, feature_dim, device=device)
-    counts = torch.zeros(num_class, device=device)
-
-    model.eval()
-    with torch.no_grad():
-        for x, y, _, is_labeled in loader:
-            x, y, is_labeled = x.to(device), y.to(device), is_labeled.to(device)
-
-            mask = is_labeled if labeled else ~is_labeled
-            if not mask.any():
-                continue
-            x_sel = x[mask]
-            y_sel = y[mask]
-
-            if labeled:
-                targets = y_sel
-                feat = model.extractor(weak_augment(x_sel))
-            else:
-                feat_w = model.extractor(weak_augment(x_sel))
-                logits_w = model.classifier(feat_w)
-                probs = torch.softmax(logits_w[:, :num_class], dim=1)
-                max_probs, pseudo = torch.max(probs, dim=1)
-                conf = max_probs >= threshold
-                if not conf.any():
-                    continue
-                targets = pseudo[conf]
-                feat = feat_w[conf]
-
-            proto_sum.index_add_(0, targets, feat)
-            counts += torch.bincount(targets, minlength=num_class)
-
-    active = counts > 0
-    safe = torch.where(active, counts, torch.ones_like(counts))
-    protos = proto_sum / safe.unsqueeze(1)
-    protos[~active] = 0.0
-    return protos.cpu().detach().clone(), counts.cpu().detach().clone()
+    n = block.shape[0]
+    zeros = torch.zeros((n, num_class), dtype=block.dtype, device=block.device)
+    if label:
+        return torch.cat([block, zeros], dim=1)
+    return torch.cat([zeros, block], dim=1)
 
 
 def train(params):
@@ -146,12 +67,15 @@ def train(params):
         epochs,
         feature_dim,
         num_class,
-        unlabel_domain,
         confidence_threshold,
-        lam,
         global_proto_sup,
         global_proto_unsup,
-        mu,
+        ema_probs,
+        beta,
+        lambda_pl,
+        lambda_mixup,
+        mixup_alpha,
+        lambda_pa,
     ) = params
 
     model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
@@ -167,25 +91,108 @@ def train(params):
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 
     # is_labeled 已由数据层（partition/sfd.py 掩码 / ssl 掩码）正确写入，无需在此运行时重算。
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    # 拆成 labeled / unlabeled 两个 DataLoader，zip 同步训练。
+    x_l = train_set.x[train_set.is_labeled]
+    y_l = train_set.y[train_set.is_labeled]
+    x_u = train_set.x[~train_set.is_labeled]
+
+    num_steps = round(len(x_l) / batch_size)
+    bsize_u = math.ceil(len(x_u) / max(1, num_steps))
+
+    l_loader = DataLoader(TensorDataset(x_l, y_l), batch_size=batch_size, shuffle=True)
+    # 携带样本索引：EMA 按伪标签样本逐个维护，索引对应 x_u 中的行。
+    u_loader = DataLoader(
+        TensorDataset(torch.arange(len(x_u)), x_u),
+        batch_size=bsize_u,
+        shuffle=True,
+    )
+
+    # EMA 伪标签概率缓冲 [n_u, n_class]，跨轮持久；首轮 lazy 初始化。
+    if ema_probs is None:
+        ema_probs = torch.zeros(len(x_u), num_class, device=device)
+    else:
+        ema_probs = ema_probs.to(device)
+
+    full_loader = DataLoader(train_set, batch_size=batch_size, shuffle=False)
 
     total_loss = 0.0
     num_batches = 0
     model.train()
     for _ in range(epochs):
-        for x, y, _, is_labeled in loader:
-            x, y, is_labeled = x.to(device), y.to(device), is_labeled.to(device)
-            loss = fixmatch_loss(
-                model,
-                x,
-                y,
-                is_labeled,
-                num_class,
-                confidence_threshold,
-                lam,
-                g_proto_sup,
-                g_proto_unsup,
-                mu,
+        # 每 epoch 重建 mixup 数据集：数量取有标签/无标签二者较大值，
+        # 随机配对后一次性完成混合，内部循环直接取用。
+        # 全部可能 mixup 组合为 n_l × n_u 种，编号为 0..n_l*n_u-1；
+        # 不放回采样 n_mix = max(n_l, n_u) 个组合，解码得到 (perm_l, perm_u)。
+        n_mix = max(len(x_l), len(x_u))
+        pair_ids = torch.randperm(len(x_l) * len(x_u))[:n_mix]
+        perm_l = pair_ids // len(x_u)
+        perm_u = pair_ids % len(x_u)
+        y_2n_l_all = make_2n(one_hot(y_l[perm_l], num_class).float(), num_class)
+        y_2n_u_all = make_2n(ema_probs[perm_u].cpu(), num_class, label=False)
+        x_mix_all, y1, y2, lam_m = mixup(
+            x_u[perm_u], y_2n_u_all, x_l[perm_l], y_2n_l_all, alpha=mixup_alpha
+        )
+        y_mix_all = lam_m * y1 + (1 - lam_m) * y2
+        m_loader = DataLoader(
+            TensorDataset(x_mix_all, y_mix_all),
+            batch_size=batch_size,
+            shuffle=True,
+        )
+
+        for (x_lb, y_lb), (idx, x_ub), (x_mb, y_mb) in zip(
+            l_loader, u_loader, m_loader
+        ):
+            x_lb, y_lb = x_lb.to(device), y_lb.to(device)
+            idx, x_ub = idx.to(device), x_ub.to(device)
+            x_mb, y_mb = x_mb.to(device), y_mb.to(device)
+
+            # 2n 分类器：前 n 位为真实标签 one-hot，后 n 位补 0 向量
+            y_2n = make_2n(one_hot(y_lb, num_class).float(), num_class)
+            loss_cl = ce_loss(model(x_lb), y_2n)
+
+            # 无监督：后 n 个 logits softmax → EMA 更新 → 阈值过滤
+            logits_u = model(x_ub)
+            probs_u = torch.softmax(logits_u[:, num_class:], dim=1).detach()
+
+            with torch.no_grad():
+                ema_probs[idx] = beta * ema_probs[idx] + (1 - beta) * probs_u
+                max_p, pseudo = ema_probs[idx].max(dim=1)
+                confident = max_p >= confidence_threshold
+
+            loss_pl = torch.tensor(0.0, device=x_ub.device)
+            if confident.any():
+                soft_u = ema_probs[idx][confident]  # [B', C] 软概率
+                soft_2n = make_2n(soft_u, num_class, label=False)
+                logp_2n = torch.log_softmax(logits_u[confident], dim=1)
+                loss_pl = -(soft_2n * logp_2n).sum(dim=1).mean()
+
+            # 原型校准：同域 + 跨域。有标签样本特征对齐监督/无监督原型，
+            # 高置信无标签样本特征对齐无监督/监督原型（跨域项以全局原型为常数锚点）。
+            loss_pa = torch.tensor(0.0, device=x_ub.device)
+            if g_proto_sup is not None:
+                feat_l = model.extractor(x_lb)
+                loss_pa = loss_pa + mse_loss(feat_l, g_proto_sup[y_lb])
+                if g_proto_unsup is not None:
+                    loss_pa = loss_pa + mse_loss(feat_l, g_proto_unsup[y_lb])
+            if g_proto_unsup is not None and confident.any():
+                feat_u = model.extractor(x_ub[confident])
+                loss_pa = loss_pa + mse_loss(
+                    feat_u, g_proto_unsup[pseudo[confident]]
+                )
+                if g_proto_sup is not None:
+                    loss_pa = loss_pa + mse_loss(
+                        feat_u, g_proto_sup[pseudo[confident]]
+                    )
+
+            # mixup 数据集已在 epoch 开头预生成，此处直接使用。
+            prob_m = torch.softmax(model(x_mb), dim=1)
+            loss_mixup = ((prob_m - y_mb) ** 2).mean()
+
+            loss = (
+                loss_cl
+                + lambda_pl * loss_pl
+                + lambda_mixup * loss_mixup
+                + lambda_pa * loss_pa
             )
 
             optimizer.zero_grad()
@@ -198,18 +205,18 @@ def train(params):
     avg_loss = total_loss / max(1, num_batches)
 
     # 本地原型提取：监督（真实标签）与无监督（高置信伪标签）分开计算。
-    proto_sup, count_sup = extract_protos(
+    proto_sup, count_sup = extract_protos_ss(
         model,
-        loader,
+        full_loader,
         num_class,
         feature_dim,
         device,
         confidence_threshold,
         labeled=True,
     )
-    proto_unsup, count_unsup = extract_protos(
+    proto_unsup, count_unsup = extract_protos_ss(
         model,
-        loader,
+        full_loader,
         num_class,
         feature_dim,
         device,
@@ -225,6 +232,7 @@ def train(params):
         "count_sup": count_sup,
         "proto_unsup": proto_unsup,
         "count_unsup": count_unsup,
+        "ema_probs": ema_probs.cpu().detach().clone(),
     }
 
 
@@ -233,12 +241,15 @@ class Server(BaseServer):
         super().__init__(False, args)
         self.unlabel_domain = args.unlabel_domain
         self.confidence_threshold = args.confidence_threshold
-        self.lam = args.lam
-        self.mu = args.mu
+        self.beta = args.beta
 
         # 两组全局原型：分别由监督样本与无监督样本聚合得到，首轮为 None。
         self.global_proto_sup = None
         self.global_proto_unsup = None
+
+        # 逐客户端的 EMA 伪标签概率缓冲（[n_u, n_class]），跨轮持久维护，
+        # 每轮传入 worker 更新后回收。
+        self.ema_probs = {i: None for i in range(self.num_clients)}
 
         self.model = extend_classifier(self.model.cpu())
 
@@ -246,17 +257,6 @@ class Server(BaseServer):
             raise ValueError("fedtest requires unlabel_domain to be set")
         if not self.args.sfd:
             raise ValueError("fedtest requires SFD data (sfd must be enabled)")
-        # SFD 下不同客户端可能只含单一域，故仅在全体客户端域集合的并集里校验，
-        # 不强制每个客户端都包含 unlabel_domain。
-        all_domains = set()
-        for ds in self.train_sets.values():
-            if ds.domain_map is not None:
-                all_domains.update(ds.domain_map.keys())
-        if self.unlabel_domain not in all_domains:
-            raise ValueError(
-                f"fedtest: unlabel_domain '{self.unlabel_domain}' not found in any "
-                f"client data (domains: {sorted(all_domains)})"
-            )
 
     def fit(self):
         num_join = max(1, int(self.num_clients * self.args.join_ratio))
@@ -270,9 +270,7 @@ class Server(BaseServer):
 
             params_list = self.build_base_params(selected)
             for params in params_list:
-                params.append(self.unlabel_domain)
                 params.append(self.confidence_threshold)
-                params.append(self.lam)
                 params.append(
                     self.global_proto_sup.cpu()
                     if self.global_proto_sup is not None
@@ -283,7 +281,12 @@ class Server(BaseServer):
                     if self.global_proto_unsup is not None
                     else None
                 )
-                params.append(self.mu)
+                params.append(self.ema_probs[params[0]])
+                params.append(self.beta)
+                params.append(self.args.lambda_pl)
+                params.append(self.args.lambda_mixup)
+                params.append(self.args.mixup_alpha)
+                params.append(self.args.lambda_pa)
             results = self.run_clients(train, params_list)
 
             total_loss = 0.0
@@ -301,6 +304,7 @@ class Server(BaseServer):
                 selected_count_sup.append(res["count_sup"])
                 selected_proto_unsup.append(res["proto_unsup"])
                 selected_count_unsup.append(res["count_unsup"])
+                self.ema_probs[cid] = res["ema_probs"]
 
             self.loss.append(total_loss / num_join)
             sum_weights = sum(current_weights)
@@ -359,8 +363,7 @@ class Server(BaseServer):
         self.acc_source.append(acc_src)
         acc_tgt = self.evaluate_model(target_eval)
         self.acc_target.append(acc_tgt)
-        merged_test = ConcatDataset([source_eval, target_eval])
-        acc_all = self.evaluate_model(merged_test)
+        acc_all = self.evaluate_model(self.test_set)
         self.acc.append(acc_all)
 
         self.model.cpu()
