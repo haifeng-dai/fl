@@ -7,9 +7,9 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
     extract_prototypes,
+    fmt_num,
     get_model,
     mse_loss,
     orthogonality_loss,
@@ -187,10 +187,15 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(True, args)
-        if hasattr(self.model, "feature_dim"):
-            self.feature_dim = self.model.feature_dim
-        else:
-            self.feature_dim = args.feature_dim
+        self.head_epochs = args.head_epochs
+        self.body_epochs = args.body_epochs
+        self.lr_head = args.lr_head
+        self.lr_body = args.lr_body
+        self.lamda_ = args.lamda_
+        self.lambda_p = args.lambda_p
+        self.lambda_acl = args.lambda_acl
+        self.server_epochs = args.server_epochs
+        self.server_lr = args.server_lr
 
         self.pln = PLN(
             num_classes=self.num_class,
@@ -207,7 +212,7 @@ class Server(BaseServer):
         self.loss_pln_ortho = []
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -219,13 +224,15 @@ class Server(BaseServer):
             p = self.build_base_params(selected)
             for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
-                params.append(self.args.head_epochs)
-                params.append(self.args.body_epochs)
-                params.append(self.args.lr_head)
-                params.append(self.args.lr_body)
-                params.append(self.args.lamda_)
-                params.append(self.global_protos.cpu() if self.global_protos is not None else None)
-                params.append(self.args.lambda_p)
+                params.append(self.head_epochs)
+                params.append(self.body_epochs)
+                params.append(self.lr_head)
+                params.append(self.lr_body)
+                params.append(self.lamda_)
+                params.append(
+                    self.global_protos.cpu() if self.global_protos is not None else None
+                )
+                params.append(self.lambda_p)
             results = self.run_clients(train, p)
 
             total_loss_ce = 0.0
@@ -264,19 +271,19 @@ class Server(BaseServer):
 
     def update_pln(self, uploaded_protos):
         self.pln.train()
-        optimizer = torch.optim.SGD(self.pln.parameters(), lr=self.args.server_lr)
+        optimizer = torch.optim.SGD(self.pln.parameters(), lr=self.server_lr)
 
         # 预先生成类别索引张量，避免循环中重复转换
         all_class_ids = torch.arange(self.num_class, device=self.device)
         proto_loader = DataLoader(
-            uploaded_protos, batch_size=self.args.batch_size, shuffle=True
+            uploaded_protos, batch_size=self.batch_size, shuffle=True
         )
 
         epoch_loss = 0.0
         epoch_loss_mse = 0.0
         epoch_loss_ortho = 0.0
         num_batches = 0
-        for _ in range(self.args.server_epochs):
+        for _ in range(self.server_epochs):
             for proto_batch, labels_batch in proto_loader:
                 proto_batch = proto_batch.to(self.device)
                 labels_batch = labels_batch.to(self.device, dtype=torch.long)
@@ -287,7 +294,7 @@ class Server(BaseServer):
 
                 loss_mse = mse_loss(proto_batch, proto_gen[labels_batch])
 
-                loss = loss_mse + self.args.lambda_acl * loss_ortho
+                loss = loss_mse + self.lambda_acl * loss_ortho
 
                 optimizer.zero_grad()
                 loss.backward()

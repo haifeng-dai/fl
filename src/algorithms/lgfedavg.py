@@ -83,7 +83,7 @@ class Server(BaseServer):
         ]
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -157,5 +157,8 @@ class Server(BaseServer):
             client_states_full.append(full_state)
 
         metrics = {"acc": self.acc, "loss": self.loss}
-        params = {"global": self.model.classifier.state_dict(), "client": client_states_full}
+        params = {
+            "global": self.model.classifier.state_dict(),
+            "client": client_states_full,
+        }
         self.deal_save(metrics, params)

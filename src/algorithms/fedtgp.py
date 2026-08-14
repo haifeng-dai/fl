@@ -7,10 +7,10 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
     dist_contrastive_loss,
     extract_prototypes,
+    fmt_num,
     get_model,
     mse_loss,
     proto_aggregate,
@@ -134,10 +134,10 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(True, args)
-        if hasattr(self.model, "feature_dim"):
-            self.feature_dim = self.model.feature_dim
-        else:
-            self.feature_dim = args.feature_dim
+        self.lamda_ = args.lamda_
+        self.server_epochs = args.server_epochs
+        self.server_lr = args.server_lr
+        self.margin_threshold = args.margin_threshold
 
         self.tgp = TGP(
             num_classes=self.num_class,
@@ -153,7 +153,7 @@ class Server(BaseServer):
         self.loss_proto = []
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -165,8 +165,10 @@ class Server(BaseServer):
             p = self.build_base_params(selected)
             for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
-                params.append(self.args.lamda_)
-                params.append(self.global_protos.cpu() if self.global_protos is not None else None)
+                params.append(self.lamda_)
+                params.append(
+                    self.global_protos.cpu() if self.global_protos is not None else None
+                )
             results = self.run_clients(train, p)
 
             total_loss_ce = 0.0
@@ -226,17 +228,17 @@ class Server(BaseServer):
 
     def update_tgp(self, uploaded_protos):
         self.tgp.train()
-        optimizer = torch.optim.SGD(self.tgp.parameters(), lr=self.args.server_lr)
+        optimizer = torch.optim.SGD(self.tgp.parameters(), lr=self.server_lr)
 
-        for _ in range(self.args.server_epochs):
+        for _ in range(self.server_epochs):
             proto_loader = DataLoader(
-                uploaded_protos, batch_size=self.args.batch_size, shuffle=True
+                uploaded_protos, batch_size=self.batch_size, shuffle=True
             )
             for proto_batch, labels_batch in proto_loader:
                 proto_batch = proto_batch.to(self.device)
                 labels_batch = labels_batch.to(self.device, dtype=torch.long)
                 proto_gen = self.tgp(list(range(self.num_class)))
-                margin = min(torch.max(self.gap).item(), self.args.margin_threshold)
+                margin = min(torch.max(self.gap).item(), self.margin_threshold)
                 loss = dist_contrastive_loss(
                     proto_batch, proto_gen, labels_batch, margin=margin
                 )
@@ -250,6 +252,16 @@ class Server(BaseServer):
             self.global_protos = self.tgp(all_class_ids).detach().cpu()
 
     def save(self):
-        metrics = {"acc": self.acc, "acc_p": self.acc_proto, "loss": self.loss, "loss_p": self.loss_proto}
-        params = {"global": self.model.state_dict(), "client": self.clients_state, "proto": self.global_protos, "aux": {"tgp": self.tgp.state_dict(), "gap": self.gap.cpu()}}
+        metrics = {
+            "acc": self.acc,
+            "acc_p": self.acc_proto,
+            "loss": self.loss,
+            "loss_p": self.loss_proto,
+        }
+        params = {
+            "global": self.model.state_dict(),
+            "client": self.clients_state,
+            "proto": self.global_protos,
+            "aux": {"tgp": self.tgp.state_dict(), "gap": self.gap.cpu()},
+        }
         self.deal_save(metrics, params)

@@ -7,9 +7,9 @@ import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
-    cos_contrastive_loss,
+    cos_similarity,
+    fmt_num,
     get_model,
 )
 
@@ -143,7 +143,7 @@ def train(params):
             loss_ce = ce_loss(logits, y)
 
             # 公式 (8): L_COM = -log(exp(a_{y_i}^T h_i / τ) / Σ_j exp(a_j^T h_i / τ))
-            loss_com = cos_contrastive_loss(h, global_anchors, y, temperature=tau)
+            loss_com = cos_similarity(h, global_anchors, y, temperature=tau)
 
             # 公式 (10): L_HC = L_CE + λ * L_COM
             loss = loss_ce + lambda_com * loss_com
@@ -164,6 +164,12 @@ class Server(BaseServer):
         super().__init__(False, args)
         self.model = FedLSAModel(self.model).to(self.device)
 
+        self.lambda_com = args.lambda_com
+        self.alpha_sep = args.alpha_sep
+        self.server_epochs = args.server_epochs
+        self.server_lr = args.server_lr
+        self.tau = args.tau
+
         # 核心：必须同步更新所有客户端的状态字典，以匹配新的 FedLSAModel 结构 (backbone/head)
         init_state = {
             k: v.cpu().detach().clone() for k, v in self.model.state_dict().items()
@@ -172,10 +178,10 @@ class Server(BaseServer):
 
         # 1. 初始化随机向量 R (可学习)
         # 论文定义: R ∈ R^{C × I}，在 embedding 空间中
-        self.R = torch.randn(self.num_class, args.feature_dim, device=self.device)
+        self.R = torch.randn(self.num_class, self.feature_dim, device=self.device)
 
         # 2. 初始化映射函数 Theta: R^I -> R^L (从 embedding 空间映射到 feature 空间)
-        self.anchor_mapping = AnchorMapping(args.feature_dim, args.feature_dim)
+        self.anchor_mapping = AnchorMapping(self.feature_dim, self.feature_dim)
         self.anchor_mapping.to(self.device)
         self.labels = torch.arange(self.num_class, device=self.device)
 
@@ -184,10 +190,10 @@ class Server(BaseServer):
         return self.anchor_mapping(self.R)
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         print(
-            f"FedLSA Training with lambda_com={self.args.lambda_com}, alpha_sep={self.args.alpha_sep}"
+            f"FedLSA Training with lambda_com={self.lambda_com}, alpha_sep={self.alpha_sep}"
         )
 
         for r in range(self.rounds):
@@ -204,8 +210,8 @@ class Server(BaseServer):
             for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
                 params.append(current_anchors)
-                params.append(self.args.lambda_com)
-                params.append(self.args.tau)
+                params.append(self.lambda_com)
+                params.append(self.tau)
             results = self.run_clients(train, p)
 
             total_loss = 0.0
@@ -248,7 +254,7 @@ class Server(BaseServer):
 
         optimizer = torch.optim.SGD(
             [self.R] + list(self.anchor_mapping.parameters()),
-            lr=self.args.server_lr,
+            lr=self.server_lr,
         )
 
         # 临时禁用模型主参数的梯度计算，以确保它们不被更新，
@@ -256,9 +262,9 @@ class Server(BaseServer):
         for param in self.model.parameters():
             param.requires_grad = False
 
-        print(f"-> Server Optimization for {self.args.server_epochs} epochs...")
+        print(f"-> Server Optimization for {self.server_epochs} epochs...")
 
-        for e in range(self.args.server_epochs):
+        for e in range(self.server_epochs):
             # L17: 生成语义锚点 A = Theta(R)
             anchors = self.get_anchors()
 
@@ -268,16 +274,16 @@ class Server(BaseServer):
             loss_ace = ce_loss(logits, self.labels)
 
             # 公式 (4): L_SEP，带 τ
-            loss_sep = separation_loss(anchors, tau=self.args.tau)
+            loss_sep = separation_loss(anchors, tau=self.tau)
 
             # 公式 (5): L_LSA = L_ACE + α * L_SEP
-            loss_lsa = loss_ace + self.args.alpha_sep * loss_sep
+            loss_lsa = loss_ace + self.alpha_sep * loss_sep
 
             optimizer.zero_grad()
             loss_lsa.backward()
             optimizer.step()
 
-            if e == 0 or (e + 1) == self.args.server_epochs:
+            if e == 0 or (e + 1) == self.server_epochs:
                 print(
                     f"   Epoch {e + 1}: L_ACE={loss_ace.item():.4f}, L_SEP={loss_sep.item():.4f}"
                 )
@@ -288,5 +294,8 @@ class Server(BaseServer):
 
     def save(self):
         metrics = {"acc": self.acc, "loss": self.loss}
-        params = {"global": self.model.state_dict(), "proto": self.get_anchors().detach().cpu()}
+        params = {
+            "global": self.model.state_dict(),
+            "proto": self.get_anchors().detach().cpu(),
+        }
         self.deal_save(metrics, params)

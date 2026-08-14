@@ -5,9 +5,9 @@ import torch
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
     evaluate_model,
+    fmt_num,
     get_model,
     kl_loss,
     param_aggregate,
@@ -43,7 +43,9 @@ def train(params):
     ) = params
 
     # 1. 初始化全局模型 (MEME)
-    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
+    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(
+        device
+    )
     global_model.load_state_dict(global_state)
 
     # 2. 初始化本地模型 (个性化模型)
@@ -111,6 +113,8 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(True, args)
+        self.alpha_fml = args.alpha_fml
+        self.beta_fml = args.beta_fml
 
         self.loss_g = []
         self.acc_g = []
@@ -120,7 +124,7 @@ class Server(BaseServer):
         )
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -132,8 +136,8 @@ class Server(BaseServer):
             p = self.build_base_params(selected)
             for params, i in zip(p, selected):
                 params.append(self.clients_state[i])
-                params.append(self.args.alpha_fml)
-                params.append(self.args.beta_fml)
+                params.append(self.alpha_fml)
+                params.append(self.beta_fml)
             results = self.run_clients(train, p)
 
             total_loss = 0.0
@@ -169,6 +173,11 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
-        metrics = {"acc": self.acc, "acc_g": self.acc_g, "loss": self.loss, "loss_g": self.loss_g}
+        metrics = {
+            "acc": self.acc,
+            "acc_g": self.acc_g,
+            "loss": self.loss,
+            "loss_g": self.loss_g,
+        }
         params = {"global": self.model.state_dict(), "client": self.clients_state}
         self.deal_save(metrics, params)

@@ -7,7 +7,7 @@ from .evaluate import evaluate_model, evaluate_prototype
 from .fed_utils import BaseServer, evaluate, get_model
 from .loss import (
     ce_loss,
-    cos_contrastive_loss,
+    cos_similarity,
     dist_contrastive_loss,
     kl_loss,
     mse_loss,
@@ -30,7 +30,7 @@ __all__ = [
     "compute_mh_weights",
     "generate_adjacency_matrix",
     "sinkhorn_knopp",
-    "cos_contrastive_loss",
+    "cos_similarity",
     "dist_contrastive_loss",
     "ce_loss",
     "mse_loss",
@@ -135,9 +135,10 @@ def extract_protos_ss(
     return protos.cpu().detach().clone(), counts.cpu().detach().clone()
 
 
-def mixup(x1, y1, x2, y2, alpha=1.0):
+def mixup(x1, y1, x2, y2, alpha=1.0, psi_t=1.0):
     """
     对两个输入样本执行 mixup 数据增强。
+    psi_t: 进度系数，控制目标域数据占比的上限
 
     从 Beta(alpha, alpha) 分布中采样混合系数 lam，
     对 (x1, y1) 和 (x2, y2) 进行线性插值。
@@ -148,11 +149,14 @@ def mixup(x1, y1, x2, y2, alpha=1.0):
         lam: 混合系数
     """
     lam = numpy.random.beta(alpha, alpha)
+    if psi_t is not None:
+        lam = lam * psi_t
+        lam = min(lam, 1.0)  # 确保不越界
+
     device = x1.device
     lam = torch.tensor(lam, device=device)
 
     mixed_x = lam * x1 + (1 - lam) * x2
-    mixed_y1 = y1
-    mixed_y2 = y2
+    mixed_y = lam * y1 + (1 - lam) * y2
 
-    return mixed_x, mixed_y1, mixed_y2, lam
+    return mixed_x, mixed_y

@@ -186,20 +186,30 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
+        self.width_pln = args.width_pln
+        self.depth_pln = args.depth_pln
+        self.fixed_proto = args.fixed_proto
+        self.init_emb = args.init_emb
+        self.lambda_ = args.lambda_
+        self.epoch_pln = args.epoch_pln
+        self.lr_pln = args.lr_pln
+        self.batch_size_pln = args.batch_size_pln
+        self.mode = args.mode
+        self.har = args.har
 
         self.pln = PLN(
             num_classes=self.num_class,
-            width=args.width_pln,
-            feature_dim=self.args.feature_dim,
-            depth=args.depth_pln,
-            fixed=args.fixed_proto,
-            init_emb=args.init_emb,
+            width=self.width_pln,
+            feature_dim=self.feature_dim,
+            depth=self.depth_pln,
+            fixed=self.fixed_proto,
+            init_emb=self.init_emb,
         )
         self.all_classes = torch.arange(0, self.num_class)
         self.loss_p: list[float] = []
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -211,16 +221,16 @@ class Server(BaseServer):
             p = self.build_base_params(selected)
             for params in p:
                 params.append(self.pln.state_dict())
-                params.append(self.args.lambda_)
-                params.append(self.args.epoch_pln)
-                params.append(self.args.lr_pln)
-                params.append(self.args.batch_size_pln)
-                params.append(self.args.depth_pln)
-                params.append(self.args.width_pln)
-                params.append(self.args.mode)
-                params.append(self.args.fixed_proto)
-                params.append(self.args.init_emb)
-                params.append(self.args.har)
+                params.append(self.lambda_)
+                params.append(self.epoch_pln)
+                params.append(self.lr_pln)
+                params.append(self.batch_size_pln)
+                params.append(self.depth_pln)
+                params.append(self.width_pln)
+                params.append(self.mode)
+                params.append(self.fixed_proto)
+                params.append(self.init_emb)
+                params.append(self.har)
             results = self.run_clients(train, p)
 
             # 汇集各客户端的回传结果，计算模型与 PLN 的加权整体损失

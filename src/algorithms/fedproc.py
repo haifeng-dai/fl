@@ -6,7 +6,7 @@ import torch
 from .utils import (
     BaseServer,
     ce_loss,
-    cos_contrastive_loss,
+    cos_similarity,
     extract_prototypes,
     get_model,
     proto_aggregate,
@@ -57,9 +57,7 @@ def train(params):
             loss_ce = ce_loss(output, target)
 
             # 基于原型的对比损失 (Prototypical Contrastive Loss)
-            loss_con = cos_contrastive_loss(
-                features, global_protos, target, temperature=1.0
-            )
+            loss_con = cos_similarity(features, global_protos, target, temperature=1.0)
 
             loss = (1 - alpha) * loss_ce + alpha * loss_con
             loss.backward()
@@ -84,10 +82,11 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
-        self.global_protos = torch.zeros((self.num_class, self.args.feature_dim))
+
+        self.global_protos = torch.zeros((self.num_class, self.feature_dim))
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()

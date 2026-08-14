@@ -225,6 +225,10 @@ class Server(BaseServer):
 
     def __init__(self, args):
         super().__init__(pfl=True, args=args)
+        self.val_ratio = args.val_ratio
+        self.lr_alpha = args.lr_alpha
+        self.prune_round = args.prune_round
+        self.prune_num = args.prune_num
 
         # 1. 自动生成邻接矩阵（用于确定协作节点）
         self.A = generate_adjacency_matrix(args)
@@ -241,7 +245,7 @@ class Server(BaseServer):
 
     def fit(self):
         """主训练流程：执行 L2C 的两阶段协作更新"""
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for round_idx in range(self.rounds):
             t0 = time.time()
@@ -255,7 +259,7 @@ class Server(BaseServer):
             payloads_p1 = self.build_base_params(selected)
             for params, cid in zip(payloads_p1, selected):
                 params[2] = self.clients_state[cid]
-                params.append(self.args.val_ratio)
+                params.append(self.val_ratio)
 
             p1_results = self.run_clients(train_phase1, payloads_p1)
 
@@ -300,7 +304,7 @@ class Server(BaseServer):
                 params.append(neighbor_deltas)
                 params.append(self.alphas[i])
                 params.append(cid_to_indices[i]["val"])
-                params.append(self.args.lr_alpha)
+                params.append(self.lr_alpha)
                 payloads_p2.append(params)
 
             p2_results = self.run_clients(train_phase2, payloads_p2)
@@ -316,12 +320,9 @@ class Server(BaseServer):
 
             # --- 拓扑演化：Top-K 剪枝 (对应伪代码 Line 20-22) ---
             # 仅在特定的 prune_round (T0) 执行
-            prune_round = self.args.prune_round
-            prune_num = self.args.prune_num
-
-            if round_idx + 1 == prune_round and prune_num > 0:
+            if round_idx + 1 == self.prune_round and self.prune_num > 0:
                 logger.info(
-                    f"Applying Top-K pruning (K={prune_num}) at round {round_idx + 1}"
+                    f"Applying Top-K pruning (K={self.prune_num}) at round {round_idx + 1}"
                 )
                 for i in range(self.num_clients):
                     if i not in all_weights:
@@ -336,12 +337,12 @@ class Server(BaseServer):
                     neighbor_indices = [
                         idx for idx, nb in enumerate(neighbors) if nb != i
                     ]
-                    if len(neighbor_indices) <= prune_num:
+                    if len(neighbor_indices) <= self.prune_num:
                         continue
 
                     # 找到权重最小的 K0 个邻居的索引
                     neighbor_weights = weights[neighbor_indices]
-                    to_prune_indices = np.argsort(neighbor_weights)[:prune_num]
+                    to_prune_indices = np.argsort(neighbor_weights)[: self.prune_num]
 
                     for idx in to_prune_indices:
                         neighbor_to_remove = neighbors[neighbor_indices[idx]]

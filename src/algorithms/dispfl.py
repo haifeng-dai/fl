@@ -188,12 +188,14 @@ class Server(BaseServer):
 
     def __init__(self, args):
         super().__init__(pfl=True, args=args)
+        self.erk_power_scale = args.erk_power_scale
+        self.anneal_factor = args.anneal_factor
+        self.dense_ratio = args.dense_ratio
 
         # 1. 生成拓扑结构（generate_adjacency_matrix 已内置自环）
         self.A = generate_adjacency_matrix(args).to(self.device).float()
 
         # 2. 初始化稀疏掩码 (使用 ERK 策略)
-        self.dense_ratio = args.dense_ratio
         initial_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
 
         # 计算每一层的 ERK 稀疏度
@@ -205,7 +207,7 @@ class Server(BaseServer):
         }
 
         # 3. 严格执行初始掩码：直接将未被掩码的参数置为 0
-        for cid in range(args.num_clients):
+        for cid in range(self.num_clients):
             for k, mask in self.client_masks[cid].items():
                 self.clients_state[cid][k] = self.clients_state[cid][k].mul_(mask)
 
@@ -232,7 +234,7 @@ class Server(BaseServer):
             total_params += n_param
             raw_probabilities[k] = np.sum(v.shape) / np.prod(v.shape)
 
-        erk_power_scale = self.args.erk_power_scale
+        erk_power_scale = self.erk_power_scale
         for k in raw_probabilities:
             raw_probabilities[k] **= erk_power_scale
 
@@ -291,7 +293,7 @@ class Server(BaseServer):
 
     def fit(self):
         """主训练流程"""
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -311,7 +313,7 @@ class Server(BaseServer):
                 params.append(self.client_masks[i])
                 params.append(r)
                 params.append(self.rounds)
-                params.append(self.args.anneal_factor)
+                params.append(self.anneal_factor)
 
             # 4. 启动客户端并行训练 + 掩码搜索
             results = self.run_clients(train, p)

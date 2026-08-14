@@ -69,7 +69,7 @@ class Server(BaseServer):
 
     def fit(self):
         """运行 FedAvg 训练流程"""
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -96,7 +96,7 @@ class Server(BaseServer):
             # 根据客户端的数据量权重，对上传的模型参数进行加权平均汇聚
             self.aggregate(selected_states, weights=norm_weights)
             self.evaluate()
-            if self.args.sfd:
+            if self.sfd:
                 src = f"{self.acc_source[-1]:.2f}%" if self.acc_source else "N/A"
                 tgt = f"{self.acc_target[-1]:.2f}%" if self.acc_target else "N/A"
                 acc = f"{self.acc[-1]:.2f}%" if self.acc else "N/A"

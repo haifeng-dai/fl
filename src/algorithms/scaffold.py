@@ -119,6 +119,7 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
+        self.global_lr = args.global_lr
 
         # 获取所有可训练参数的名称
         self.param_names = [n for n, _ in self.model.named_parameters()]
@@ -132,7 +133,7 @@ class Server(BaseServer):
         ]
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -169,15 +170,15 @@ class Server(BaseServer):
             weights = [1.0 / len(selected_states)] * len(selected_states)
             avg_state = param_aggregate(selected_states, weights)
 
-            if self.args.global_lr == 1.0:
+            if self.global_lr == 1.0:
                 self.model.load_state_dict(avg_state)
             else:
                 # 采用全局学习率进行自定义模型聚合并更新全局状态
                 current_state = self.model.state_dict()
                 for k, v in current_state.items():
                     if k in avg_state:
-                        v.mul_(1 - self.args.global_lr).add_(
-                            avg_state[k], alpha=self.args.global_lr
+                        v.mul_(1 - self.global_lr).add_(
+                            avg_state[k], alpha=self.global_lr
                         )
 
             factor = 1.0 / self.num_clients

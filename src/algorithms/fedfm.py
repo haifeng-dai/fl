@@ -94,10 +94,11 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
-        self.global_anchors = torch.zeros((self.num_class, self.args.feature_dim))
+        self.mu = args.mu
+        self.global_anchors = torch.zeros((self.num_class, self.feature_dim))
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -109,7 +110,7 @@ class Server(BaseServer):
             # ========== 阶段一：下发全局模型 + 全局锚点，执行本地训练 ==========
             p_train = self.build_base_params(selected)
             for params in p_train:
-                params.append(self.args.mu)
+                params.append(self.mu)
                 params.append("train")
                 params.append(self.global_anchors)
             results_train = self.run_clients(train, p_train)
@@ -132,7 +133,7 @@ class Server(BaseServer):
             p_extract = self.build_base_params(selected)
             for params in p_extract:
                 params[2] = global_state
-                params.append(self.args.mu)
+                params.append(self.mu)
                 params.append("extract")
                 params.append(None)
             results_extract = self.run_clients(train, p_extract)

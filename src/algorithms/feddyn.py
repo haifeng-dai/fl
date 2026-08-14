@@ -90,6 +90,7 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
+        self.alpha_coef = args.alpha_coef
 
         # FedDyn 服务器状态
         # h: 全局梯度历史记录（向量模式）
@@ -103,7 +104,7 @@ class Server(BaseServer):
         }
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         # 用于下一轮次训练的全局模型向量
         global_model_vector = (
@@ -121,7 +122,7 @@ class Server(BaseServer):
             for params, i in zip(p, selected):
                 params.append(self.local_grads[i])
                 params.append(global_model_vector)
-                params.append(self.args.alpha_coef)
+                params.append(self.alpha_coef)
             results = self.run_clients(train, p)
 
             total_loss = 0.0
@@ -138,7 +139,7 @@ class Server(BaseServer):
                 # 更新本地梯度历史记录：
                 # nabla L_k(w^{t+1}) 约等于 nabla L_k(w^t) - alpha * (w^{t+1} - w^t)
                 model_diff = client_flat - global_model_vector
-                self.local_grads[cid] -= self.args.alpha_coef * model_diff
+                self.local_grads[cid] -= self.alpha_coef * model_diff
             self.loss.append(total_loss / num_join)
 
             # 1. 计算所有客户端模型的平均值
@@ -149,14 +150,14 @@ class Server(BaseServer):
             # 在非全量客户端参与时，必须乘以参与比例 (num_join / num_clients) 防止更新过激导致散度爆炸
             scale_factor = num_join / self.num_clients
             self.h -= (
-                self.args.alpha_coef
+                self.alpha_coef
                 * scale_factor
                 * (avg_model_params - global_model_vector)
             )
 
             # 3. 更新全局模型参数
             # w_{t+1} = w_{avg} - (1/alpha) * h_{t+1}
-            new_global_vector = avg_model_params - (1.0 / self.args.alpha_coef) * self.h
+            new_global_vector = avg_model_params - (1.0 / self.alpha_coef) * self.h
 
             # 重新加载回模型实体中
             vector_to_parameters(new_global_vector, self.model.parameters())

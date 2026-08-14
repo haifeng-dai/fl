@@ -118,6 +118,7 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(True, args)
+        self.mu = args.mu
 
         # 为每个客户端初始化对应的代理模型 (Public/Shared)
         self.client_states_p = [
@@ -132,7 +133,7 @@ class Server(BaseServer):
         self.adj_matrix = A / A.sum(dim=1, keepdim=True)
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -151,7 +152,7 @@ class Server(BaseServer):
             for params, i in zip(p, selected):
                 params[2] = agg_proxy_list[i]
                 params.append(self.clients_state[i])
-                params.append(self.args.mu)
+                params.append(self.mu)
             results = self.run_clients(train, p)
 
             # 3. 收集更新客户端状态数据与评估并计算平均损失

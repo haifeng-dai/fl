@@ -5,8 +5,8 @@ import torch
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
+    fmt_num,
     get_model,
 )
 
@@ -82,11 +82,12 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
+        self.mu = args.mu
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        print(f"FedProx with mu={self.args.mu}")
+        print(f"FedProx with mu={self.mu}")
         for r in range(self.rounds):
             t0 = time.time()
             print(f"\n--- FedProx Round {r + 1}/{self.rounds} ---")
@@ -96,7 +97,7 @@ class Server(BaseServer):
 
             p = self.build_base_params(selected)
             for params in p:
-                params.append(self.args.mu)
+                params.append(self.mu)
             results = self.run_clients(train, p)
 
             # 汇集并处理各客户端结果

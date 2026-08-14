@@ -262,11 +262,17 @@ class Server(BaseServer):
     def __init__(self, args):
         # FedALA 是一种个性化联邦学习 (pFL) 方法
         super().__init__(True, args)
+        self.eta = args.eta
+        self.rand_percent = args.rand_percent
+        self.layer_idx = args.layer_idx
+        self.ala_threshold = args.ala_threshold
+        self.num_pre_loss = args.num_pre_loss
+
         self.clients_weights = [None] * self.num_clients
 
     def fit(self):
         """运行 FedALA 训练流程"""
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -286,11 +292,11 @@ class Server(BaseServer):
                 params[2] = global_model_state_cpu
                 params.append(self.clients_state[i])
                 params.append(self.clients_weights[i])
-                params.append(self.args.eta)
-                params.append(self.args.rand_percent)
-                params.append(self.args.layer_idx)
-                params.append(self.args.ala_threshold)
-                params.append(self.args.num_pre_loss)
+                params.append(self.eta)
+                params.append(self.rand_percent)
+                params.append(self.layer_idx)
+                params.append(self.ala_threshold)
+                params.append(self.num_pre_loss)
             # 运行并行客户端训练任务
             results = self.run_clients(train, p)
 

@@ -6,14 +6,13 @@ from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
     extract_prototypes,
     flattened_matrix_aggregate,
+    fmt_num,
     generate_adjacency_matrix,
     get_model,
     mse_loss,
-    sinkhorn_knopp,
 )
 
 
@@ -141,23 +140,26 @@ class Server(BaseServer):
 
     def __init__(self, args):
         super().__init__(pfl=True, args=args)
+        self.momentum = args.momentum
+        self.weight_decay = args.weight_decay
+        self.lamda = args.lamda
 
-        # 1. 通信矩阵初始化（基于 Sinkhorn-Knopp 的双随机矩阵）
-        A = generate_adjacency_matrix(args)
-        self.W = sinkhorn_knopp(A).to(self.device)
+        # 1. 自动生成双随机邻接矩阵 W [num_clients, num_clients]
+        # generate_adjacency_matrix 函数内置生成满足双随机特性的通信矩阵
+        self.W = generate_adjacency_matrix(args).to(self.device).float()
 
-        # 2. 状态池初始化
+        # 2. 初始化原型存储池 (全向量化管理)
         # local_protos_pool: 存储各节点的原始本地原型 [num_clients, num_classes, feature_dim]
         # local_counts_pool: 存储各节点的样本数量统计 [num_clients, num_classes]
         # personalized_protos: 存储各节点 Gossip 聚合后的最终共识原型
         self.local_protos_pool = torch.zeros(
-            self.num_clients, self.num_class, args.feature_dim
+            self.num_clients, self.num_class, self.feature_dim
         ).to(self.device)
         self.local_counts_pool = torch.zeros(self.num_clients, self.num_class).to(
             self.device
         )
         self.personalized_protos = torch.zeros(
-            self.num_clients, self.num_class, args.feature_dim
+            self.num_clients, self.num_class, self.feature_dim
         ).to(self.device)
 
         # 3. 初始化 clients_state 为当前全局模型
@@ -165,7 +167,7 @@ class Server(BaseServer):
 
     def fit(self):
         """主训练循环：实现 Algorithm 3 的 Inter-Epoch Prototype Exchange"""
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -177,13 +179,13 @@ class Server(BaseServer):
 
             # 2. 嵌套循环：执行 E 个本地 Epoch，并在每个 Epoch 结束后交换原型
             round_loss = 0.0
-            for e in range(self.args.epochs):
+            for e in range(self.epochs):
                 p = self.build_base_params(selected)
                 for params, i in zip(p, selected):
                     params[2] = self.clients_state[i]
-                    params.append(self.args.momentum)
-                    params.append(self.args.weight_decay)
-                    params.append(self.args.lamda)
+                    params.append(self.momentum)
+                    params.append(self.weight_decay)
+                    params.append(self.lamda)
                     params.append(self.personalized_protos[i].cpu())
 
                 # 2.2 启动 Ray 并行训练 (1 Epoch)
@@ -198,9 +200,7 @@ class Server(BaseServer):
                     self.local_counts_pool[cid] = res["counts"].to(self.device)
 
                 epoch_loss /= len(selected)
-                if (
-                    e == self.args.epochs - 1
-                ):  # 记录最后一个 epoch 的 loss 作为 round loss
+                if e == self.epochs - 1:  # 记录最后一个 epoch 的 loss 作为 round loss
                     round_loss = epoch_loss
 
                 # 2.4 执行原型交换与聚合 (Algorithm 2)

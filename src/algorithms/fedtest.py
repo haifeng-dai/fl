@@ -9,11 +9,11 @@ from torch.utils.data import DataLoader, Subset, TensorDataset
 from .utils import (
     BaseServer,
     ce_loss,
+    cos_similarity,
     extract_protos_ss,
     fmt_num,
     get_model,
     mixup,
-    mse_loss,
     proto_aggregate,
 )
 
@@ -21,7 +21,7 @@ from .utils import (
 def get_path(args):
     """构造实验日志文件名（含域配置与算法超参值）。"""
     args.file_name = (
-        f"{args.common_name}_{fmt_num(args.confidence_threshold)}"
+        f"{args.common_name}_{fmt_num(args.confidence)}"
         f"_{fmt_num(args.beta)}_{fmt_num(args.lambda_pl)}"
         f"_{fmt_num(args.lambda_mixup)}_{fmt_num(args.mixup_alpha)}"
         f"_{fmt_num(args.lambda_pa)}"
@@ -67,7 +67,7 @@ def train(params):
         epochs,
         feature_dim,
         num_class,
-        confidence_threshold,
+        confidence,
         global_proto_sup,
         global_proto_unsup,
         ema_probs,
@@ -75,6 +75,7 @@ def train(params):
         lambda_pl,
         lambda_mixup,
         mixup_alpha,
+        mixup_psi_t,
         lambda_pa,
     ) = params
 
@@ -129,10 +130,14 @@ def train(params):
         perm_u = pair_ids % len(x_u)
         y_2n_l_all = make_2n(one_hot(y_l[perm_l], num_class).float(), num_class)
         y_2n_u_all = make_2n(ema_probs[perm_u].cpu(), num_class, label=False)
-        x_mix_all, y1, y2, lam_m = mixup(
-            x_u[perm_u], y_2n_u_all, x_l[perm_l], y_2n_l_all, alpha=mixup_alpha
+        x_mix_all, y_mix_all = mixup(
+            x_u[perm_u],
+            y_2n_u_all,
+            x_l[perm_l],
+            y_2n_l_all,
+            alpha=mixup_alpha,
+            psi_t=mixup_psi_t,
         )
-        y_mix_all = lam_m * y1 + (1 - lam_m) * y2
         m_loader = DataLoader(
             TensorDataset(x_mix_all, y_mix_all),
             batch_size=batch_size,
@@ -157,9 +162,9 @@ def train(params):
             with torch.no_grad():
                 ema_probs[idx] = beta * ema_probs[idx] + (1 - beta) * probs_u
                 max_p, pseudo = ema_probs[idx].max(dim=1)
-                confident = max_p >= confidence_threshold
+                confident = max_p >= confidence
 
-            loss_pl = torch.tensor(0.0, device=x_ub.device)
+            loss_pl = torch.tensor(0.0, device=device)
             if confident.any():
                 soft_u = ema_probs[idx][confident]  # [B', C] 软概率
                 soft_2n = make_2n(soft_u, num_class, label=False)
@@ -168,21 +173,26 @@ def train(params):
 
             # 原型校准：同域 + 跨域。有标签样本特征对齐监督/无监督原型，
             # 高置信无标签样本特征对齐无监督/监督原型（跨域项以全局原型为常数锚点）。
-            loss_pa = torch.tensor(0.0, device=x_ub.device)
-            if g_proto_sup is not None:
+            loss_pa = torch.tensor(0.0, device=device)
+            # if g_proto_sup is not None:
+            #     feat_l = model.extractor(x_lb)
+            #     loss_pa = loss_pa + mse_loss(feat_l, g_proto_sup[y_lb])
+            #     if g_proto_unsup is not None:
+            #         loss_pa = loss_pa + mse_loss(feat_l, g_proto_unsup[y_lb])
+            # if g_proto_unsup is not None and confident.any():
+            #     feat_u = model.extractor(x_ub[confident])
+            #     loss_pa = loss_pa + mse_loss(feat_u, g_proto_unsup[pseudo[confident]])
+            #     if g_proto_sup is not None:
+            #         loss_pa = loss_pa + mse_loss(feat_u, g_proto_sup[pseudo[confident]])
+            if g_proto_unsup is not None:
                 feat_l = model.extractor(x_lb)
-                loss_pa = loss_pa + mse_loss(feat_l, g_proto_sup[y_lb])
-                if g_proto_unsup is not None:
-                    loss_pa = loss_pa + mse_loss(feat_l, g_proto_unsup[y_lb])
-            if g_proto_unsup is not None and confident.any():
+                # 源域(有标签)特征对齐目标域(无监督)全局原型
+                loss_pa += cos_similarity(feat_l, g_proto_unsup, y_lb)
+
+            if g_proto_sup is not None and confident.any():
                 feat_u = model.extractor(x_ub[confident])
-                loss_pa = loss_pa + mse_loss(
-                    feat_u, g_proto_unsup[pseudo[confident]]
-                )
-                if g_proto_sup is not None:
-                    loss_pa = loss_pa + mse_loss(
-                        feat_u, g_proto_sup[pseudo[confident]]
-                    )
+                # 目标域高置信特征对齐源域(监督)全局原型
+                loss_pa += cos_similarity(feat_u, g_proto_sup, pseudo[confident])
 
             # mixup 数据集已在 epoch 开头预生成，此处直接使用。
             prob_m = torch.softmax(model(x_mb), dim=1)
@@ -211,7 +221,7 @@ def train(params):
         num_class,
         feature_dim,
         device,
-        confidence_threshold,
+        confidence,
         labeled=True,
     )
     proto_unsup, count_unsup = extract_protos_ss(
@@ -220,7 +230,7 @@ def train(params):
         num_class,
         feature_dim,
         device,
-        confidence_threshold,
+        confidence,
         labeled=False,
     )
 
@@ -240,8 +250,12 @@ class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
         self.unlabel_domain = args.unlabel_domain
-        self.confidence_threshold = args.confidence_threshold
+        self.confidence = args.confidence
         self.beta = args.beta
+        self.lambda_pl = args.lambda_pl
+        self.lambda_mixup = args.lambda_mixup
+        self.mixup_alpha = args.mixup_alpha
+        self.lambda_pa = args.lambda_pa
 
         # 两组全局原型：分别由监督样本与无监督样本聚合得到，首轮为 None。
         self.global_proto_sup = None
@@ -255,11 +269,11 @@ class Server(BaseServer):
 
         if self.unlabel_domain is None:
             raise ValueError("fedtest requires unlabel_domain to be set")
-        if not self.args.sfd:
+        if not self.sfd:
             raise ValueError("fedtest requires SFD data (sfd must be enabled)")
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -270,7 +284,7 @@ class Server(BaseServer):
 
             params_list = self.build_base_params(selected)
             for params in params_list:
-                params.append(self.confidence_threshold)
+                params.append(self.confidence)
                 params.append(
                     self.global_proto_sup.cpu()
                     if self.global_proto_sup is not None
@@ -283,10 +297,11 @@ class Server(BaseServer):
                 )
                 params.append(self.ema_probs[params[0]])
                 params.append(self.beta)
-                params.append(self.args.lambda_pl)
-                params.append(self.args.lambda_mixup)
-                params.append(self.args.mixup_alpha)
-                params.append(self.args.lambda_pa)
+                params.append(self.lambda_pl)
+                params.append(self.lambda_mixup)
+                params.append(self.mixup_alpha)
+                params.append(0.5 + r / self.rounds / 2.0)
+                params.append(self.lambda_pa)
             results = self.run_clients(train, params_list)
 
             total_loss = 0.0
@@ -327,7 +342,10 @@ class Server(BaseServer):
             self.evaluate()
 
             print(
-                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+                f"Global Accuracy: {self.acc[-1]:.2f}%, "
+                f"Source: {self.acc_source[-1]:.2f}%, "
+                f"Target: {self.acc_target[-1]:.2f}%, "
+                f"Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 

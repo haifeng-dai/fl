@@ -6,10 +6,10 @@ import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
     dist_contrastive_loss,
     extract_prototypes,
+    fmt_num,
     get_model,
     mse_loss,
     param_aggregate,
@@ -134,9 +134,13 @@ class Server(BaseServer):
     def __init__(self, args):
         # FedSA 是个性化联邦学习算法 (pfl=True)
         super().__init__(True, args)
+        self.alpha_sa = args.alpha_sa
+        self.lambda_r = args.lambda_r
+        self.lambda_mcl = args.lambda_mcl
+        self.lambda_cc = args.lambda_cc
 
         # 根据论文按随机分布初始化语义锚点
-        self.anchors = torch.randn(self.num_class, self.args.feature_dim)
+        self.anchors = torch.randn(self.num_class, self.feature_dim)
         self.anchors = F.normalize(self.anchors, p=2, dim=1)
 
         self.clients_anchors = [
@@ -144,9 +148,9 @@ class Server(BaseServer):
         ]
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        print(f"FedSA Training with alpha_sa={self.args.alpha_sa} (EMA factor)")
+        print(f"FedSA Training with alpha_sa={self.alpha_sa} (EMA factor)")
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -160,9 +164,9 @@ class Server(BaseServer):
                 params[2] = self.clients_state[i]
                 params.append(self.clients_anchors[i])
                 params.append(self.anchors)
-                params.append(self.args.lambda_r)
-                params.append(self.args.lambda_mcl)
-                params.append(self.args.lambda_cc)
+                params.append(self.lambda_r)
+                params.append(self.lambda_mcl)
+                params.append(self.lambda_cc)
             results = self.run_clients(train, p)
 
             total_loss = 0.0
@@ -205,7 +209,7 @@ class Server(BaseServer):
 
         # 公式 (10): A_t+1 = alpha * A_t + (1 - alpha) * P_bar_t
         mask = torch.norm(new_p_bar, dim=1) > 1e-8
-        alpha = self.args.alpha_sa
+        alpha = self.alpha_sa
 
         self.anchors[mask] = alpha * self.anchors[mask] + (1 - alpha) * new_p_bar[mask]
 

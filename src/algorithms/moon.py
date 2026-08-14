@@ -5,8 +5,8 @@ import torch
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
+    fmt_num,
     get_model,
 )
 
@@ -42,7 +42,9 @@ def train(params):
     model.load_state_dict(global_state)
 
     # 2. 初始化全局模型（冻结）用于计算对抗损失
-    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
+    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(
+        device
+    )
     global_model.load_state_dict(global_state)
     global_model.eval()
 
@@ -96,10 +98,11 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
-        # 使用最初始的全局模型来初始化所有客户端作为其“上一轮状态”
+        self.mu = args.mu
+        self.tau = args.tau
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -111,8 +114,8 @@ class Server(BaseServer):
             p = self.build_base_params(selected)
             for params, i in zip(p, selected):
                 params.append(self.clients_state[i])
-                params.append(self.args.mu)
-                params.append(self.args.tau)
+                params.append(self.mu)
+                params.append(self.tau)
             results = self.run_clients(train, p)
 
             # 汇集各客户端回传结果，增量计算加权平均损失

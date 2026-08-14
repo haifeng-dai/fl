@@ -232,18 +232,20 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(True, args)
+        self.lr_g = args.lr_g
+        self.energy = args.energy
 
         # 初始分解运算（迁移到 GPU 上执行 SVD）
         self.compressed_params = {}
         for name, param in self.model.state_dict().items():
             self.compressed_params[name] = decompose_param(
-                param.to(self.device), args.energy
+                param.to(self.device), self.energy
             )
 
         self.client_wh_states = [None for _ in range(self.num_clients)]
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -257,8 +259,8 @@ class Server(BaseServer):
                 params[2] = self.compressed_params
                 params.append(self.clients_state[i])
                 params.append(self.client_wh_states[i])
-                params.append(self.args.lr_g)
-                params.append(self.args.energy)
+                params.append(self.lr_g)
+                params.append(self.energy)
             results = self.run_clients(train, p)
 
             # 汇集各客户端回传结果并更新服务器端存储的客户端本地状态
@@ -310,7 +312,7 @@ class Server(BaseServer):
         self.compressed_params = {}
         for name, param in self.model.state_dict().items():
             self.compressed_params[name] = decompose_param(
-                param.to(self.device), self.args.energy
+                param.to(self.device), self.energy
             )
 
     def save(self):

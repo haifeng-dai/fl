@@ -5,8 +5,8 @@ import torch
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
+    fmt_num,
     get_model,
     param_aggregate,
 )
@@ -90,12 +90,14 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(True, args)
+        self.epochs_head = args.epochs_head
+
         self.client_head_states = [
             self.model.classifier.state_dict() for _ in range(self.num_clients)
         ]
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -109,7 +111,7 @@ class Server(BaseServer):
             for params, i in zip(p, selected):
                 params[2] = global_body_state
                 params.append(self.client_head_states[i])
-                params.append(self.args.epochs_head)
+                params.append(self.epochs_head)
             results = self.run_clients(train, p)
 
             total_loss = 0.0

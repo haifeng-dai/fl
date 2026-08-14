@@ -30,7 +30,7 @@ def kl_loss(student_logits, teacher_logits, temperature=1.0):
     return loss
 
 
-def cos_contrastive_loss(features, prototypes, labels, temperature=0.1):
+def cos_similarity(features, prototypes, labels, temperature=0.1):
     """
     向量化优化的余弦对比损失 (Cosine Contrastive Loss)。
     利用原型作为 Anchor，拉近同类样本，推开异类样本。

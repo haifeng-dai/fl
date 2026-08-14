@@ -50,7 +50,6 @@ def evaluate(
 
 class BaseServer:
     def __init__(self, pfl: bool, args):
-        self.args = args
         self.rounds: int = args.rounds
 
         # 自适应 Round 调整逻辑
@@ -61,17 +60,46 @@ class BaseServer:
                 f"-> Adaptive Rounds: detected {'PFL' if pfl else 'GFL'} algorithm, setting rounds={self.rounds}"
             )
 
-        self.num_clients: int = self.args.num_clients
+        self.num_clients: int = args.num_clients
+        self.join_ratio: float = args.join_ratio
+        self.epochs: int = args.epochs
+        self.batch_size: int = args.batch_size
+        self.lr: float = args.lr
+        self.model_name: str = args.model
+        self.dataset: str = args.dataset
+        self.feature_dim: int = args.feature_dim
+        self.max_workers_per_gpu: int = args.max_workers_per_gpu
+        self.save_path: str = args.save_path
+        self.log_path: str = args.log_path
+        self.file_name: str = args.file_name
+        self.cur_time: str = args.cur_time
+        self.test: int = args.test
+
         self.pfl = pfl
         self.acc: list[float] = []
         self.acc_proto: list[float] = []
         self.loss: list[float] = []
 
-        if args.sfd:
+        self.fdg = args.fdg
+        if self.fdg:
+            self.selected_domains = args.selected_domains
+            self.target_domain = args.target_domain
+
+        self.sfd = args.sfd
+        if self.sfd:
+            self.label_domain = args.label_domain
+            self.unlabel_domain = args.unlabel_domain
+            self.label_rate = args.label_rate
             self.acc_source: list[float] = []
             self.acc_target: list[float] = []
             self.acc_source_p: list[float] = []
             self.acc_target_p: list[float] = []
+
+        self.ssl = args.ssl
+        if args.ssl:
+            self.label_ratio = args.label_ratio
+            self.lam = args.lam
+            self.confidence = args.confidence
 
         (
             self.train_sets,
@@ -87,7 +115,7 @@ class BaseServer:
         ]
 
         self.model = get_model(
-            args.model, args.dataset, self.num_class, args.feature_dim
+            self.model_name, self.dataset, self.num_class, self.feature_dim
         ).cpu()
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
@@ -127,10 +155,10 @@ class BaseServer:
         self.model.load_state_dict(aggregated_state)
 
     def evaluate(self, model_states=None, protos=None):
-        if self.args.sfd:
+        if self.sfd:
             # SFD：按 unlabel_domain 切分测试集（label 域 -> acc_source，unlabel 域 -> acc_target）
             assert isinstance(self.test_set.domains, list)
-            unlabel_domain = self.args.unlabel_domain
+            unlabel_domain = self.unlabel_domain
             mask_tgt = torch.tensor(
                 [d == unlabel_domain for d in self.test_set.domains]
             )
@@ -171,7 +199,7 @@ class BaseServer:
 
         # pfl=True: Ray 并行评估
         target_states = model_states if model_states is not None else self.clients_state
-        ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
+        ray_gpu_fraction = 1.0 / max(1, self.max_workers_per_gpu)
         client_proto = protos.cpu() if protos is not None else None
         futures = []
         for i in range(self.num_clients):
@@ -180,9 +208,9 @@ class BaseServer:
                     num_gpus=ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
                 ).remote(
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.feature_dim,
+                    self.model_name,
+                    self.dataset,
+                    self.feature_dim,
                     target_states[i],
                     self.test_set_refs[i],
                     self.client_gpu[i],
@@ -202,12 +230,12 @@ class BaseServer:
                 self.client_gpu[i],
                 self.model.state_dict(),
                 self.train_sets[i],
-                self.args.model,
-                self.args.dataset,
-                self.args.lr,
-                self.args.batch_size,
-                self.args.epochs,
-                self.args.feature_dim,
+                self.model_name,
+                self.dataset,
+                self.lr,
+                self.batch_size,
+                self.epochs,
+                self.feature_dim,
                 self.num_class,
             ]
             for i in selected_clients
@@ -216,7 +244,7 @@ class BaseServer:
     def run_clients(self, worker_func, parameters):
         """通过 Ray 运行客户端训练。"""
         # 根据 max_workers_per_gpu 计算 Ray 需要的显存比例 (1/n)
-        ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
+        ray_gpu_fraction = 1.0 / max(1, self.max_workers_per_gpu)
 
         optimized_parameters = []
         for p in parameters:
@@ -241,7 +269,7 @@ class BaseServer:
         summary_str = f"\n[Summary] Max Acc: {max(self.acc):.2f}%"
         if self.acc_proto:
             summary_str += f" | Max Proto Acc: {max(self.acc_proto):.2f}%"
-        if self.args.sfd:
+        if self.sfd:
             summary_str += (
                 f" | Max Source Acc: {max(self.acc_source):.2f}%"
                 f" | Max Target Acc: {max(self.acc_target):.2f}%"
@@ -252,16 +280,14 @@ class BaseServer:
                 summary_str += f" | Max Target Proto Acc: {max(self.acc_target_p):.2f}%"
         print(summary_str)
 
-        name = f"{self.args.file_name}_{self.args.cur_time}.pt"
-        metrics_path = os.path.join(self.args.save_path, name)
-        params_path = os.path.join(
-            self.args.save_path, name.replace(".pt", "_params.pt")
-        )
-        if self.args.test:
+        name = f"{self.file_name}_{self.cur_time}.pt"
+        metrics_path = os.path.join(self.save_path, name)
+        params_path = os.path.join(self.save_path, name.replace(".pt", "_params.pt"))
+        if self.test:
             print(f"\n-> [Test Mode] Would save metrics to: {metrics_path}")
             print(f"\n-> [Test Mode] Would save params to: {params_path}")
             return
-        os.makedirs(self.args.save_path, exist_ok=True)
+        os.makedirs(self.save_path, exist_ok=True)
         torch.save(metrics, metrics_path)
         torch.save(params, params_path)
         print(f"-> Metrics saved to: {metrics_path}")

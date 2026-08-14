@@ -5,9 +5,9 @@ import torch
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
     extract_prototypes,
+    fmt_num,
     get_model,
     mse_loss,
     proto_aggregate,
@@ -86,11 +86,12 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(True, args)
+        self.mu = args.mu
 
         self.global_protos = None
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -102,8 +103,10 @@ class Server(BaseServer):
             p = self.build_base_params(selected)
             for params, i in zip(p, selected):
                 params[2] = self.clients_state[i]
-                params.append(self.args.mu)
-                params.append(self.global_protos.cpu() if self.global_protos is not None else None)
+                params.append(self.mu)
+                params.append(
+                    self.global_protos.cpu() if self.global_protos is not None else None
+                )
             results = self.run_clients(train, p)
 
             total_loss = 0.0

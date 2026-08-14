@@ -21,7 +21,13 @@ from .utils import (
 
 def get_path(args):
     """构造实验日志文件名（含域配置与算法超参值）。"""
-    args.file_name = f"{args.common_name}_{fmt_num(args.confidence)}"
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.confidence)}"
+        f"_{fmt_num(args.h_interval)}_{fmt_num(args.num_helpers)}"
+        f"_{fmt_num(args.lambda_s)}_{fmt_num(args.lambda_i)}"
+        f"_{fmt_num(args.lambda_a)}_{fmt_num(args.lambda_l2)}"
+        f"_{fmt_num(args.lambda_l1)}_{fmt_num(args.l1_thres)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -241,15 +247,20 @@ class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
 
-        self.unlabel_domain = args.unlabel_domain
-        if not self.args.sfd:
+        if not self.sfd:
             raise ValueError("fedmatch requires SFD data (sfd must be enabled)")
         if self.unlabel_domain is None:
             raise ValueError("fedmatch requires unlabel_domain to be set")
 
-        # 算法专属超参（configs/algorithms.yaml 中配置）
+        # 算法专属超参与置信度阈值（configs/algorithms.yaml 及 default.yaml 中配置）
+        self.confidence = args.confidence
         self.h_interval = args.h_interval  # helper 重建周期（每 h_interval 轮）
         self.num_helpers = args.num_helpers  # 每客户端 helper 数量
+        self.lambda_s = args.lambda_s
+        self.lambda_i = args.lambda_i
+        self.lambda_a = args.lambda_a
+        self.lambda_l2 = args.lambda_l2
+        self.lambda_l1 = args.lambda_l1
         self.l1_thres = args.l1_thres  # ψ 稀疏化硬阈值
 
         # 全局 σ/ψ（等权平均聚合维护）；ψ 初始为零，θ = σ + 0 = σ
@@ -291,7 +302,7 @@ class Server(BaseServer):
         return [self.psis[h] for h in hids]
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
@@ -314,13 +325,13 @@ class Server(BaseServer):
                 for extra in (
                     r,
                     helper_map.get(params[0]),
-                    self.args.confidence,
-                    self.args.lambda_s,
-                    self.args.lambda_i,
-                    self.args.lambda_a,
-                    self.args.lambda_l2,
-                    self.args.lambda_l1,
-                    self.args.l1_thres,
+                    self.confidence,
+                    self.lambda_s,
+                    self.lambda_i,
+                    self.lambda_a,
+                    self.lambda_l2,
+                    self.lambda_l1,
+                    self.l1_thres,
                 ):
                     params.append(extra)
             results = self.run_clients(train, p)

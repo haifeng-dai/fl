@@ -11,11 +11,11 @@ from src import TrainingFailureError
 
 from .utils import (
     BaseServer,
-    fmt_num,
     ce_loss,
     compute_mh_weights,
     evaluate,
     extract_prototypes,
+    fmt_num,
     generate_adjacency_matrix,
     get_model,
     mse_loss,
@@ -123,6 +123,12 @@ def train(params):
 class Server(BaseServer):
     def __init__(self, args):
         super().__init__(pfl=True, args=args)
+        self.lambda_sa = args.lambda_sa
+        self.lambda_so = args.lambda_so
+        self.gamma_global = args.gamma_global
+        self.eta = args.eta
+        self.ablate = args.ablate
+
         # 生成静态物理拓扑邻接矩阵
         adj = generate_adjacency_matrix(args).to(self.device).float()
         self.adj = adj
@@ -146,7 +152,6 @@ class Server(BaseServer):
 
         # 每个客户端追踪自身 GSD 的历史 EMA（P2P 触发基准）
         self.local_gsd_ema = torch.full((self.num_clients, 1), 0.5, device=self.device)
-        self.eta = self.args.eta
         self.gsd_log: list[list[float]] = []
         self.num_triggered_log: list[int] = []
         self.triggered_ids_log: list[list[int]] = []
@@ -165,7 +170,7 @@ class Server(BaseServer):
         self.extractor_total_size = total
 
     def fit(self):
-        # num_join_clients = int(self.num_clients * self.args.join_ratio)
+        # num_join_clients = int(self.num_clients * self.join_ratio)
         # num_join_clients = max(1, num_join_clients)
         num_join_clients = self.num_clients
         selected_clients = np.arange(self.num_clients)
@@ -177,7 +182,7 @@ class Server(BaseServer):
             #     self.num_clients, num_join_clients, replace=False
             # )
 
-            ablate = self.args.ablate
+            ablate = self.ablate
             confidence_mode = ablate.get("confidence", "log")
             trigger_mode = ablate.get("trigger", "adaptive")
             use_redirect = ablate.get("aggregator", True)
@@ -186,8 +191,8 @@ class Server(BaseServer):
             for params, i in zip(p, selected_clients):
                 params[2] = self.clients_state[i]
                 params.append(self.consensus_P[i])
-                params.append(self.args.lambda_sa)
-                params.append(self.args.lambda_so)
+                params.append(self.lambda_sa)
+                params.append(self.lambda_so)
                 params.append(confidence_mode)
             results = self.run_clients(train, p)
 
@@ -260,9 +265,7 @@ class Server(BaseServer):
 
             # 提取更新后的原型共识
             W_tensor = W_flat.view(self.num_clients, self.num_class, 1)
-            S_tensor = S_flat.view(
-                self.num_clients, self.num_class, self.args.feature_dim
-            )
+            S_tensor = S_flat.view(self.num_clients, self.num_class, self.feature_dim)
             consensus = S_tensor / (W_tensor + 1e-12)
 
             for i in range(self.num_clients):
@@ -279,7 +282,7 @@ class Server(BaseServer):
                 local_trigger.fill_(True)
                 print("  [Ablation] All clients force triggered.")
             elif trigger_mode == "global":
-                gamma_global = self.args.gamma_global
+                gamma_global = self.gamma_global
                 if r == 0:
                     local_trigger.fill_(True)
                     lines = [
@@ -424,7 +427,7 @@ class Server(BaseServer):
 
     def evaluate(self, model_states=None, protos=None):
         target_states = model_states if model_states is not None else self.clients_state
-        ray_gpu_fraction = 1.0 / max(1, self.args.max_workers_per_gpu)
+        ray_gpu_fraction = 1.0 / max(1, self.max_workers_per_gpu)
         futures = []
         for i in range(self.num_clients):
             client_proto = protos[i] if protos is not None else None
@@ -433,9 +436,9 @@ class Server(BaseServer):
                     num_gpus=ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
                 ).remote(
-                    self.args.model,
-                    self.args.dataset,
-                    self.args.feature_dim,
+                    self.model_name,
+                    self.dataset,
+                    self.feature_dim,
                     target_states[i],
                     self.test_set_refs[i],
                     self.client_gpu[i],

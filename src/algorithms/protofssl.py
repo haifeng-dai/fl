@@ -200,12 +200,17 @@ class Server(BaseServer):
     def __init__(self, args):
         # ProtoFSSL 为全局联邦方法，pfl=False
         super().__init__(False, args)
+        self.label_ratio = args.label_ratio
+        self.support_size = args.support_size
+        self.unlabeled_query_size = args.unlabeled_query_size
+        self.lambda_ = args.lambda_
+        self.sharpen_T = args.sharpen_T
 
         self.client_protos = {}  # cid → 本地原型 [K, D]，供下一轮构造辅助集
         self.global_protos = None  # 聚合后的全局原型
 
     def fit(self):
-        num_join = max(1, int(self.num_clients * self.args.join_ratio))
+        num_join = max(1, int(self.num_clients * self.join_ratio))
 
         prev_selected = []  # M_{r-1}
         for r in range(self.rounds):
@@ -221,11 +226,11 @@ class Server(BaseServer):
             p = self.build_base_params(selected)
             for params in p:
                 for extra in (
-                    self.args.label_ratio,
-                    self.args.support_size,
-                    self.args.unlabeled_query_size,
-                    self.args.lambda_,
-                    self.args.sharpen_T,
+                    self.label_ratio,
+                    self.support_size,
+                    self.unlabeled_query_size,
+                    self.lambda_,
+                    self.sharpen_T,
                 ):
                     params.append(extra)
                 # 构造辅助原型 [H, K, D]（首轮 H_r 为空 → None）
@@ -262,7 +267,7 @@ class Server(BaseServer):
             )
 
             self.evaluate(protos=self.global_protos)
-            if self.args.sfd:
+            if self.sfd:
                 src = f"{self.acc_source[-1]:.2f}%" if self.acc_source else "N/A"
                 tgt = f"{self.acc_target[-1]:.2f}%" if self.acc_target else "N/A"
                 acc = f"{self.acc[-1]:.2f}%" if self.acc else "N/A"
@@ -288,7 +293,7 @@ class Server(BaseServer):
             "acc_proto": self.acc_proto,
             "loss": self.loss,
         }
-        if self.args.sfd:
+        if self.sfd:
             metrics["acc_source"] = self.acc_source
             metrics["acc_target"] = self.acc_target
             metrics["acc_source_p"] = self.acc_source_p

@@ -71,7 +71,7 @@ label_ratio:
     #   ssl=client -> 有标签客户端比例
     #   ssl=none / domain -> 本项不参与
 lam: 1.0 # float，fedtest 无监督损失权重；0 = 退化为纯监督。
-confidence_threshold: 0.95 # float，fedtest FixMatch 伪标签置信度阈值。
+confidence: 0.95 # float，fedtest FixMatch 伪标签置信度阈值。
 
 # —— 纬度三：
 # 适用数据分布异质性，两个域都适用
