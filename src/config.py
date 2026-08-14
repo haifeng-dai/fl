@@ -175,20 +175,20 @@ def get_pre_name(args):
     elif args.partition == "pathological":
         part_seg += f"_{args.n_class}"
 
-    if args.sfd:
+    if args.ssl == "sfd":
         fold_path = os.path.join(
             f"{args.algo}",
-            f"{args.dataset}_{args.label_domain}_{args.unlabel_domain}_{args.model}_{part_seg}_{args.label_rate}",
+            f"{args.dataset}_{args.label_domain}_{args.unlabel_domain}_{args.model}_{part_seg}_{args.label_ratio}",
         )
     elif args.fdg:
         fold_path = os.path.join(
             f"{args.algo}",
             f"{args.dataset}_{sanitize(args.selected_domains)}_{sanitize(args.target_domain)}_{args.model}_{part_seg}",
         )
-    elif args.ssl not in (None, "none"):
+    elif args.ssl in ("sample", "client"):
         fold_path = os.path.join(
             f"{args.algo}",
-            f"{args.dataset}_{args.model}_{part_seg}_{args.label_ratio}_{args.lam}_{args.confidence_threshold}",
+            f"{args.dataset}_{args.model}_{part_seg}_{args.label_ratio}_{args.lam}_{args.confidence}",
         )
     else:
         fold_path = os.path.join(

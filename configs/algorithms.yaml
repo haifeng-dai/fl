@@ -1,11 +1,12 @@
 # 算法专属配置 (Algorithm Specific Arguments)
 
 fedtest:
-    beta: 0.9
+    beta: 0.8
     lambda_pl: 1.0
+    lambda_pa: 0.01
     lambda_mixup: 1.0
-    mixup_alpha: 0.75
-    lambda_pa: 1.0
+    lambda_: 0.75
+    tau: 0.5
 
 fedprox:
     mu: 0.01
@@ -121,14 +122,13 @@ protofssl:
     sharpen_T: 0.5
 
 fedmatch:
-    h_interval: 1
+    h_interval: 10
     num_helpers: 2
-    lambda_s: 1.0
-    lambda_i: 0.001
-    lambda_a: 0.001
-    lambda_l2: 1.0
+    lambda_s: 10.0
+    lambda_iccs: 0.01
+    lambda_l2: 10.0
     lambda_l1: 0.00001
-    l1_thres: 0.000005
+    l1_thres: 0.00005
 
 dfedset:
     lambda_sa:

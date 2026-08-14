@@ -267,7 +267,7 @@ class Server(BaseServer):
             )
 
             self.evaluate(protos=self.global_protos)
-            if self.sfd:
+            if self.is_sfd:
                 src = f"{self.acc_source[-1]:.2f}%" if self.acc_source else "N/A"
                 tgt = f"{self.acc_target[-1]:.2f}%" if self.acc_target else "N/A"
                 acc = f"{self.acc[-1]:.2f}%" if self.acc else "N/A"
@@ -293,7 +293,7 @@ class Server(BaseServer):
             "acc_proto": self.acc_proto,
             "loss": self.loss,
         }
-        if self.sfd:
+        if self.is_sfd:
             metrics["acc_source"] = self.acc_source
             metrics["acc_target"] = self.acc_target
             metrics["acc_source_p"] = self.acc_source_p

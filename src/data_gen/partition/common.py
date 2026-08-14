@@ -68,10 +68,12 @@ def get_output_dir(args, dataset_name):
         part_seg = f"pathological_{n}_{args.n_class}"
     else:
         raise ValueError(f"Unknown partition method: {args.partition}")
-    if args.sfd:
+    if args.ssl == "sfd":
         ld = sanitize(args.label_domain)
         ud = sanitize(args.unlabel_domain)
-        part_str = f"sfd_{part_seg}_{ld}_{ud}_{args.label_rate}"
+        part_str = f"sfd_{part_seg}_{ld}_{ud}_{args.label_ratio}"
+    elif args.ssl in ("sample", "client"):
+        part_str = f"{args.ssl}_{part_seg}_{args.label_ratio}"
     elif args.fdg:
         dom = sanitize(args.selected_domains)
         td = sanitize(args.target_domain)

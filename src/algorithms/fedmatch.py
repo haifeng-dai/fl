@@ -5,7 +5,7 @@ import time
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader, TensorDataset
 
 from .utils import (
@@ -24,8 +24,8 @@ def get_path(args):
     args.file_name = (
         f"{args.common_name}_{fmt_num(args.confidence)}"
         f"_{fmt_num(args.h_interval)}_{fmt_num(args.num_helpers)}"
-        f"_{fmt_num(args.lambda_s)}_{fmt_num(args.lambda_i)}"
-        f"_{fmt_num(args.lambda_a)}_{fmt_num(args.lambda_l2)}"
+        f"_{fmt_num(args.lambda_s)}_{fmt_num(args.lambda_iccs)}"
+        f"_{fmt_num(args.lambda_l2)}"
         f"_{fmt_num(args.lambda_l1)}_{fmt_num(args.l1_thres)}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
@@ -81,69 +81,13 @@ def merge_state(sigma_state, psi_state, l1_thres, sparsify=False):
     return merged
 
 
-def pseudo_labeling(local_logits, helper_logits_list, num_classes):
-    """agreement 伪标签：本地模型与各 helper 模型对每个样本的 argmax 投票，取多数票。
-
-    - 无 helper（首轮 / helper 未启用）：退化为本地 argmax；
-    - 返回与 batch 等长的伪标签张量。
-    """
-    votes = F.one_hot(local_logits.argmax(dim=1), num_classes).float()
-    for h_logits in helper_logits_list:
-        votes += F.one_hot(h_logits.argmax(dim=1), num_classes).float()
-    return votes.argmax(dim=1)
-
-
-def unsupervised_loss(
-    dm,
-    x,
-    helper_models,
-    curr_round,
-    num_classes,
-    confidence,
-    lambda_i,
-    lambda_a,
-    lambda_l1,
-    lambda_l2,
-):
-    """无监督损失（只更新 ψ），四项组成：
-
-    1. inter-client KL：KL(helper ‖ local) × lambda_i，拉近本地分布与 helper 分布
-       （helper 侧 detach，仅本地模型承接梯度）；仅在有 helper 且非首轮时启用；
-    2. agreement 伪标签 CE：仅保留置信度 >= confidence 的样本，用投票伪标签
-       监督强增强输出，× lambda_a；
-    3. L1(ψ) × lambda_l1：稀疏化正则（配合评估时的 l1_thres 硬阈值）；
-    4. L2(σ − ψ) × lambda_l2：限制 ψ 偏离 σ 过大（disjoint 约束）。
-    返回 loss。
-    """
-    loss = torch.tensor(0.0, device=x.device)
-    # 置信度过滤：仅 max softmax 概率达标的样本进入无监督训练
-    y_probs = torch.softmax(dm.theta(x), dim=1)
-    conf_mask = y_probs.max(dim=1).values >= confidence
-    num_conf = int(conf_mask.sum().item())
-    if num_conf > 0:
-        x_conf = x[conf_mask]
-        y_conf_logits = dm.theta(x_conf)
-        helper_logits = [h(x_conf).detach() for h in helper_models]
-        if helper_logits and curr_round > 0:
-            n_helper = len(helper_logits)
-            for h_logits in helper_logits:
-                loss += lambda_i * kl_loss(y_conf_logits, h_logits) / n_helper
-        y_hard_logits = dm.theta(strong_augment(x_conf))
-        y_pseudo = pseudo_labeling(y_conf_logits.detach(), helper_logits, num_classes)
-        loss = loss + lambda_a * ce_loss(y_hard_logits, y_pseudo)
-    for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters()):
-        loss = loss + lambda_l1 * pp.abs().sum()
-        loss = loss + lambda_l2 * (sp - pp).square().sum()
-    return loss
-
-
 def train(params):
     """Ray Worker：单客户端本地训练。
 
     参数与 Server.fit 中 build_base_params + append 的追加顺序严格对应：
     base 11 项（cid/gpu/states/train_set/model/dataset/lr/batch_size/epochs/
     feature_dim/num_class）+ 轮次动态 2 项（curr_round/helper_psi_states）
-    + 算法专属超参 7 项（confidence/lambda_s/lambda_i/lambda_a/
+    + 算法专属超参 6 项（confidence/lambda_s/lambda_iccs/
     lambda_l2/lambda_l1/l1_thres）。
     """
     (
@@ -162,8 +106,7 @@ def train(params):
         helper_psi_states,
         confidence,
         lambda_s,
-        lambda_i,
-        lambda_a,
+        lambda_iccs,
         lambda_l2,
         lambda_l1,
         l1_thres,
@@ -207,28 +150,50 @@ def train(params):
     total_loss = 0.0
     num_batches = 0
     for _ in range(epochs):
-        for (x_lb, y_lb), (x_ub,) in zip(l_loader, u_loader):
-            x_lb, y_lb = x_lb.to(device), y_lb.to(device)
-            x_ub = x_ub.to(device)
+        for (x_l, y_l), (x_u,) in zip(l_loader, u_loader):
+            x_l, y_l = x_l.to(device), y_l.to(device)
+            x_u = x_u.to(device)
             optimizer_s.zero_grad()
-            loss_s = lambda_s * ce_loss(dm.theta(x_lb), y_lb)
+            loss_s = lambda_s * ce_loss(dm.theta(x_l), y_l)
             loss_s.backward()
             optimizer_s.step()
             dm.sync_theta()
 
+            # 无监督损失（只更新 ψ），四项组成：
+            # 1. inter-client KL：KL(helper ‖ local)，拉近本地分布与 helper 分布（helper 侧 detach，仅本地模型承接梯度）；仅在有 helper 且非首轮时启用；
+            # 2. agreement 伪标签 CE：仅保留置信度 >= confidence 的样本，用投票伪标签监督强增强输出；
+            #    第 1、2 项合并为 phi = mean(KL) + CE，统一 × lambda_iccs；
+            # 3. L1(ψ) × lambda_l1：稀疏化正则（配合评估时的 l1_thres 硬阈值）；
+            # 4. L2(σ − ψ) × lambda_l2：限制 ψ 偏离 σ 过大（disjoint 约束）。
+            y_logits = dm.theta(x_u)
+
+            helper_logits = [h(x_u).detach() for h in helper_models]
+            phi = torch.tensor(0.0, device=x_u.device)
+            for h_logits in helper_logits:
+                phi = phi + kl_loss(y_logits, h_logits) / len(helper_logits)
+
+            # 置信度过滤：仅 max softmax 概率达标的样本进入无监督训练
+            y_probs = torch.softmax(y_logits, dim=1)
+            conf_mask = y_probs.max(dim=1).values >= confidence
+            if int(conf_mask.sum().item()) > 0:
+                x_conf = x_u[conf_mask]
+                y_conf_logits = y_logits[conf_mask]
+                helper_conf_logits = [h(x_conf).detach() for h in helper_models]
+                # 取多数票。无 helper（首轮 / helper 未启用）时退化为本地 argmax。
+                votes = one_hot(y_conf_logits.detach().argmax(dim=1), num_class)
+                if helper_conf_logits and curr_round > 0:
+                    for h_logits in helper_conf_logits:
+                        votes += one_hot(h_logits.argmax(dim=1), num_class)
+                y_hard_logits = dm.theta(strong_augment(x_conf))
+                y_pseudo = votes.argmax(dim=1)
+                phi = phi + ce_loss(y_hard_logits, y_pseudo)
+            loss_u = lambda_iccs * phi
+
+            for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters()):
+                loss_u = loss_u + lambda_l1 * pp.abs().sum()
+                loss_u = loss_u + lambda_l2 * (sp - pp).square().sum()
+
             optimizer_u.zero_grad()
-            loss_u = unsupervised_loss(
-                dm,
-                x_ub,
-                helper_models,
-                curr_round,
-                num_class,
-                confidence,
-                lambda_i,
-                lambda_a,
-                lambda_l1,
-                lambda_l2,
-            )
             loss_u.backward()
             optimizer_u.step()
             dm.sync_theta()
@@ -247,8 +212,8 @@ class Server(BaseServer):
     def __init__(self, args):
         super().__init__(False, args)
 
-        if not self.sfd:
-            raise ValueError("fedmatch requires SFD data (sfd must be enabled)")
+        if not self.is_sfd:
+            raise ValueError("fedmatch requires SFD data (ssl must be 'sfd')")
         if self.unlabel_domain is None:
             raise ValueError("fedmatch requires unlabel_domain to be set")
 
@@ -257,8 +222,7 @@ class Server(BaseServer):
         self.h_interval = args.h_interval  # helper 重建周期（每 h_interval 轮）
         self.num_helpers = args.num_helpers  # 每客户端 helper 数量
         self.lambda_s = args.lambda_s
-        self.lambda_i = args.lambda_i
-        self.lambda_a = args.lambda_a
+        self.lambda_iccs = args.lambda_iccs
         self.lambda_l2 = args.lambda_l2
         self.lambda_l1 = args.lambda_l1
         self.l1_thres = args.l1_thres  # ψ 稀疏化硬阈值
@@ -327,8 +291,7 @@ class Server(BaseServer):
                     helper_map.get(params[0]),
                     self.confidence,
                     self.lambda_s,
-                    self.lambda_i,
-                    self.lambda_a,
+                    self.lambda_iccs,
                     self.lambda_l2,
                     self.lambda_l1,
                     self.l1_thres,

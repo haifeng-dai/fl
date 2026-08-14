@@ -36,21 +36,15 @@ def prepare_data(args):
     raw_data = torch.load(raw_path, weights_only=False)
     resolve_n_class(args, raw_data["num_classes"])
 
-    if args.sfd:
+    if args.ssl == "sfd":
         prepare_sfd_data(args, dataset_name, raw_data)
     elif args.fdg:
         prepare_fdg_data(args, dataset_name, raw_data)
     else:
-        # 默认：类别划分（维度二）；ssl 掩码作为完全独立的后处理步骤
         output_dir = get_output_dir(args, dataset_name)
-        # 统一判定复用 is_fresh，避免与 domain 分支各自维护一份重复逻辑。
-        fresh = is_fresh(output_dir, args.num_clients)
-        if fresh:
+        if is_fresh(output_dir, args.num_clients):
             prepare_label_data(args, dataset_name, raw_data)
-        # ssl 掩码幂等且与当前 config 绑定（apply_label_ratio_* 每次重算 is_labeled），
-        # 缓存目录名未编码 ssl/label_ratio，故必须按当前配置重新应用，确保配置即时生效。
-        ssl = args.ssl
-        if ssl == "sample":
-            apply_label_ratio_sample(output_dir, args.num_clients, args.label_ratio)
-        elif ssl == "client":
-            apply_label_ratio_client(output_dir, args.num_clients, args.label_ratio)
+            if args.ssl == "sample":
+                apply_label_ratio_sample(output_dir, args.num_clients, args.label_ratio)
+            elif args.ssl == "client":
+                apply_label_ratio_client(output_dir, args.num_clients, args.label_ratio)

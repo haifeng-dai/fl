@@ -19,7 +19,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
       1. 参数校验 + 数据过滤（仅保留两域样本）
       2. 两域各自按 test_ratio 切分 train/test
       3. 每个域独立做异质切分，分配给所有客户端（每个客户端同时拿到两个域的数据）
-      4. 内存掩码：label_domain 按 label_rate 保留有标签样本，其余丢弃；
+      4. 内存掩码：label_domain 按 label_ratio 保留有标签样本，其余丢弃；
          unlabel_domain 全部保留但标为无标签（is_labeled）
       5. 保存 client_*.pt（含 domains/is_labeled 供评估按域切分）
     """
@@ -83,7 +83,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
         all_domains, test_ratio, rng
     )
 
-    # label_domain：有标签域，其训练样本后续会被 label_rate 掩码
+    # label_domain：有标签域，其训练样本后续会被 label_ratio 掩码
     lbl_tr = hetero_split(
         np.array(tr_idx_by_domain[args.label_domain]),
         num_clients,
@@ -132,7 +132,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
 
     # ════════════════════════════════════════════════════════════════
     # 第四阶段：内存掩码（不二次读写文件）
-    #   - label_domain 样本：按 label_rate 随机保留有标签样本，其余丢弃
+    #   - label_domain 样本：按 label_ratio 随机保留有标签样本，其余丢弃
     #   - unlabel_domain 样本：全部保留，标记为无标签
     # ════════════════════════════════════════════════════════════════
     train_is_labeled = []
@@ -143,9 +143,9 @@ def prepare_sfd_data(args, dataset_name, raw_data):
         keep = np.zeros(len(tr), dtype=bool)
         is_labeled = torch.zeros(len(tr), dtype=torch.bool)
 
-        # label_domain：按 label_rate 采样保留
+        # label_domain：按 label_ratio 采样保留
         lbl = np.where(arr == args.label_domain)[0]
-        n_keep = int(len(lbl) * args.label_rate)
+        n_keep = int(len(lbl) * args.label_ratio)
         if len(lbl) > 0 and n_keep > 0:
             perm = torch.randperm(len(lbl), generator=rng).numpy()
             keep_idx = lbl[perm[:n_keep]]

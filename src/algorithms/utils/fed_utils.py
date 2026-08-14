@@ -51,15 +51,6 @@ def evaluate(
 class BaseServer:
     def __init__(self, pfl: bool, args):
         self.rounds: int = args.rounds
-
-        # 自适应 Round 调整逻辑
-        if self.rounds == 0:
-            self.rounds = 1000 if pfl else 200
-            args.rounds = self.rounds
-            print(
-                f"-> Adaptive Rounds: detected {'PFL' if pfl else 'GFL'} algorithm, setting rounds={self.rounds}"
-            )
-
         self.num_clients: int = args.num_clients
         self.join_ratio: float = args.join_ratio
         self.epochs: int = args.epochs
@@ -74,8 +65,15 @@ class BaseServer:
         self.file_name: str = args.file_name
         self.cur_time: str = args.cur_time
         self.test: int = args.test
-
         self.pfl = pfl
+
+        # 自适应 Round 调整逻辑
+        if self.rounds == 0:
+            self.rounds = 1000 if pfl else 200
+            print(
+                f"-> Adaptive Rounds: detected {'PFL' if pfl else 'GFL'} algorithm, setting rounds={self.rounds}"
+            )
+
         self.acc: list[float] = []
         self.acc_proto: list[float] = []
         self.loss: list[float] = []
@@ -85,18 +83,16 @@ class BaseServer:
             self.selected_domains = args.selected_domains
             self.target_domain = args.target_domain
 
-        self.sfd = args.sfd
-        if self.sfd:
+        self.ssl = args.ssl
+        if self.is_sfd:
             self.label_domain = args.label_domain
             self.unlabel_domain = args.unlabel_domain
-            self.label_rate = args.label_rate
             self.acc_source: list[float] = []
             self.acc_target: list[float] = []
             self.acc_source_p: list[float] = []
             self.acc_target_p: list[float] = []
 
-        self.ssl = args.ssl
-        if args.ssl:
+        if self.is_ssl:
             self.label_ratio = args.label_ratio
             self.lam = args.lam
             self.confidence = args.confidence
@@ -146,6 +142,14 @@ class BaseServer:
             global_test_ref = ray.put(self.test_set)
             self.test_set_refs = [global_test_ref for _ in range(self.num_clients)]
 
+    @property
+    def is_sfd(self) -> bool:
+        return self.ssl == "sfd"
+
+    @property
+    def is_ssl(self) -> bool:
+        return self.ssl in ("sample", "client", "sfd")
+
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
     ):
@@ -155,7 +159,7 @@ class BaseServer:
         self.model.load_state_dict(aggregated_state)
 
     def evaluate(self, model_states=None, protos=None):
-        if self.sfd:
+        if self.is_sfd:
             # SFD：按 unlabel_domain 切分测试集（label 域 -> acc_source，unlabel 域 -> acc_target）
             assert isinstance(self.test_set.domains, list)
             unlabel_domain = self.unlabel_domain
@@ -269,7 +273,7 @@ class BaseServer:
         summary_str = f"\n[Summary] Max Acc: {max(self.acc):.2f}%"
         if self.acc_proto:
             summary_str += f" | Max Proto Acc: {max(self.acc_proto):.2f}%"
-        if self.sfd:
+        if self.is_sfd:
             summary_str += (
                 f" | Max Source Acc: {max(self.acc_source):.2f}%"
                 f" | Max Target Acc: {max(self.acc_target):.2f}%"
