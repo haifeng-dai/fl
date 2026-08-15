@@ -122,17 +122,21 @@ def train(params):
     optimizer_s = torch.optim.SGD(dm.sigma.parameters(), lr=lr)
     optimizer_u = torch.optim.SGD(dm.psi.parameters(), lr=lr)
 
-    # 3. helper 模型：全局 σ + 各 helper 的 ψ 恢复完整模型，仅参与前向（eval）
-    helper_models = []
+    # 3. helper 模型权重准备：在 CPU 上计算好合并的权重，避免占用显存
+    helper_states = []
     if helper_psi_states is not None:
         for hps in helper_psi_states:
-            hm = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-            merged = {
-                k: sigma_state[k].to(device) + hps[k].to(device) for k in sigma_state
-            }
-            hm.load_state_dict(merged)
-            hm.eval()
-            helper_models.append(hm)
+            # 在 CPU 上完成合并
+            merged = {k: sigma_state[k] + hps[k] for k in sigma_state}
+            helper_states.append(merged)
+
+    # 准备一个单例的 GPU 模型供 helper 推理复用
+    helper_net = None
+    if helper_states:
+        helper_net = get_model(model_name, dataset_name, num_class, feature_dim).to(
+            device
+        )
+        helper_net.eval()
 
     # 4. 按 is_labeled 掩码切出有标签/无标签数据
     x_l = train_set.x[train_set.is_labeled]
@@ -165,47 +169,78 @@ def train(params):
             #    第 1、2 项合并为 phi = mean(KL) + CE，统一 × lambda_iccs；
             # 3. L1(ψ) × lambda_l1：稀疏化正则（配合评估时的 l1_thres 硬阈值）；
             # 4. L2(σ − ψ) × lambda_l2：限制 ψ 偏离 σ 过大（disjoint 约束）。
+            # 无监督损失（分两步 backward 以极大节省显存）
+            # 第一次 backward：KL 损失单独执行，释放 y_logits 相关的计算图
+            optimizer_u.zero_grad()
             y_logits = dm.theta(x_u)
 
-            helper_logits = [h(x_u).detach() for h in helper_models]
-            phi = torch.tensor(0.0, device=x_u.device)
-            for h_logits in helper_logits:
-                phi = phi + kl_loss(y_logits, h_logits) / len(helper_logits)
+            with torch.no_grad():
+                helper_logits = []
+                if helper_net is not None:
+                    for hs in helper_states:
+                        helper_net.load_state_dict(hs)
+                        helper_logits.append(helper_net(x_u))
 
-            # 置信度过滤：仅 max softmax 概率达标的样本进入无监督训练
-            y_probs = torch.softmax(y_logits, dim=1)
+            phi_kl = torch.tensor(0.0, device=x_u.device)
+            for h_logits in helper_logits:
+                phi_kl = phi_kl + kl_loss(y_logits, h_logits) / max(
+                    1, len(helper_logits)
+                )
+
+            loss_u_kl = lambda_iccs * phi_kl
+            loss_u_kl.backward()  # 第一次 backward：仅 KL 损失
+            total_u_loss_val = loss_u_kl.item()
+
+            # 第二次 backward：CE 伪标签损失 + L1/L2 正则合并执行
+            y_probs = torch.softmax(y_logits.detach(), dim=1)
             conf_mask = y_probs.max(dim=1).values >= confidence
+            loss_u_ce = torch.tensor(0.0, device=x_u.device)
             if int(conf_mask.sum().item()) > 0:
                 x_conf = x_u[conf_mask]
-                y_conf_logits = y_logits[conf_mask]
-                helper_conf_logits = [h(x_conf).detach() for h in helper_models]
-                # 取多数票。无 helper（首轮 / helper 未启用）时退化为本地 argmax。
-                votes = one_hot(y_conf_logits.detach().argmax(dim=1), num_class)
-                if helper_conf_logits and curr_round > 0:
-                    for h_logits in helper_conf_logits:
-                        votes += one_hot(h_logits.argmax(dim=1), num_class)
+                y_conf_logits = y_logits.detach()[conf_mask]
+                with torch.no_grad():
+                    helper_conf_logits = []
+                    if helper_net is not None:
+                        for hs in helper_states:
+                            helper_net.load_state_dict(hs)
+                            helper_conf_logits.append(helper_net(x_conf))
+
+                    # 取多数票。无 helper（首轮 / helper 未启用）时退化为本地 argmax。
+                    votes = one_hot(y_conf_logits.argmax(dim=1), num_class)
+                    if helper_conf_logits and curr_round > 0:
+                        for h_logits in helper_conf_logits:
+                            votes += one_hot(h_logits.argmax(dim=1), num_class)
+                    y_pseudo = votes.argmax(dim=1)
+
                 y_hard_logits = dm.theta(strong_augment(x_conf))
-                y_pseudo = votes.argmax(dim=1)
-                phi = phi + ce_loss(y_hard_logits, y_pseudo)
-            loss_u = lambda_iccs * phi
+                loss_u_ce = lambda_iccs * ce_loss(y_hard_logits, y_pseudo)
 
+            # L1(ψ) 与 L2(σ − ψ) 正则化项（与 CE 损失一起完成第二次 backward）
+            loss_reg = torch.tensor(0.0, device=x_u.device)
             for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters()):
-                loss_u = loss_u + lambda_l1 * pp.abs().sum()
-                loss_u = loss_u + lambda_l2 * (sp - pp).square().sum()
+                loss_reg = loss_reg + lambda_l1 * pp.abs().sum()
+                loss_reg = loss_reg + lambda_l2 * (sp - pp).square().sum()
 
-            optimizer_u.zero_grad()
-            loss_u.backward()
+            (loss_u_ce + loss_reg).backward()  # 第二次 backward：CE + L1 + L2 正则
+            total_u_loss_val += loss_u_ce.item() + loss_reg.item()
+
             optimizer_u.step()
             dm.sync_theta()
-            total_loss += (loss_s.item() + loss_u.item()) / 2
+            total_loss += (loss_s.item() + total_u_loss_val) / 2
             num_batches += 1
 
-    # 7. 回传：σ/ψ 独立上传（服务端分别聚合），均为 CPU 克隆
-    return {
+    # 7. 回传前，必须显式清理大对象并清空显存，防止 Ray worker 持续泄漏
+    res = {
         "loss": total_loss / max(1, num_batches),
         "sigma": dm.sigma_state_dict(),
         "psi": dm.psi_state_dict(),
     }
+
+    del dm, model, optimizer_s, optimizer_u, helper_net, helper_states
+    del l_loader, u_loader, x_l, y_l, x_u
+    torch.cuda.empty_cache()
+
+    return res
 
 
 class Server(BaseServer):
