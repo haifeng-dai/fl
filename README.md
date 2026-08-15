@@ -24,8 +24,14 @@ uv run main.py --algo fedavg
 # 大规模并行运行 (指定 4 块 GPU, 每块卡跑 3 个并发, 使用 ResNet18)
 uv run main.py --algo fedprox --model resnet18 --dataset cifar100 --gpus 0,1,2,3 --max_workers_per_gpu 3
 
-# 快速测试模式 (不记录文件，直接输出到终端)
-uv run main.py -a fedavg -t 1
+# 快速测试模式 (不记录文件，直接输出到终端，默认只测一次)
+uv run main.py -a fedavg -t
+
+# 定制通信轮数 (测试或正式训练均生效，覆盖 YAML 中的 rounds)
+uv run main.py -a fedavg -t -r 10
+
+# 多次测试 (配合 YAML times 指定运行次数轴，-rt 选择要跑的试验索引)
+uv run main.py -a fedavg -t -rt "0,1,2"
 ```
 
 ## 🛠️ 核心参数说明
@@ -35,8 +41,9 @@ uv run main.py -a fedavg -t 1
 - `--dataset`: 数据集（支持 cifar10/100, mnist, tiny_imagenet 等）。
 - `--max_workers_per_gpu`: **关键资源参数**。每块 GPU 上同时运行的 Worker 数量（如 2 表示单卡 2 并行）。
 - `--gpus`: 指定物理 GPU 编号（如 `0,1,2,3`）。
-- `-t, --test 1`: 开启测试模式，日志将直接输出到终端而非文件。
-- `-r, --num_runs`: 覆盖实验重复次数（对应 YAML 中的 `times`）。
+- `-t, --test`: 开启测试模式（无需参数值），日志直接输出到终端而非文件；默认只测一次（`times=1`），并强制 `rounds=3, epochs=2` 实现极速测试。
+- `-rt, --run_time`: 指定要运行的试验索引子集（0 起始，逗号分隔，如 `"0,1,2"`），与 YAML `times` 配合实现多次测试。
+- `-r, --rounds`: 定制通信轮次，覆盖 YAML 中的 `rounds`（`0` 表示自动调整），测试模式与正式训练均生效。
 
 ## 📂 配置与结果管理
 

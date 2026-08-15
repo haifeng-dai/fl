@@ -40,11 +40,18 @@ def get_config():
         "-t", "--test", action="store_true", help="Enable test mode"
     )
     base_parser.add_argument(
-        "-r",
+        "-rt",
         "--run_time",
         type=str,
         default=None,
         help="Comma-separated trial indices to run, 0-based (e.g. '3,4')",
+    )
+    base_parser.add_argument(
+        "-r",
+        "--rounds",
+        type=int,
+        default=None,
+        help="Communication rounds, overrides config 'rounds' (0 = auto)",
     )
 
     # 解析命令行参数
@@ -79,10 +86,14 @@ def get_config():
     if config_dict.get("test") == 1:
         config_dict["rounds"] = 3
         config_dict["epochs"] = 2
-        config_dict["times"] = 2
+        config_dict["times"] = 1
         print(
             f"-> Fast Test Mode Active: rounds={config_dict['rounds']}, epochs={config_dict['epochs']}, times={config_dict['times']}"
         )
+
+    # 命令行显式参数默认覆盖配置文件（含测试模式的强制默认值）
+    if args.rounds is not None:
+        config_dict["rounds"] = args.rounds
 
     # 6. 展开参数搜索 (Sweep)
     configs = expand_sweep(config_dict)
