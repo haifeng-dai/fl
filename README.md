@@ -67,12 +67,12 @@ uv run main.py -a fedavg -t -rt "0,1,2"
 
 ### 数据集一览
 
-| 类型 | 数据集 | 分辨率 | 类别 | 推荐模型 |
-|---|---|---|---|---|
-| **通用** | cifar10, cifar100, mnist, fashionmnist, svhn, emnist, femnist | 28×28 ~ 32×32 | 10 ~ 100 | cnn |
-| **高分辨率** | tiny_imagenet, cars, flowers102, gtsrb, cinic10 | 32×32 ~ 224×224 | 10 ~ 200 | resnet18 |
-| **传感器** | har (UCI-HAR) | 9ch 时序 | 6 | harcnn / harmlp |
-| **域泛化** | cifar10_dg, pacs, officehome, vlcs, domainnet | 32×32 ~ 224×224 | 5 ~ 345 | resnet18 |
+| 类型         | 数据集                                                        | 分辨率          | 类别     | 推荐模型        |
+| ------------ | ------------------------------------------------------------- | --------------- | -------- | --------------- |
+| **通用**     | cifar10, cifar100, mnist, fashionmnist, svhn, emnist, femnist | 28×28 ~ 32×32   | 10 ~ 100 | cnn             |
+| **高分辨率** | tiny_imagenet, cars, flowers102, gtsrb, cinic10               | 32×32 ~ 224×224 | 10 ~ 200 | resnet18        |
+| **传感器**   | har (UCI-HAR)                                                 | 9ch 时序        | 6        | harcnn / harmlp |
+| **域泛化**   | cifar10_dg, pacs, officehome, vlcs, domainnet                 | 32×32 ~ 224×224 | 5 ~ 345  | resnet18        |
 
 ### 域泛化数据集详情
 
@@ -80,11 +80,11 @@ uv run main.py -a fedavg -t -rt "0,1,2"
 
 由 CIFAR-10 通过 4 种增广策略生成，无需手动下载。
 
-| 领域 | 增广策略 |
-|---|---|
-| `clean` | 仅 ToTensor + Normalize |
-| `color_jitter` | ColorJitter(亮度/对比度/饱和度/色相) |
-| `blur_noise` | GaussianBlur(3×3) |
+| 领域            | 增广策略                                    |
+| --------------- | ------------------------------------------- |
+| `clean`         | 仅 ToTensor + Normalize                     |
+| `color_jitter`  | ColorJitter(亮度/对比度/饱和度/色相)        |
+| `blur_noise`    | GaussianBlur(3×3)                           |
 | `rotate_cutout` | RandomRotation(30°) + RandomResizedCrop(32) |
 
 ```yaml
@@ -102,12 +102,12 @@ unlabeled_domain: rotate_cutout
 - 官网：https://sketchx.eecs.qmul.ac.uk/downloads/
 - 4 个域，7 类（dog / elephant / giraffe / guitar / horse / house / person），分辨率 224×224
 
-| 领域 | 说明 |
-|---|---|
-| `photo` | 照片 |
+| 领域           | 说明     |
+| -------------- | -------- |
+| `photo`        | 照片     |
 | `art_painting` | 艺术绘画 |
-| `cartoon` | 卡通 |
-| `sketch` | 素描 |
+| `cartoon`      | 卡通     |
+| `sketch`       | 素描     |
 
 ```yaml
 # 配置示例：mask sketch 域做半监督自训练
@@ -124,49 +124,49 @@ unlabeled_domain: sketch
 - 官网：https://www.hemanthdv.org/officeHomeDataset.html
 - 4 个域，65 类，分辨率 224×224
 
-| 领域 | 说明 |
-|---|---|
-| `Art` | 艺术品 |
-| `Clipart` | 剪贴画 |
-| `Product` | 商品照片 |
+| 领域        | 说明     |
+| ----------- | -------- |
+| `Art`       | 艺术品   |
+| `Clipart`   | 剪贴画   |
+| `Product`   | 商品照片 |
 | `RealWorld` | 真实世界 |
 
 #### VLCS
 
 4 个域，5 个共享类（bird / car / chair / dog / person），分辨率 224×224
 
-| 领域 | 来源 |
-|---|---|
-| `VOC2007` | PASCAL VOC 2007 |
-| `LabelMe` | LabelMe |
-| `Caltech101` | Caltech-101 |
-| `SUN09` | SUN09 |
+| 领域         | 来源            |
+| ------------ | --------------- |
+| `VOC2007`    | PASCAL VOC 2007 |
+| `LabelMe`    | LabelMe         |
+| `Caltech101` | Caltech-101     |
+| `SUN09`      | SUN09           |
 
 #### DomainNet
 
 自动下载，6 个域，345 类
 
-| 领域 | 说明 |
-|---|---|
-| `clipart` | 剪贴画 |
-| `infograph` | 信息图 |
-| `painting` | 绘画 |
+| 领域        | 说明                       |
+| ----------- | -------------------------- |
+| `clipart`   | 剪贴画                     |
+| `infograph` | 信息图                     |
+| `painting`  | 绘画                       |
 | `quickdraw` | 涂鸦（灰度，自动转伪 RGB） |
-| `real` | 真实照片 |
-| `sketch` | 素描 |
+| `real`      | 真实照片                   |
+| `sketch`    | 素描                       |
 
 ### 配置切换要点
 
 切换数据集时需调整以下参数：
 
-| 参数 | 通用 → DG | DG → 通用 |
-|---|---|---|
-| `dataset` | `cifar10` → `pacs` | `domainnet` → `mnist` |
-| `model` | `cnn` → `resnet18`（224px 数据集） | `resnet18` → `cnn` |
+| 参数               | 通用 → DG                              | DG → 通用                        |
+| ------------------ | -------------------------------------- | -------------------------------- |
+| `dataset`          | `cifar10` → `pacs`                     | `domainnet` → `mnist`            |
+| `model`            | `cnn` → `resnet18`（224px 数据集）     | `resnet18` → `cnn`               |
 | `domain_partition` | `~` → `domain_as_client`（启用域划分） | `domain_as_client` → `~`（关闭） |
-| `partition` | 域划分下无效，可保留 | 生效（`iid` / `dirichlet`） |
-| `unlabeled_domain` | 指定要掩标签的域名 | 不适用，置 `~` |
-| `selected_domains` | 过滤仅保留部分域 | 不适用，置 `~` |
+| `partition`        | 域划分下无效，可保留                   | 生效（`iid` / `dirichlet`）      |
+| `unlabeled_domain` | 指定要掩标签的域名                     | 不适用，置 `~`                   |
+| `selected_domains` | 过滤仅保留部分域                       | 不适用，置 `~`                   |
 
 ## 📚 支持算法
 

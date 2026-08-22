@@ -14,6 +14,9 @@ from .load_data import load_data
 def train(worker_func, params):
     """
     Ray 远程工作者的通用包装函数。
+
+    worker 返回后统一清空显存缓存（caching allocator 预留），
+    防止大张量操作（mixup / EMA / 原型等）导致 reserved 持续膨胀。
     """
     p_list = list(params)
     # 在 Ray 托管的环境中，CUDA_VISIBLE_DEVICES 会被自动设置
@@ -24,7 +27,10 @@ def train(worker_func, params):
 
     p_list[3] = ray.get(p_list[3])
 
-    return worker_func(tuple(p_list))
+    try:
+        return worker_func(tuple(p_list))
+    finally:
+        torch.cuda.empty_cache()
 
 
 @ray.remote

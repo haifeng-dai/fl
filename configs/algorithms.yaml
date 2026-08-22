@@ -5,8 +5,9 @@ fedtest:
     lambda_pl: 1.0
     lambda_pa: 0.01
     lambda_mixup: 1.0
-    lambda_: 0.75
+    mixup_alpha: 1.0
     tau: 0.5
+    warmup_rounds: 50
 
 fedprox:
     mu: 0.01
