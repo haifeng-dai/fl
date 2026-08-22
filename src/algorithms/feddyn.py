@@ -2,12 +2,12 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 from .utils import (
     BaseServer,
     fmt_num,
-    ce_loss,
     get_model,
 )
 
@@ -55,7 +55,7 @@ def train(params):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
-            task_loss = ce_loss(logits, y)
+            task_loss = F.cross_entropy(logits, y)
 
             # FedDyn 动态正则化项
             # L = L_task - <grad_prev, w> + (alpha/2) * ||w - w_global||^2

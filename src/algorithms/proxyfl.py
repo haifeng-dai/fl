@@ -2,11 +2,11 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
     fmt_num,
-    ce_loss,
     evaluate_model,
     flattened_matrix_aggregate,
     generate_adjacency_matrix,
@@ -75,8 +75,8 @@ def train(params):
             x, y = x.to(device), y.to(device)
             out_p = proxy_model(x)
             out_l = local_model(x)
-            ce_p = ce_loss(out_p, y)
-            ce_l = ce_loss(out_l, y)
+            ce_p = F.cross_entropy(out_p, y)
+            ce_l = F.cross_entropy(out_l, y)
 
             # 相互知识蒸馏 (Mutual Distillation, 基于 KL 散度)
             loss_kl_p = kl_loss(out_p, out_l.detach())

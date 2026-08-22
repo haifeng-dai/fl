@@ -2,10 +2,10 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    ce_loss,
     fmt_num,
     get_model,
 )
@@ -72,7 +72,7 @@ def train(params):
                 z_prev = prev_model.extractor(x)
 
             # 标准交叉熵分类损失
-            loss_ce = ce_loss(output, y)
+            loss_ce = F.cross_entropy(output, y)
 
             # MOON 对抗损失计算
             # 拉近与全局模型的相似度（正样本），推远与上一轮本地模型的相似度（负样本）
@@ -81,7 +81,7 @@ def train(params):
             logits = torch.cat([pos_sim.reshape(-1, 1), neg_sim.reshape(-1, 1)], dim=1)
             logits /= tau
             labels = torch.zeros(z.size(0)).to(device).long()
-            loss_con = ce_loss(logits, labels)
+            loss_con = F.cross_entropy(logits, labels)
 
             # 整体损失
             loss = loss_ce + mu * loss_con

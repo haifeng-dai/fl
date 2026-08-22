@@ -7,7 +7,6 @@ import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    ce_loss,
     cos_similarity,
     fmt_num,
     get_model,
@@ -140,10 +139,10 @@ def train(params):
             logits = model.classifier(h)
 
             # 公式 (9): L_CE = -1_{y_i} log(softmax(q_i))，不带 τ
-            loss_ce = ce_loss(logits, y)
+            loss_ce = F.cross_entropy(logits, y)
 
             # 公式 (8): L_COM = -log(exp(a_{y_i}^T h_i / τ) / Σ_j exp(a_j^T h_i / τ))
-            loss_com = cos_similarity(h, global_anchors, y, temperature=tau)
+            loss_com = cos_similarity(h, global_anchors, y, tau=tau)
 
             # 公式 (10): L_HC = L_CE + λ * L_COM
             loss = loss_ce + lambda_com * loss_com
@@ -271,7 +270,7 @@ class Server(BaseServer):
             # 公式 (3): L_ACE = -1_{y_i} log(softmax(ρ_i))
             # 其中 ρ_i = ϕ_glo(a_i)，直接将锚点喂入冻结分类器，不带 τ
             logits = self.model.classifier(anchors)
-            loss_ace = ce_loss(logits, self.labels)
+            loss_ace = F.cross_entropy(logits, self.labels)
 
             # 公式 (4): L_SEP，带 τ
             loss_sep = separation_loss(anchors, tau=self.tau)

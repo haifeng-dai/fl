@@ -20,17 +20,17 @@ def train(worker_func, params):
     """
     p_list = list(params)
     # 在 Ray 托管的环境中，CUDA_VISIBLE_DEVICES 会被自动设置
-    if torch.cuda.is_available():
-        p_list[1] = torch.device("cuda:0")
-    else:
-        p_list[1] = torch.device("cpu")
+    if not torch.cuda.is_available():
+        raise RuntimeError("Ray Worker 未获得 CUDA GPU；本项目不支持 CPU 训练模式")
+    p_list[1] = "cuda:0"
 
     p_list[3] = ray.get(p_list[3])
 
     try:
         return worker_func(tuple(p_list))
     finally:
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
+        pass
 
 
 @ray.remote
@@ -122,22 +122,20 @@ class BaseServer:
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
         # 1. 解析 GPU 资源
+        if not torch.cuda.is_available():
+            raise RuntimeError("BaseServer 未检测到 CUDA GPU")
         if isinstance(args.gpus, int):
             gpu_ids = [args.gpus]
-        elif isinstance(args.gpus, str) and args.gpus.strip():
-            gpu_ids = [int(i) for i in args.gpus.split(",") if i.strip()]
         else:
-            gpu_ids = [0]
+            gpu_ids = [int(gpu_id) for gpu_id in args.gpus.split(",")]
+        self.ray_gpu_fraction = 1.0 / max(1, self.max_workers_per_gpu)
         # 由于 CUDA_VISIBLE_DEVICES 会将指定 GPU 编号映射为连续的 0 到 N-1，
         # 故 Server 使用的 GPU 设备索引应为本地可见的最后一个，即 len(gpu_ids) - 1
         dev_idx = len(gpu_ids) - 1
-        self.device = torch.device(
-            f"cuda:{dev_idx}" if torch.cuda.is_available() and dev_idx >= 0 else "cpu"
-        )
+        self.device = torch.device(f"cuda:{dev_idx}")
 
         # 2. 强制设备映射：在 Ray Worker 环境中逻辑显卡始终映射为 cuda:0
-        dev_str = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.client_gpu = {i: torch.device(dev_str) for i in range(self.num_clients)}
+        self.client_gpu = {i: "cuda:0" for i in range(self.num_clients)}
 
         # 3. 缓存测试集到 Ray Object Store，供并行评估使用
         if pfl:
@@ -209,13 +207,12 @@ class BaseServer:
 
         # pfl=True: Ray 并行评估
         target_states = model_states if model_states is not None else self.clients_state
-        ray_gpu_fraction = 1.0 / max(1, self.max_workers_per_gpu)
         client_proto = protos.cpu() if protos is not None else None
         futures = []
         for i in range(self.num_clients):
             futures.append(
                 evaluate.options(
-                    num_gpus=ray_gpu_fraction,
+                    num_gpus=self.ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
                 ).remote(
                     self.model_name,
@@ -253,9 +250,6 @@ class BaseServer:
 
     def run_clients(self, worker_func, parameters):
         """通过 Ray 运行客户端训练。"""
-        # 根据 max_workers_per_gpu 计算 Ray 需要的显存比例 (1/n)
-        ray_gpu_fraction = 1.0 / max(1, self.max_workers_per_gpu)
-
         optimized_parameters = []
         for p in parameters:
             p_list = list(p)
@@ -264,7 +258,8 @@ class BaseServer:
             optimized_parameters.append(tuple(p_list))
 
         remote_worker = train.options(
-            num_gpus=ray_gpu_fraction, scheduling_strategy="SPREAD"
+            num_gpus=self.ray_gpu_fraction,
+            scheduling_strategy="SPREAD",
         )
         futures = [remote_worker.remote(worker_func, p) for p in optimized_parameters]
         results_list = ray.get(futures)

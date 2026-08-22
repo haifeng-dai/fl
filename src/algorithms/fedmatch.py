@@ -5,12 +5,12 @@ import time
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader, TensorDataset
 
 from .utils import (
     BaseServer,
-    ce_loss,
     fmt_num,
     get_model,
     kl_loss,
@@ -158,7 +158,7 @@ def train(params):
             x_l, y_l = x_l.to(device), y_l.to(device)
             x_u = x_u.to(device)
             optimizer_s.zero_grad()
-            loss_s = lambda_s * ce_loss(dm.theta(x_l), y_l)
+            loss_s = lambda_s * F.cross_entropy(dm.theta(x_l), y_l)
             loss_s.backward()
             optimizer_s.step()
             dm.sync_theta()
@@ -213,7 +213,7 @@ def train(params):
                     y_pseudo = votes.argmax(dim=1)
 
                 y_hard_logits = dm.theta(strong_augment(x_conf))
-                loss_u_ce = lambda_iccs * ce_loss(y_hard_logits, y_pseudo)
+                loss_u_ce = lambda_iccs * F.cross_entropy(y_hard_logits, y_pseudo)
 
             # L1(ψ) 与 L2(σ − ψ) 正则化项（与 CE 损失一起完成第二次 backward）
             loss_reg = torch.tensor(0.0, device=x_u.device)

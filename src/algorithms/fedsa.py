@@ -6,12 +6,10 @@ import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    ce_loss,
     dist_contrastive_loss,
     extract_prototypes,
     fmt_num,
     get_model,
-    mse_loss,
     param_aggregate,
     proto_aggregate,
 )
@@ -91,17 +89,17 @@ def train(params):
             output_cc = model.classifier(global_anchors)
 
             # 监督分类损失
-            loss_ce = ce_loss(logits, y)
+            loss_ce = F.cross_entropy(logits, y)
 
             # 公式 (5): 基于锚点的正则化（平滑后的 MSE_loss）
             # 在批处理训练期间，我们使用当前特征作为本地原型的代理
-            loss_r = mse_loss(features, global_anchors[y])
+            loss_r = F.mse_loss(features, global_anchors[y])
 
             # 公式 (7): 边界增强对比损失 (Margin-enhanced Contrastive Loss)
             loss_mcl = dist_contrastive_loss(features, global_anchors, y, margin=d_star)
 
             # 公式 (8): 分类器校准损失
-            loss_cc = ce_loss(output_cc, torch.arange(num_class, device=device))
+            loss_cc = F.cross_entropy(output_cc, torch.arange(num_class, device=device))
 
             # 公式 (9): 总体损失
             loss = (

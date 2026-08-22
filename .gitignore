@@ -8,7 +8,8 @@ logs/
 figures/
 scratch/
 docs/
+tests/
 
-uv.lock
 .geminiignore
 AGENTS.md
+uv.lock

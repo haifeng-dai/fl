@@ -2,10 +2,10 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    ce_loss,
     evaluate_model,
     fmt_num,
     get_model,
@@ -70,8 +70,8 @@ def train(params):
             x, y = x.to(device), y.to(device)
             out_g = global_model(x)
             out_l = local_model(x)
-            ce_g = ce_loss(out_g, y)
-            ce_l = ce_loss(out_l, y)
+            ce_g = F.cross_entropy(out_g, y)
+            ce_l = F.cross_entropy(out_l, y)
 
             # 互学习损失 (KL 散度)
             loss_kl_g = kl_loss(out_g, out_l.detach())

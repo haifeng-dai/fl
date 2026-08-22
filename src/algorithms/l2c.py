@@ -9,7 +9,6 @@ from torch.utils.data import DataLoader, Subset
 
 from .utils import (
     BaseServer,
-    ce_loss,
     fmt_num,
     generate_adjacency_matrix,
     get_model,
@@ -100,7 +99,7 @@ def train_phase1(params):
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
             output = model(x)
-            loss = ce_loss(output, y)
+            loss = F.cross_entropy(output, y)
             loss.backward()
             optimizer.step()
 
@@ -192,7 +191,7 @@ def train_phase2(params):
 
             # 在聚合模型上计算验证损失 (使用 functional_call 以支持元梯度回传)
             outputs = torch.func.functional_call(model, theta_agg, (x_val,))
-            loss = ce_loss(outputs, y_val)
+            loss = F.cross_entropy(outputs, y_val)
 
             # 计算关于 alpha 的梯度
             alpha_grads = torch.autograd.grad(loss, alpha, retain_graph=False)[0]

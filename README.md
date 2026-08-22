@@ -9,7 +9,6 @@
 推荐使用 `uv` 进行依赖管理：
 
 ```bash
-git checkout ray  # 确保在 Ray 分支
 uv sync
 ```
 
@@ -21,8 +20,8 @@ uv sync
 # 基本运行 (使用 configs/default.yaml 中的默认配置)
 uv run main.py --algo fedavg
 
-# 大规模并行运行 (指定 4 块 GPU, 每块卡跑 3 个并发, 使用 ResNet18)
-uv run main.py --algo fedprox --model resnet18 --dataset cifar100 --gpus 0,1,2,3 --max_workers_per_gpu 3
+# 大规模并行运行：先在 configs/default.yaml 中设置模型、数据集、GPU 和并发数
+uv run main.py --algo fedprox
 
 # 快速测试模式 (不记录文件，直接输出到终端，默认只测一次)
 uv run main.py -a fedavg -t
@@ -37,10 +36,10 @@ uv run main.py -a fedavg -t -rt "0,1,2"
 ## 🛠️ 核心参数说明
 
 - `-a, --algo`: 算法名称（支持 FedAvg, FedProx, Scaffold, FedRep, FedALA 等 23 种）。
-- `--model`: 模型架构（支持 cnn, resnet18, resnet50, harcnn 等）。
-- `--dataset`: 数据集（支持 cifar10/100, mnist, tiny_imagenet 等）。
-- `--max_workers_per_gpu`: **关键资源参数**。每块 GPU 上同时运行的 Worker 数量（如 2 表示单卡 2 并行）。
-- `--gpus`: 指定物理 GPU 编号（如 `0,1,2,3`）。
+- `model`（YAML）: 模型架构（支持 cnn, resnet18, resnet50, harcnn 等）。
+- `dataset`（YAML）: 数据集（支持 cifar10/100, mnist, tiny_imagenet 等）。
+- `max_workers_per_gpu`（YAML）: **关键资源参数**。每块 GPU 上同时运行的 Worker 数量（如 2 表示单卡 2 并行）。
+- `gpus`（YAML）: 指定至少一张 NVIDIA GPU（如 `0,1,2,3`）。本项目不提供 CPU 训练模式，CUDA 不可用时会直接报错。
 - `-t, --test`: 开启测试模式（无需参数值），日志直接输出到终端而非文件；默认只测一次（`times=1`），并强制 `rounds=3, epochs=2` 实现极速测试。
 - `-rt, --run_time`: 指定要运行的试验索引子集（0 起始，逗号分隔，如 `"0,1,2"`），与 YAML `times` 配合实现多次测试。
 - `-r, --rounds`: 定制通信轮次，覆盖 YAML 中的 `rounds`（`0` 表示自动调整），测试模式与正式训练均生效。

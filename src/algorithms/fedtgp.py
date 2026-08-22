@@ -3,16 +3,15 @@ import time
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    ce_loss,
     dist_contrastive_loss,
     extract_prototypes,
     fmt_num,
     get_model,
-    mse_loss,
     proto_aggregate,
 )
 
@@ -96,12 +95,12 @@ def train(params):
             x, y = x.to(device), y.to(device)
             features = model.extractor(x)
             output = model.classifier(features)
-            l_ce = ce_loss(output, y)
+            l_ce = F.cross_entropy(output, y)
             l_proto = torch.tensor(0.0, device=device)
 
             if global_protos_tensor is not None:
                 target_protos = global_protos_tensor[y]
-                l_proto = mse_loss(features, target_protos)
+                l_proto = F.mse_loss(features, target_protos)
 
             loss = l_ce + lamda_ * l_proto
 

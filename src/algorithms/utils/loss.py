@@ -2,35 +2,19 @@ import torch
 import torch.nn.functional as F
 
 
-def ce_loss(predictions, targets):
-    """计算交叉熵损失"""
-    return F.cross_entropy(predictions, targets)
+def kl_loss(logits_s, logits_t, tau=1.0):
+    """计算两个 Logits 之间的 KL 散度损失。"""
+    if tau != 1.0:
+        logits_s = logits_s / tau
+        logits_t = logits_t / tau
+
+    log_p_s = F.log_softmax(logits_s, dim=1)
+    p_t = F.softmax(logits_t, dim=1)
+
+    return F.kl_div(log_p_s, p_t, reduction="batchmean") * (tau**2)
 
 
-def mse_loss(predictions, targets):
-    """计算均方误差损失"""
-    return F.mse_loss(predictions, targets)
-
-
-def kl_loss(student_logits, teacher_logits, temperature=1.0):
-    """
-    计算两个 Logits 之间的 KL 散度损失。
-    """
-    if temperature != 1.0:
-        student_logits = student_logits / temperature
-        teacher_logits = teacher_logits / temperature
-
-    student_soft = F.log_softmax(student_logits, dim=1)
-    teacher_soft = F.softmax(teacher_logits, dim=1)
-
-    loss = F.kl_div(student_soft, teacher_soft, reduction="batchmean") * (
-        temperature**2
-    )
-
-    return loss
-
-
-def cos_similarity(features, prototypes, labels, temperature=0.1):
+def cos_similarity(features, prototypes, labels, tau=0.1):
     """
     向量化优化的余弦对比损失 (Cosine Contrastive Loss)。
     利用原型作为 Anchor，拉近同类样本，推开异类样本。
@@ -43,10 +27,10 @@ def cos_similarity(features, prototypes, labels, temperature=0.1):
     protos_norm = F.normalize(prototypes, p=2, dim=1)
 
     # 2. 计算余弦相似度矩阵 [BatchSize, NumClasses]
-    sim_matrix = torch.matmul(features_norm, protos_norm.T) / temperature
+    sim_matrix = torch.matmul(features_norm, protos_norm.T) / tau
 
     # 3. 使用交叉熵计算 InfoNCE Loss
-    return ce_loss(sim_matrix, labels)
+    return F.cross_entropy(sim_matrix, labels)
 
 
 def dist_contrastive_loss(features, prototypes, labels, margin=0.0):
@@ -66,7 +50,7 @@ def dist_contrastive_loss(features, prototypes, labels, margin=0.0):
         dist = dist + one_hot * margin
 
     # 3. 距离越小 Logits 越高，因此取负号
-    return ce_loss(-dist, labels)
+    return F.cross_entropy(-dist, labels)
 
 
 def orthogonality_loss(features, prototypes=None, labels=None):
@@ -87,4 +71,4 @@ def orthogonality_loss(features, prototypes=None, labels=None):
         logits = torch.matmul(features, prototypes.T)
         target_labels = labels
 
-    return ce_loss(logits, target_labels)
+    return F.cross_entropy(logits, target_labels)

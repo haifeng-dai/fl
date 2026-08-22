@@ -2,14 +2,13 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    ce_loss,
     extract_prototypes,
     fmt_num,
     get_model,
-    mse_loss,
     proto_aggregate,
 )
 
@@ -54,11 +53,11 @@ def train(params):
             x, y = x.to(device), y.to(device)
             feature = model.extractor(x)
             logits = model.classifier(feature)
-            loss_ce = ce_loss(logits, y)
+            loss_ce = F.cross_entropy(logits, y)
 
             if global_protos_tensor is not None:
                 target_protos = global_protos_tensor[y]
-                loss_proto = mse_loss(feature, target_protos)
+                loss_proto = F.mse_loss(feature, target_protos)
                 loss = loss_ce + mu * loss_proto
             else:
                 loss = loss_ce

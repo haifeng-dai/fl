@@ -4,11 +4,11 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from .utils import (
     BaseServer,
-    ce_loss,
     fmt_num,
     get_model,
 )
@@ -129,7 +129,7 @@ class ALA:
                 x, y = x.to(self.device), y.to(self.device)
                 optimizer.zero_grad()
                 output = model_t(x)
-                loss = ce_loss(output, y)
+                loss = F.cross_entropy(output, y)
                 loss.backward()
 
                 # 利用 ALA 梯度推导新的聚合权重
@@ -235,7 +235,7 @@ def train(params):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             output = local_model(x)
-            loss = ce_loss(output, y)
+            loss = F.cross_entropy(output, y)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

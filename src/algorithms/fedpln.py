@@ -2,10 +2,10 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    ce_loss,
     dist_contrastive_loss,
     fmt_num,
     get_model,
@@ -125,7 +125,7 @@ def train(params):
             x, y = x.to(device), y.to(device)
             feature = model.extractor(x)
             output = model.classifier(feature)
-            loss_ce = ce_loss(output, y)
+            loss_ce = F.cross_entropy(output, y)
 
             loss_proto = dist_contrastive_loss(feature, protos, y)
 

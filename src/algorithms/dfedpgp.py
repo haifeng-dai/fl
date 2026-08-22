@@ -2,10 +2,10 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    ce_loss,
     flattened_matrix_aggregate,
     fmt_num,
     generate_adjacency_matrix,
@@ -97,7 +97,7 @@ def train(params):
             x, y = x.to(device), y.to(device)
             optimizer_v.zero_grad()
             out = model(x)
-            loss = ce_loss(out, y)
+            loss = F.cross_entropy(out, y)
             loss.backward()
             optimizer_v.step()
 
@@ -127,7 +127,7 @@ def train(params):
             # b. 标准前向与反向传播
             optimizer_u.zero_grad()
             out = model(x)
-            loss = ce_loss(out, y)
+            loss = F.cross_entropy(out, y)
             loss.backward()
 
             # c. 梯度修正与状态回滚：将梯度适配到 u，并将参数乘回 mu 复位

@@ -4,11 +4,11 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    ce_loss,
     fmt_num,
     generate_adjacency_matrix,
     get_model,
@@ -96,7 +96,7 @@ def train(params):
             optimizer.zero_grad()
 
             output = model(x)
-            loss = ce_loss(output, y)
+            loss = F.cross_entropy(output, y)
             loss.backward()
 
             optimizer.step()
@@ -127,7 +127,7 @@ def train(params):
     x, y = next(iter(loader))
     x, y = x.to(device), y.to(device)
     output = model(x)
-    loss = ce_loss(output, y)
+    loss = F.cross_entropy(output, y)
     loss.backward()
 
     # 4.3 逐层进行剪枝（Pruning）和生长（Regrowing）

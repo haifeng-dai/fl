@@ -24,17 +24,31 @@ def setup_runtime_env():
 
 def init_ray(args):
     """
-    初始化 Ray 分布式环境，采用 fl_ray 风格的鲁棒性配置。
+    初始化仅使用 NVIDIA GPU 的 Ray 分布式环境。
     """
     gpus_str = str(args.gpus).strip()
-    gpu_ids = [int(i) for i in gpus_str.split(",")] if gpus_str else []
-    num_gpus = len(gpu_ids)
+    if not gpus_str:
+        raise RuntimeError("必须通过 YAML 配置项 gpus 指定至少一张 NVIDIA GPU")
 
-    resource_msg = f"GPUs: {num_gpus} ({gpus_str})" if num_gpus > 0 else "CPU Only"
-    print(f"-> Initializing Ray Framework | {resource_msg}")
+    try:
+        gpu_ids = [int(gpu_id) for gpu_id in gpus_str.split(",")]
+    except ValueError as exc:
+        raise ValueError(f"gpus 配置格式错误: {gpus_str}") from exc
+    if any(gpu_id < 0 for gpu_id in gpu_ids) or len(set(gpu_ids)) != len(gpu_ids):
+        raise ValueError(f"gpus 必须是互不重复的非负整数: {gpus_str}")
+    num_gpus = len(gpu_ids)
 
     # 1. 在初始化前设置全局可见设备，让 Ray 仅管理这些卡
     os.environ["CUDA_VISIBLE_DEVICES"] = gpus_str
+    if not torch.cuda.is_available():
+        raise RuntimeError("未检测到可用的 NVIDIA CUDA GPU；本项目不支持 CPU 训练模式")
+    visible_gpus = torch.cuda.device_count()
+    if visible_gpus < num_gpus:
+        raise RuntimeError(
+            f"配置了 {num_gpus} 张 GPU，但当前仅检测到 {visible_gpus} 张可见 GPU"
+        )
+
+    print(f"-> Initializing Ray Framework | GPUs: {num_gpus} ({gpus_str})")
 
     runtime_env = {
         "working_dir": ".",

@@ -2,17 +2,16 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    ce_loss,
     extract_prototypes,
     flattened_matrix_aggregate,
     fmt_num,
     generate_adjacency_matrix,
     get_model,
-    mse_loss,
 )
 
 
@@ -89,13 +88,13 @@ def train(params):
         logits = model.classifier(features)
 
         # 交叉熵损失
-        l_ce = ce_loss(logits, y)
+        l_ce = F.cross_entropy(logits, y)
 
         # 原型正则化损失
         l_reg = torch.tensor(0.0, device=device)
         if personalized_protos is not None and personalized_protos.abs().sum() > 0:
             target_protos = personalized_protos[y]
-            l_reg = mse_loss(features, target_protos)
+            l_reg = F.mse_loss(features, target_protos)
 
         # 总损失
         loss = l_ce + lamda * l_reg

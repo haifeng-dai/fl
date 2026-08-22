@@ -6,11 +6,9 @@ from .augment import strong_augment, weak_augment
 from .evaluate import evaluate_model, evaluate_prototype
 from .fed_utils import BaseServer, evaluate, get_model
 from .loss import (
-    ce_loss,
     cos_similarity,
     dist_contrastive_loss,
     kl_loss,
-    mse_loss,
     orthogonality_loss,
 )
 from .topology import compute_mh_weights, generate_adjacency_matrix, sinkhorn_knopp
@@ -32,14 +30,11 @@ __all__ = [
     "sinkhorn_knopp",
     "cos_similarity",
     "dist_contrastive_loss",
-    "ce_loss",
-    "mse_loss",
     "kl_loss",
     "extract_prototypes",
     "orthogonality_loss",
     "fmt_num",
     "mixup",
-    "extract_protos_ss",
 ]
 
 

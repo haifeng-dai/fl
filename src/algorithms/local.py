@@ -2,11 +2,11 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    ce_loss,
     get_model,
 )
 
@@ -47,7 +47,7 @@ def train(params):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
-            loss = ce_loss(logits, y)
+            loss = F.cross_entropy(logits, y)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

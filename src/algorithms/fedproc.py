@@ -2,10 +2,10 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    ce_loss,
     cos_similarity,
     extract_prototypes,
     get_model,
@@ -54,10 +54,10 @@ def train(params):
             optimizer.zero_grad()
             features = model.extractor(data)
             output = model.classifier(features)
-            loss_ce = ce_loss(output, target)
+            loss_ce = F.cross_entropy(output, target)
 
             # 基于原型的对比损失 (Prototypical Contrastive Loss)
-            loss_con = cos_similarity(features, global_protos, target, temperature=1.0)
+            loss_con = cos_similarity(features, global_protos, target, tau=1.0)
 
             loss = (1 - alpha) * loss_ce + alpha * loss_con
             loss.backward()

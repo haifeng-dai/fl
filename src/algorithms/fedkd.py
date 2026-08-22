@@ -2,14 +2,13 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
     fmt_num,
-    ce_loss,
     get_model,
     kl_loss,
-    mse_loss,
 )
 
 
@@ -178,16 +177,16 @@ def train(params):
             output_g = model_g.classifier(rep_g)
 
             # 基础任务预测损失 (Cross Entropy)
-            loss_ce = ce_loss(output, y)
-            loss_ce_g = ce_loss(output_g, y)
+            loss_ce = F.cross_entropy(output, y)
+            loss_ce_g = F.cross_entropy(output_g, y)
 
             # 互相知识蒸馏 (KL 散度)
             loss_kd = kl_loss(output, output_g.detach())
             loss_kd_g = kl_loss(output_g, output.detach())
 
             # 特征对齐损失
-            loss_h = mse_loss(rep, W_h(rep_g.detach()))
-            loss_h_g = mse_loss(rep.detach(), W_h(rep_g))
+            loss_h = F.mse_loss(rep, W_h(rep_g.detach()))
+            loss_h_g = F.mse_loss(rep.detach(), W_h(rep_g))
 
             # 放缩归一化因子
             scale = loss_ce.item() + loss_ce_g.item() + 1e-8

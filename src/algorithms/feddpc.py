@@ -3,15 +3,14 @@ import time
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
     BaseServer,
-    ce_loss,
     extract_prototypes,
     fmt_num,
     get_model,
-    mse_loss,
     orthogonality_loss,
 )
 
@@ -113,13 +112,13 @@ def train(params):
 
             # 1. 本地数据交叉熵损失
             out = model(x)
-            loss_ce_local = ce_loss(out, y)
+            loss_ce_local = F.cross_entropy(out, y)
 
             # 2. 全局原型锚定损失：将全局原型输入分类器并计算 CE
             loss_ce_proto = 0.0
             if global_protos_tensor is not None:
                 p_out = model.classifier(global_protos_tensor)
-                loss_ce_proto = ce_loss(p_out, proto_labels)
+                loss_ce_proto = F.cross_entropy(p_out, proto_labels)
 
             # 合并损失：在拟合本地数据的同时，保持对全局原型的判别力
             loss = loss_ce_local + lambda_p * loss_ce_proto
@@ -152,10 +151,10 @@ def train(params):
 
                 # 恢复语义锚定：计算分类损失以维持特征的判别力
                 out = model.classifier(features)
-                l_ce = ce_loss(out, y)
+                l_ce = F.cross_entropy(out, y)
 
                 target_protos = global_protos_tensor[y]
-                l_proto = mse_loss(features, target_protos)
+                l_proto = F.mse_loss(features, target_protos)
 
                 # 双重约束：本地决策稳定性 + 全局流形靠拢
                 loss = l_ce + lamda_ * l_proto
@@ -292,7 +291,7 @@ class Server(BaseServer):
                 proto_gen = self.pln(all_class_ids)
                 loss_ortho = orthogonality_loss(proto_gen)
 
-                loss_mse = mse_loss(proto_batch, proto_gen[labels_batch])
+                loss_mse = F.mse_loss(proto_batch, proto_gen[labels_batch])
 
                 loss = loss_mse + self.lambda_acl * loss_ortho
 

@@ -11,14 +11,12 @@ from src import TrainingFailureError
 
 from .utils import (
     BaseServer,
-    ce_loss,
     compute_mh_weights,
     evaluate,
     extract_prototypes,
     fmt_num,
     generate_adjacency_matrix,
     get_model,
-    mse_loss,
 )
 
 
@@ -75,11 +73,11 @@ def train(params):
             features = model.extractor(x)
             logits = model.classifier(features)
 
-            loss = ce_loss(logits, y)
+            loss = F.cross_entropy(logits, y)
             if lambda_sa != 0 or lambda_so != 0:
                 target_protos = consensus_P[y]
                 if lambda_sa != 0:
-                    loss = loss + lambda_sa * mse_loss(features, target_protos)
+                    loss = loss + lambda_sa * F.mse_loss(features, target_protos)
                 if lambda_so != 0:
                     loss = (
                         loss
@@ -427,13 +425,12 @@ class Server(BaseServer):
 
     def evaluate(self, model_states=None, protos=None):
         target_states = model_states if model_states is not None else self.clients_state
-        ray_gpu_fraction = 1.0 / max(1, self.max_workers_per_gpu)
         futures = []
         for i in range(self.num_clients):
             client_proto = protos[i] if protos is not None else None
             futures.append(
                 evaluate.options(
-                    num_gpus=ray_gpu_fraction,
+                    num_gpus=self.ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
                 ).remote(
                     self.model_name,

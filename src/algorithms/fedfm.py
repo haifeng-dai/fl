@@ -2,14 +2,13 @@ import os
 import time
 
 import torch
+import torch.nn.functional as F
 
 from .utils import (
     BaseServer,
-    ce_loss,
     extract_prototypes,
     fmt_num,
     get_model,
-    mse_loss,
     proto_aggregate,
 )
 
@@ -61,7 +60,7 @@ def train(params):
                 optimizer.zero_grad()
                 features = model.extractor(data)
                 output = model.classifier(features)
-                loss_ce = ce_loss(output, target)
+                loss_ce = F.cross_entropy(output, target)
 
                 # 特征与对应类别锚点之间的 MSE 损失
                 target_anchors = global_anchors[target]
@@ -69,7 +68,7 @@ def train(params):
                 # 过滤掉全零锚点（第一轮尚未建立有效锚点时的保护措施）
                 valid_mask = target_anchors.abs().sum(dim=1) > 0
                 if valid_mask.sum() > 0:
-                    loss_cg = mse_loss(features[valid_mask], target_anchors[valid_mask])
+                    loss_cg = F.mse_loss(features[valid_mask], target_anchors[valid_mask])
                     loss = loss_ce + mu * loss_cg
                 else:
                     loss = loss_ce
