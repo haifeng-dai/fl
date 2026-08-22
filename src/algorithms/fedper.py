@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     get_model,
     param_aggregate,
@@ -16,33 +18,25 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
-    (
-        _,
-        device,
-        global_body_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        local_head_state,
-    ) = params
+@dataclass
+class Params(BaseParams):
+    local_head_state: dict[str, torch.Tensor]
 
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.extractor.load_state_dict(global_body_state)
-    model.classifier.load_state_dict(local_head_state)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+def train(p: Params):
+    device = torch.device(p.client_gpu)
+
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.extractor.load_state_dict(p.model_state)
+    model.classifier.load_state_dict(p.local_head_state)
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     model.train()
     total_loss = 0.0
     num_batches = 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             output = model(x)
@@ -82,10 +76,17 @@ class Server(BaseServer):
             # 全局共享特征提取器 (Body)
             global_body_state = self.model.extractor.state_dict()
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = global_body_state
-                params.append(self.client_head_states[i])
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = global_body_state
+
+            p = [
+                Params(
+                    **asdict(base),
+                    local_head_state=self.client_head_states[base.client_id],
+                )
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0

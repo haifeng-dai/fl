@@ -1,6 +1,7 @@
 import math
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import torch
@@ -8,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
+    BaseParams,
     BaseServer,
     compute_mh_weights,
     fmt_num,
@@ -32,31 +34,23 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        hat_state,
-    ) = params
+@dataclass
+class Params(BaseParams):
+    hat_state: dict[str, torch.Tensor]
 
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+def train(p: Params):
+    device = torch.device(p.client_gpu)
+
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     total_loss = 0.0
     num_batches = 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
@@ -73,7 +67,7 @@ def train(params):
     n_params = 0
     diff_sq = 0.0
     for k in new_state:
-        diff = new_state[k].cpu() - hat_state[k].cpu()
+        diff = new_state[k].cpu() - p.hat_state[k].cpu()
         diff_sq += (diff.norm() ** 2).item()
         n_params += diff.numel()
     change = math.sqrt(diff_sq / n_params)
@@ -195,11 +189,18 @@ class Server(BaseServer):
 
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
-                params[6] = lr
-                params.append(self.hat_states[i])
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
+                base.lr = lr
+
+            p = [
+                Params(
+                    **asdict(base),
+                    hat_state=self.hat_states[base.client_id],
+                )
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0

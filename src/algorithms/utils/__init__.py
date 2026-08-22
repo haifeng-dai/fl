@@ -4,7 +4,7 @@ import torch
 from .aggregate import flattened_matrix_aggregate, param_aggregate, proto_aggregate
 from .augment import strong_augment, weak_augment
 from .evaluate import evaluate_model, evaluate_prototype
-from .fed_utils import BaseServer, evaluate, get_model
+from .fed_utils import BaseParams, BaseServer, evaluate, get_model
 from .loss import (
     cos_similarity,
     dist_contrastive_loss,
@@ -22,6 +22,7 @@ __all__ = [
     "compare_model_parameters",
     "evaluate_model",
     "evaluate_prototype",
+    "BaseParams",
     "BaseServer",
     "evaluate",
     "get_model",

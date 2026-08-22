@@ -2,6 +2,7 @@ import copy
 import math
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader, TensorDataset
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     get_model,
@@ -29,6 +31,20 @@ def get_path(args):
         f"_{fmt_num(args.lambda_l1)}_{fmt_num(args.l1_thres)}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+@dataclass
+class Params(BaseParams):
+    sigma_state: dict[str, torch.Tensor]
+    psi_state: dict[str, torch.Tensor]
+    curr_round: int
+    helper_psi_states: list[dict[str, torch.Tensor]] | None
+    confidence: float
+    lambda_s: float
+    lambda_iccs: float
+    lambda_l2: float
+    lambda_l1: float
+    l1_thres: float
 
 
 class DecomposedModel(nn.Module):
@@ -81,84 +97,56 @@ def merge_state(sigma_state, psi_state, l1_thres, sparsify=False):
     return merged
 
 
-def train(params):
-    """Ray Worker：单客户端本地训练。
-
-    参数与 Server.fit 中 build_base_params + append 的追加顺序严格对应：
-    base 11 项（cid/gpu/states/train_set/model/dataset/lr/batch_size/epochs/
-    feature_dim/num_class）+ 轮次动态 2 项（curr_round/helper_psi_states）
-    + 算法专属超参 6 项（confidence/lambda_s/lambda_iccs/
-    lambda_l2/lambda_l1/l1_thres）。
-    """
-    (
-        _,
-        device,
-        states,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        curr_round,
-        helper_psi_states,
-        confidence,
-        lambda_s,
-        lambda_iccs,
-        lambda_l2,
-        lambda_l1,
-        l1_thres,
-    ) = params
-    sigma_state, psi_state = states
+def train(p: Params):
+    """Ray Worker：单客户端本地训练。"""
+    device = torch.device(p.client_gpu)
 
     # 1. 重建分解模型：θ 前向实体 + σ/ψ 可训练副本
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    dm = DecomposedModel(model, l1_thres)
-    dm.load_sigma_psi(sigma_state, psi_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    dm = DecomposedModel(model, p.l1_thres)
+    dm.load_sigma_psi(p.sigma_state, p.psi_state)
 
     # 2. 两个独立优化器实现 disjoint learning：σ ← 监督损失，ψ ← 无监督损失
-    optimizer_s = torch.optim.SGD(dm.sigma.parameters(), lr=lr)
-    optimizer_u = torch.optim.SGD(dm.psi.parameters(), lr=lr)
+    optimizer_s = torch.optim.SGD(dm.sigma.parameters(), lr=p.lr)
+    optimizer_u = torch.optim.SGD(dm.psi.parameters(), lr=p.lr)
 
     # 3. helper 模型权重准备：在 CPU 上计算好合并的权重，避免占用显存
     helper_states = []
-    if helper_psi_states is not None:
-        for hps in helper_psi_states:
+    if p.helper_psi_states is not None:
+        for hps in p.helper_psi_states:
             # 在 CPU 上完成合并
-            merged = {k: sigma_state[k] + hps[k] for k in sigma_state}
+            merged = {k: p.sigma_state[k] + hps[k] for k in p.sigma_state}
             helper_states.append(merged)
 
     # 准备一个单例的 GPU 模型供 helper 推理复用
     helper_net = None
     if helper_states:
-        helper_net = get_model(model_name, dataset_name, num_class, feature_dim).to(
+        helper_net = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
             device
         )
         helper_net.eval()
 
     # 4. 按 is_labeled 掩码切出有标签/无标签数据
-    x_l = train_set.x[train_set.is_labeled]
-    y_l = train_set.y[train_set.is_labeled]
-    x_u = train_set.x[~train_set.is_labeled]
+    x_l = p.train_set.x[p.train_set.is_labeled]
+    y_l = p.train_set.y[p.train_set.is_labeled]
+    x_u = p.train_set.x[~p.train_set.is_labeled]
 
     # 5. 无标签批大小按步数反推：两个 loader 长度一致 → zip 严格 1:1 配对，保证无标签数据在 num_steps 步内被完整遍历一遍
-    num_steps = round(len(x_l) / batch_size)
+    num_steps = round(len(x_l) / p.batch_size)
     bsize_u = math.ceil(len(x_u) / max(1, num_steps))
 
-    l_loader = DataLoader(TensorDataset(x_l, y_l), batch_size=batch_size, shuffle=True)
+    l_loader = DataLoader(TensorDataset(x_l, y_l), batch_size=p.batch_size, shuffle=True)
     u_loader = DataLoader(TensorDataset(x_u), batch_size=bsize_u, shuffle=True)
 
     # 6. 本地训练：每步先监督（仅 σ）再无监督（仅 ψ），步后重建 θ
     total_loss = 0.0
     num_batches = 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for (x_l, y_l), (x_u,) in zip(l_loader, u_loader):
             x_l, y_l = x_l.to(device), y_l.to(device)
             x_u = x_u.to(device)
             optimizer_s.zero_grad()
-            loss_s = lambda_s * F.cross_entropy(dm.theta(x_l), y_l)
+            loss_s = p.lambda_s * F.cross_entropy(dm.theta(x_l), y_l)
             loss_s.backward()
             optimizer_s.step()
             dm.sync_theta()
@@ -187,13 +175,13 @@ def train(params):
                     1, len(helper_logits)
                 )
 
-            loss_u_kl = lambda_iccs * phi_kl
+            loss_u_kl = p.lambda_iccs * phi_kl
             loss_u_kl.backward()  # 第一次 backward：仅 KL 损失
             total_u_loss_val = loss_u_kl.item()
 
             # 第二次 backward：CE 伪标签损失 + L1/L2 正则合并执行
             y_probs = torch.softmax(y_logits.detach(), dim=1)
-            conf_mask = y_probs.max(dim=1).values >= confidence
+            conf_mask = y_probs.max(dim=1).values >= p.confidence
             loss_u_ce = torch.tensor(0.0, device=x_u.device)
             if int(conf_mask.sum().item()) > 0:
                 x_conf = x_u[conf_mask]
@@ -206,20 +194,20 @@ def train(params):
                             helper_conf_logits.append(helper_net(x_conf))
 
                     # 取多数票。无 helper（首轮 / helper 未启用）时退化为本地 argmax。
-                    votes = one_hot(y_conf_logits.argmax(dim=1), num_class)
-                    if helper_conf_logits and curr_round > 0:
+                    votes = one_hot(y_conf_logits.argmax(dim=1), p.num_class)
+                    if helper_conf_logits and p.curr_round > 0:
                         for h_logits in helper_conf_logits:
-                            votes += one_hot(h_logits.argmax(dim=1), num_class)
+                            votes += one_hot(h_logits.argmax(dim=1), p.num_class)
                     y_pseudo = votes.argmax(dim=1)
 
                 y_hard_logits = dm.theta(strong_augment(x_conf))
-                loss_u_ce = lambda_iccs * F.cross_entropy(y_hard_logits, y_pseudo)
+                loss_u_ce = p.lambda_iccs * F.cross_entropy(y_hard_logits, y_pseudo)
 
             # L1(ψ) 与 L2(σ − ψ) 正则化项（与 CE 损失一起完成第二次 backward）
             loss_reg = torch.tensor(0.0, device=x_u.device)
             for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters()):
-                loss_reg = loss_reg + lambda_l1 * pp.abs().sum()
-                loss_reg = loss_reg + lambda_l2 * (sp - pp).square().sum()
+                loss_reg = loss_reg + p.lambda_l1 * pp.abs().sum()
+                loss_reg = loss_reg + p.lambda_l2 * (sp - pp).square().sum()
 
             (loss_u_ce + loss_reg).backward()  # 第二次 backward：CE + L1 + L2 正则
             total_u_loss_val += loss_u_ce.item() + loss_reg.item()
@@ -260,20 +248,25 @@ class Server(BaseServer):
         self.lambda_iccs = args.lambda_iccs
         self.lambda_l2 = args.lambda_l2
         self.lambda_l1 = args.lambda_l1
-        self.l1_thres = args.l1_thres  # ψ 稀疏化硬阈值
+        self.l1_thres = args.l1_thres
 
-        # 全局 σ/ψ（等权平均聚合维护）；ψ 初始为零，θ = σ + 0 = σ
+        # 分解模型状态（σ/ψ 同构初始化自 BaseServer.model）
         self.sigma_state = {
             k: v.cpu().detach().clone() for k, v in self.model.state_dict().items()
         }
-        self.psi_state = {k: torch.zeros_like(v) for k, v in self.sigma_state.items()}
+        self.psi_state = {
+            k: v.cpu().detach().clone() for k, v in self.model.state_dict().items()
+        }
+
+        # 聚合权重与辅助历史缓存（按客户端 ID 索引）
+        self.psis = {i: copy.deepcopy(self.psi_state) for i in range(self.num_clients)}
+        self.embeddings = {}
+
         # 固定噪声输入，用于把客户端模型映射为嵌入向量
         gen = torch.Generator().manual_seed(42)
         self.embedding_noise = torch.randn(1, 3, 32, 32, generator=gen)
         # 本轮各客户端缓存（helper 选取用，每轮刷新）
-        self.embeddings = {}  # cid -> 客户端模型嵌入向量
-        self.sigmas = {}  # cid -> 客户端上传的共享部分 σ
-        self.psis = {}  # cid -> 客户端上传的个性化部分 ψ（可作他人 helper）
+        self.sigmas = {}
 
     def embed_client(self, cid):
         """将客户端模型映射为嵌入向量：合并 σ+ψ 后对固定噪声输入前向取输出。"""
@@ -284,8 +277,8 @@ class Server(BaseServer):
         return vec.cpu().detach().clone()
 
     def get_helpers(self, cid):
-        """按嵌入欧氏距离取该客户端的最近邻 num_helpers 个客户端，返回其 ψ。"""
-        if cid not in self.embeddings:
+        """基于嵌入空间距离，为客户端 cid 选取 num_helpers 个最相似 helper 的 ψ。"""
+        if cid not in self.embeddings or len(self.embeddings) <= 1:
             return None
         ids = list(self.embeddings.keys())
         vectors = torch.stack([self.embeddings[i] for i in ids])
@@ -317,21 +310,23 @@ class Server(BaseServer):
                 {cid: self.get_helpers(cid) for cid in selected} if use_helpers else {}
             )
 
-            # 3. 构造 worker 参数：通用 base + (σ, ψ) 覆盖模型位 + 专属参数追加
-            p = self.build_base_params(selected)
-            for params in p:
-                params[2] = (self.sigma_state, self.psi_state)
-                for extra in (
-                    r,
-                    helper_map.get(params[0]),
-                    self.confidence,
-                    self.lambda_s,
-                    self.lambda_iccs,
-                    self.lambda_l2,
-                    self.lambda_l1,
-                    self.l1_thres,
-                ):
-                    params.append(extra)
+            # 3. 构造 worker 参数：通用 base + (σ, ψ) + 专属参数
+            p = [
+                Params(
+                    **asdict(base),
+                    sigma_state=self.sigma_state,
+                    psi_state=self.psi_state,
+                    curr_round=r,
+                    helper_psi_states=helper_map.get(base.client_id),
+                    confidence=self.confidence,
+                    lambda_s=self.lambda_s,
+                    lambda_iccs=self.lambda_iccs,
+                    lambda_l2=self.lambda_l2,
+                    lambda_l1=self.lambda_l1,
+                    l1_thres=self.l1_thres,
+                )
+                for base in self.build_base_params(selected)
+            ]
             results = self.run_clients(train, p)
 
             # 4. 汇总：缓存客户端 σ/ψ 与嵌入（供下一轮 helper 选取），累计损失

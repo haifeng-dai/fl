@@ -1,11 +1,13 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     get_model,
@@ -32,50 +34,42 @@ class SCAFFOLDOptimizer(optim.Optimizer):
                 p.data.add_(d_p + c_g.data - c_l.data, alpha=-group["lr"])
 
 
-def train(params):
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        c_global_state,
-        c_local_state,
-    ) = params
+@dataclass
+class Params(BaseParams):
+    c_global_state: dict[str, torch.Tensor]
+    c_local_state: dict[str, torch.Tensor]
+
+
+def train(p: Params):
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
     # 2. 准备控制变量 (Control Variates)
     trainable_names = [n for n, _ in model.named_parameters()]
 
-    if c_global_state is None:
-        c_global_dict = {n: torch.zeros_like(p) for n, p in model.named_parameters()}
-        c_local_dict = {n: torch.zeros_like(p) for n, p in model.named_parameters()}
+    if p.c_global_state is None:
+        c_global_dict = {n: torch.zeros_like(param) for n, param in model.named_parameters()}
+        c_local_dict = {n: torch.zeros_like(param) for n, param in model.named_parameters()}
     else:
-        c_global_dict = {k: v.to(device) for k, v in c_global_state.items()}
-        c_local_dict = {k: v.to(device) for k, v in c_local_state.items()}
+        c_global_dict = {k: v.to(device) for k, v in p.c_global_state.items()}
+        c_local_dict = {k: v.to(device) for k, v in p.c_local_state.items()}
 
     # 将参数展平以便传入优化器
     c_global_list = [c_global_dict[n] for n in trainable_names]
     c_local_list = [c_local_dict[n] for n in trainable_names]
 
-    optimizer = SCAFFOLDOptimizer(model.parameters(), lr=lr, weight_decay=0.0)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = SCAFFOLDOptimizer(model.parameters(), lr=p.lr, weight_decay=0.0)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 3. 本地模型多轮次训练
     model.train()
     steps = 0
     total_loss = 0.0
 
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
@@ -91,10 +85,10 @@ def train(params):
     c_delta_dict = {}
     c_local_new_dict = {}
 
-    global_state_device = {k: v.to(device) for k, v in model_state.items()}
+    global_state_device = {k: v.to(device) for k, v in p.model_state.items()}
     current_state = model.state_dict()
 
-    scaling = 1.0 / (steps * lr)
+    scaling = 1.0 / (steps * p.lr)
     for name, param in model.named_parameters():
         c_l = c_local_dict[name]
         c_g = c_global_dict[name]
@@ -125,10 +119,10 @@ class Server(BaseServer):
         self.param_names = [n for n, _ in self.model.named_parameters()]
 
         self.c_global = {
-            n: torch.zeros_like(p) for n, p in self.model.named_parameters()
+            n: torch.zeros_like(param) for n, param in self.model.named_parameters()
         }
         self.c_local = [
-            {n: torch.zeros_like(p) for n, p in self.model.named_parameters()}
+            {n: torch.zeros_like(param) for n, param in self.model.named_parameters()}
             for _ in range(self.num_clients)
         ]
 
@@ -142,10 +136,14 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params.append(self.c_global)
-                params.append(self.c_local[i])
+            p = [
+                Params(
+                    **asdict(base),
+                    c_global_state=self.c_global,
+                    c_local_state=self.c_local[base.client_id],
+                )
+                for base in self.build_base_params(selected)
+            ]
             results = self.run_clients(train, p)
 
             # 汇集并处理各客户端结果

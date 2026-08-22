@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     dist_contrastive_loss,
     extract_prototypes,
@@ -18,6 +20,15 @@ from .utils import (
 def get_path(args):
     args.file_name = f"{args.common_name}_{fmt_num(args.alpha_sa)}_{fmt_num(args.lambda_r)}_{fmt_num(args.lambda_mcl)}_{fmt_num(args.lambda_cc)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+@dataclass
+class Params(BaseParams):
+    prev_local_anchors: torch.Tensor
+    global_anchors: torch.Tensor
+    lambda_r: float
+    lambda_mcl: float
+    lambda_cc: float
 
 
 def margin(anchor: torch.Tensor) -> float:
@@ -37,49 +48,32 @@ def margin(anchor: torch.Tensor) -> float:
     return d.item() / denom
 
 
-def train(params):
+def train(p: Params):
     """
     基于语义锚点 (Semantic Anchors) 与多重正则化的 FedSA 本地训练流程。
     对齐论文公式 (5), (7), (8), (9)。
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        prev_local_anchors,
-        global_anchors,
-        lambda_r,
-        lambda_mcl,
-        lambda_cc,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     model.train()
     total_loss = 0.0
     num_batches = 0
 
-    global_anchors = global_anchors.to(device)
-    prev_local_anchors = prev_local_anchors.to(device)
+    global_anchors = p.global_anchors.to(device)
+    prev_local_anchors = p.prev_local_anchors.to(device)
 
     # 为 MCL 损失计算边界 'd_i^*' - 公式 (7) 上下文
     d_star = max(margin(global_anchors), margin(prev_local_anchors))
 
     # 2. 训练循环
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             features = model.extractor(x)
@@ -99,14 +93,14 @@ def train(params):
             loss_mcl = dist_contrastive_loss(features, global_anchors, y, margin=d_star)
 
             # 公式 (8): 分类器校准损失
-            loss_cc = F.cross_entropy(output_cc, torch.arange(num_class, device=device))
+            loss_cc = F.cross_entropy(output_cc, torch.arange(p.num_class, device=device))
 
             # 公式 (9): 总体损失
             loss = (
                 loss_ce
-                + lambda_r * loss_r
-                + lambda_mcl * loss_mcl
-                + lambda_cc * loss_cc
+                + p.lambda_r * loss_r
+                + p.lambda_mcl * loss_mcl
+                + p.lambda_cc * loss_cc
             )
             optimizer.zero_grad()
             loss.backward()
@@ -116,7 +110,7 @@ def train(params):
 
     # 3. 计算最新的本地原型及样本计数
     local_anchors, local_counts = extract_prototypes(
-        model, loader, num_class, feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, device, return_counts=True
     )
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
@@ -157,14 +151,21 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
-                params.append(self.clients_anchors[i])
-                params.append(self.anchors)
-                params.append(self.lambda_r)
-                params.append(self.lambda_mcl)
-                params.append(self.lambda_cc)
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
+
+            p = [
+                Params(
+                    **asdict(base),
+                    prev_local_anchors=self.clients_anchors[base.client_id],
+                    global_anchors=self.anchors,
+                    lambda_r=self.lambda_r,
+                    lambda_mcl=self.lambda_mcl,
+                    lambda_cc=self.lambda_cc,
+                )
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0

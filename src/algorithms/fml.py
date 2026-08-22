@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     evaluate_model,
     fmt_num,
@@ -21,42 +23,34 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    local_state: dict[str, torch.Tensor]
+    alpha_fml: float
+    beta_fml: float
+
+
+def train(p: Params):
     """
     FML (Federated Mutual Learning) 联邦互学习本地训练。
     """
-    (
-        _,
-        device,
-        global_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        local_state,
-        alpha_fml,
-        beta_fml,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化全局模型 (MEME)
-    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(
+    global_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
         device
     )
-    global_model.load_state_dict(global_state)
+    global_model.load_state_dict(p.model_state)
 
     # 2. 初始化本地模型 (个性化模型)
-    local_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    local_model.load_state_dict(local_state)
+    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    local_model.load_state_dict(p.local_state)
 
     # 优化器设置
-    opt_g = torch.optim.SGD(global_model.parameters(), lr=lr)
-    opt_l = torch.optim.SGD(local_model.parameters(), lr=lr)
+    opt_g = torch.optim.SGD(global_model.parameters(), lr=p.lr)
+    opt_l = torch.optim.SGD(local_model.parameters(), lr=p.lr)
 
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     global_model.train()
     local_model.train()
@@ -65,7 +59,7 @@ def train(params):
     total_loss_l = 0.0
     num_batches = 0
 
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             out_g = global_model(x)
@@ -77,8 +71,8 @@ def train(params):
             loss_kl_g = kl_loss(out_g, out_l.detach())
             loss_kl_l = kl_loss(out_l, out_g.detach())
 
-            loss_g = ce_g + beta_fml * loss_kl_g
-            loss_l = ce_l + alpha_fml * loss_kl_l
+            loss_g = ce_g + p.beta_fml * loss_kl_g
+            loss_l = ce_l + p.alpha_fml * loss_kl_l
 
             # 更新全局模型
             opt_g.zero_grad()
@@ -133,11 +127,15 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params.append(self.clients_state[i])
-                params.append(self.alpha_fml)
-                params.append(self.beta_fml)
+            p = [
+                Params(
+                    **asdict(base),
+                    local_state=self.clients_state[base.client_id],
+                    alpha_fml=self.alpha_fml,
+                    beta_fml=self.beta_fml,
+                )
+                for base in self.build_base_params(selected)
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0

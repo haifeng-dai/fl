@@ -1,11 +1,13 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
+    BaseParams,
     BaseServer,
     extract_prototypes,
     flattened_matrix_aggregate,
@@ -30,46 +32,39 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    momentum: float
+    weight_decay: float
+    lamda: float
+    personalized_protos: torch.Tensor | None
+
+
+def train(p: Params):
     """
     PearFL 客户端工作函数：本地训练包含原型对齐损失，返回模型参数和本地原型
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        _,
-        feature_dim,
-        num_classes,
-        momentum,
-        weight_decay,
-        lamda,
-        personalized_protos,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(model_name, dataset_name, num_classes, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
     model.train()
 
     # 2. 将个性化共识原型转移到设备
-    if personalized_protos is not None:
-        personalized_protos = personalized_protos.to(device)
+    personalized_protos = (
+        p.personalized_protos.to(device) if p.personalized_protos is not None else None
+    )
 
     # 3. 准备数据加载器
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 4. 初始化优化器
     optimizer = torch.optim.SGD(
         model.parameters(),
-        lr=lr,
-        momentum=momentum,
-        weight_decay=weight_decay,
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
     )
 
     # 5. 本地训练：仅执行 1 个 Epoch（由服务端控制多跳逻辑）
@@ -97,7 +92,7 @@ def train(params):
             l_reg = F.mse_loss(features, target_protos)
 
         # 总损失
-        loss = l_ce + lamda * l_reg
+        loss = l_ce + p.lamda * l_reg
         loss.backward()
         optimizer.step()
 
@@ -111,8 +106,8 @@ def train(params):
     local_protos, local_counts = extract_prototypes(
         model,
         loader,
-        num_classes,
-        feature_dim,
+        p.num_class,
+        p.feature_dim,
         device,
         return_counts=True,
     )
@@ -143,29 +138,57 @@ class Server(BaseServer):
         self.weight_decay = args.weight_decay
         self.lamda = args.lamda
 
-        # 1. 自动生成双随机邻接矩阵 W [num_clients, num_clients]
-        # generate_adjacency_matrix 函数内置生成满足双随机特性的通信矩阵
-        self.W = generate_adjacency_matrix(args).to(self.device).float()
+        # 1. 生成邻接矩阵（generate_adjacency_matrix 已内置自环）
+        self.A = generate_adjacency_matrix(args).to(self.device).float()
 
-        # 2. 初始化原型存储池 (全向量化管理)
-        # local_protos_pool: 存储各节点的原始本地原型 [num_clients, num_classes, feature_dim]
-        # local_counts_pool: 存储各节点的样本数量统计 [num_clients, num_classes]
-        # personalized_protos: 存储各节点 Gossip 聚合后的最终共识原型
+        # 2. 生成双随机矩阵 W（全 GPU 运算）
+        self.W = self._sinkhorn_knopp(self.A)
+
+        # 3. 初始化全局原型池（每个节点在每个类别上的本地原型）
         self.local_protos_pool = torch.zeros(
-            self.num_clients, self.num_class, self.feature_dim
-        ).to(self.device)
-        self.local_counts_pool = torch.zeros(self.num_clients, self.num_class).to(
-            self.device
+            (self.num_clients, self.num_class, self.feature_dim),
+            device=self.device,
         )
-        self.personalized_protos = torch.zeros(
-            self.num_clients, self.num_class, self.feature_dim
-        ).to(self.device)
+        self.local_counts_pool = torch.zeros(
+            (self.num_clients, self.num_class),
+            device=self.device,
+        )
 
-        # 3. 初始化 clients_state 为当前全局模型
-        self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
+        # 4. 初始化个性化共识原型（每个节点拥有一个 [num_classes, feature_dim] 的个性化原型）
+        self.personalized_protos = torch.zeros_like(self.local_protos_pool)
+
+    def _sinkhorn_knopp(self, A, max_iter=100, tol=1e-6):
+        """
+        Sinkhorn-Knopp 算法：将带自环的对称邻接矩阵转化为双随机矩阵 W。
+        满足 W @ 1 = 1, 1^T @ W = 1^T, 且 W_ij >= 0。
+        """
+        W = A.clone()
+        # 避免零除：对全零行添加微小扰动
+        row_sum = W.sum(dim=1, keepdim=True)
+        row_sum[row_sum == 0] = 1.0
+        W = W / row_sum
+
+        for _ in range(max_iter):
+            # 列归一化
+            col_sum = W.sum(dim=0, keepdim=True)
+            col_sum[col_sum == 0] = 1.0
+            W = W / col_sum
+
+            # 行归一化
+            row_sum = W.sum(dim=1, keepdim=True)
+            row_sum[row_sum == 0] = 1.0
+            W = W / row_sum
+
+            # 收敛性检测
+            row_err = (W.sum(dim=1) - 1.0).abs().max()
+            col_err = (W.sum(dim=0) - 1.0).abs().max()
+            if max(row_err, col_err) < tol:
+                break
+
+        return W
 
     def fit(self):
-        """主训练循环：实现 Algorithm 3 的 Inter-Epoch Prototype Exchange"""
+        """主训练流程：支持分布式原型交换和本地多 Epoch 训练"""
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
@@ -179,13 +202,20 @@ class Server(BaseServer):
             # 2. 嵌套循环：执行 E 个本地 Epoch，并在每个 Epoch 结束后交换原型
             round_loss = 0.0
             for e in range(self.epochs):
-                p = self.build_base_params(selected)
-                for params, i in zip(p, selected):
-                    params[2] = self.clients_state[i]
-                    params.append(self.momentum)
-                    params.append(self.weight_decay)
-                    params.append(self.lamda)
-                    params.append(self.personalized_protos[i].cpu())
+                base_params = self.build_base_params(selected)
+                for base in base_params:
+                    base.model_state = self.clients_state[base.client_id]
+
+                p = [
+                    Params(
+                        **asdict(base),
+                        momentum=self.momentum,
+                        weight_decay=self.weight_decay,
+                        lamda=self.lamda,
+                        personalized_protos=self.personalized_protos[base.client_id].cpu(),
+                    )
+                    for base in base_params
+                ]
 
                 # 2.2 启动 Ray 并行训练 (1 Epoch)
                 results = self.run_clients(train, p)

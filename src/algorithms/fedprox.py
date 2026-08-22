@@ -1,14 +1,21 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     get_model,
 )
+
+
+@dataclass
+class Params(BaseParams):
+    mu: float
 
 
 def get_path(args):
@@ -16,39 +23,26 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+def train(p: Params):
     """
     带有近端项 (Proximal term) 的 FedProx 本地训练流程。
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        mu,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
     # 2. 缓存全局模型参数，用于计算近端正则化项
-    global_model_params = {k: v.to(device) for k, v in model_state.items()}
+    global_model_params = {k: v.to(device) for k, v in p.model_state.items()}
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     total_loss = 0.0
     num_batches = 0
 
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
@@ -60,13 +54,13 @@ def train(params):
             # 相比于将 (mu/2)*||w-w_t||^2 加入损失函数并进行反向传播，
             # 这里直接将其关于参数的导数 mu*(w-w_t) 累加到 param.grad 中。
             # 这可以避免为正则化项构建庞大的计算图，极大节省内存和算力。
-            if mu > 0:
+            if p.mu > 0:
                 with torch.no_grad():
                     for name, param in model.named_parameters():
                         assert param.grad is not None
                         if name in global_model_params and param.requires_grad:
                             # grad += mu * (param - global_param)
-                            param.grad.add_(param - global_model_params[name], alpha=mu)
+                            param.grad.add_(param - global_model_params[name], alpha=p.mu)
 
             optimizer.step()
 
@@ -95,9 +89,10 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params in p:
-                params.append(self.mu)
+            p = [
+                Params(**asdict(base), mu=self.mu)
+                for base in self.build_base_params(selected)
+            ]
             results = self.run_clients(train, p)
 
             # 汇集并处理各客户端结果

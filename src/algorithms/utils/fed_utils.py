@@ -1,8 +1,10 @@
+import dataclasses
 import os
+from typing import Any
 
 import ray
 import torch
-from torch.utils.data import Subset
+from torch.utils.data import Dataset, Subset
 
 from ...models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 from .aggregate import param_aggregate
@@ -10,27 +12,39 @@ from .evaluate import evaluate_model, evaluate_prototype
 from .load_data import load_data
 
 
+@dataclasses.dataclass
+class BaseParams:
+    client_id: int
+    client_gpu: str
+    model_state: dict[str, Any]
+    train_set: Dataset
+    model_name: str
+    dataset: str
+    lr: float
+    batch_size: int
+    epochs: int
+    feature_dim: int
+    num_class: int
+
+
 @ray.remote
-def train(worker_func, params):
+def train(worker_func, p: BaseParams):
     """
     Ray 远程工作者的通用包装函数。
 
     worker 返回后统一清空显存缓存（caching allocator 预留），
     防止大张量操作（mixup / EMA / 原型等）导致 reserved 持续膨胀。
     """
-    p_list = list(params)
-    # 在 Ray 托管的环境中，CUDA_VISIBLE_DEVICES 会被自动设置
     if not torch.cuda.is_available():
         raise RuntimeError("Ray Worker 未获得 CUDA GPU；本项目不支持 CPU 训练模式")
-    p_list[1] = "cuda:0"
 
-    p_list[3] = ray.get(p_list[3])
+    p.client_gpu = "cuda:0"
+    p.train_set = ray.get(p.train_set)
 
     try:
-        return worker_func(tuple(p_list))
+        return worker_func(p)
     finally:
-        # torch.cuda.empty_cache()
-        pass
+        torch.cuda.empty_cache()
 
 
 @ray.remote
@@ -232,42 +246,35 @@ class BaseServer:
 
     def build_base_params(self, selected_clients):
         return [
-            [
-                i,
-                self.client_gpu[i],
-                self.model.state_dict(),
-                self.train_sets[i],
-                self.model_name,
-                self.dataset,
-                self.lr,
-                self.batch_size,
-                self.epochs,
-                self.feature_dim,
-                self.num_class,
-            ]
+            BaseParams(
+                client_id=i,
+                client_gpu=self.client_gpu[i],
+                model_state=self.model.state_dict(),
+                train_set=self.train_sets[i],
+                model_name=self.model_name,
+                dataset=self.dataset,
+                lr=self.lr,
+                batch_size=self.batch_size,
+                epochs=self.epochs,
+                feature_dim=self.feature_dim,
+                num_class=self.num_class,
+            )
             for i in selected_clients
         ]
 
-    def run_clients(self, worker_func, parameters):
+    def run_clients(self, worker_func, parameters: list[BaseParams]):
         """通过 Ray 运行客户端训练。"""
-        optimized_parameters = []
         for p in parameters:
-            p_list = list(p)
-            cid = p_list[0]
-            p_list[3] = self.train_set_refs[cid]
-            optimized_parameters.append(tuple(p_list))
+            p.train_set = self.train_set_refs[p.client_id]
 
         remote_worker = train.options(
             num_gpus=self.ray_gpu_fraction,
             scheduling_strategy="SPREAD",
         )
-        futures = [remote_worker.remote(worker_func, p) for p in optimized_parameters]
+        futures = [remote_worker.remote(worker_func, p) for p in parameters]
         results_list = ray.get(futures)
 
-        results_map = {
-            parameters[i][0]: results_list[i] for i in range(len(parameters))
-        }
-        return results_map
+        return {p.client_id: results_list[i] for i, p in enumerate(parameters)}
 
     def deal_save(self, metrics, params):
         # acc 恒存在；proto 精度可选；source/target 仅 SFD 场景

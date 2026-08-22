@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     evaluate_model,
@@ -28,40 +30,32 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    local_state: dict[str, torch.Tensor]
+    mu: float
+
+
+def train(p: Params):
     """
     ProxyFL 本地训练流程，利用私有本地模型与共享代理模型之间的相互蒸馏机制 (Mutual Distillation)。
     """
-    (
-        _,
-        device,
-        proxy_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        local_state,
-        mu,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化代理模型 (公共/共享模型)
-    proxy_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    proxy_model.load_state_dict(proxy_state)
+    proxy_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    proxy_model.load_state_dict(p.model_state)
 
     # 2. 初始化本地模型 (私有/个性化模型)
-    local_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    local_model.load_state_dict(local_state)
+    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    local_model.load_state_dict(p.local_state)
 
     # 优化器设置
     # 通常 ProxyFL 允许设置不同的学习率 LR，但为了简便我们在未指明时均使用相同学习率
-    opt_p = torch.optim.SGD(proxy_model.parameters(), lr=lr)
-    opt_l = torch.optim.SGD(local_model.parameters(), lr=lr)
+    opt_p = torch.optim.SGD(proxy_model.parameters(), lr=p.lr)
+    opt_l = torch.optim.SGD(local_model.parameters(), lr=p.lr)
 
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     proxy_model.train()
     local_model.train()
@@ -70,7 +64,7 @@ def train(params):
     total_loss_l = 0.0
     num_batches = 0
 
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             out_p = proxy_model(x)
@@ -82,8 +76,8 @@ def train(params):
             loss_kl_p = kl_loss(out_p, out_l.detach())
             loss_kl_l = kl_loss(out_l, out_p.detach())
 
-            loss_p = ce_p + mu * loss_kl_p
-            loss_l = ce_l + mu * loss_kl_l
+            loss_p = ce_p + p.mu * loss_kl_p
+            loss_l = ce_l + p.mu * loss_kl_l
 
             # 反向传播并更新代理模型
             opt_p.zero_grad()
@@ -148,11 +142,18 @@ class Server(BaseServer):
                 proxy_list, self.adj_matrix, self.device
             )
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = agg_proxy_list[i]
-                params.append(self.clients_state[i])
-                params.append(self.mu)
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = agg_proxy_list[base.client_id]
+
+            p = [
+                Params(
+                    **asdict(base),
+                    local_state=self.clients_state[base.client_id],
+                    mu=self.mu,
+                )
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             # 3. 收集更新客户端状态数据与评估并计算平均损失

@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     get_model,
 )
@@ -15,36 +16,24 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+def train(p: BaseParams):
     """
     标准的 FedAvg 本地训练流程。
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载最新的全局模型参数
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
     # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 3. 本地模型多轮次 (Epochs) 训练
     total_loss = 0.0
     num_batches = 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
@@ -55,7 +44,7 @@ def train(params):
 
             total_loss += loss.item()
             num_batches += 1
-    avg_loss = total_loss / num_batches
+    avg_loss = total_loss / max(1, num_batches)
 
     # 4. 整理返回结果（将模型状态移至 CPU 以节省 GPU 显存容量消耗）
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}

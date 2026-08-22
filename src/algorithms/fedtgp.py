@@ -1,5 +1,6 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn as nn
@@ -7,6 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
+    BaseParams,
     BaseServer,
     dist_contrastive_loss,
     extract_prototypes,
@@ -19,6 +21,12 @@ from .utils import (
 def get_path(args):
     args.file_name = f"{args.common_name}_{fmt_num(args.lamda_)}_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}_{fmt_num(args.margin_threshold)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+@dataclass
+class Params(BaseParams):
+    lamda_: float
+    global_protos: torch.Tensor | None
 
 
 class TGP(nn.Module):
@@ -51,33 +59,19 @@ class TGP(nn.Module):
         return out
 
 
-def train(params):
+def train(p: Params):
     """
     FedTGP 客户端训练流程（基于原型匹配训练）。
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        lamda_,
-        global_protos,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 初始化模型并加载全局状态
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
     # 设置配置与优化器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     model.train()
     total_loss_ce = 0.0
@@ -86,11 +80,11 @@ def train(params):
 
     # 预处理全局原型以便在 GPU 上高效访问和计算
     global_protos_tensor = (
-        global_protos.to(device) if global_protos is not None else None
+        p.global_protos.to(device) if p.global_protos is not None else None
     )
 
     # 本地模型多轮次训练
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             features = model.extractor(x)
@@ -102,7 +96,7 @@ def train(params):
                 target_protos = global_protos_tensor[y]
                 l_proto = F.mse_loss(features, target_protos)
 
-            loss = l_ce + lamda_ * l_proto
+            loss = l_ce + p.lamda_ * l_proto
 
             optimizer.zero_grad()
             loss.backward()
@@ -117,7 +111,7 @@ def train(params):
 
     # 收集最新的本地原型及样本计数
     local_protos_avg, local_counts = extract_prototypes(
-        model, loader, num_class, feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, device, return_counts=True
     )
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
@@ -161,13 +155,18 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
-                params.append(self.lamda_)
-                params.append(
-                    self.global_protos.cpu() if self.global_protos is not None else None
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
+
+            p = [
+                Params(
+                    **asdict(base),
+                    lamda_=self.lamda_,
+                    global_protos=self.global_protos.cpu() if self.global_protos is not None else None,
                 )
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             total_loss_ce = 0.0

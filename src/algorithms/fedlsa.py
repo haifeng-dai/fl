@@ -1,11 +1,13 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     cos_similarity,
     fmt_num,
@@ -16,6 +18,13 @@ from .utils import (
 def get_path(args):
     args.file_name = f"{args.common_name}_{fmt_num(args.lambda_com)}_{fmt_num(args.alpha_sep)}_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}_{fmt_num(args.tau)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+@dataclass
+class Params(BaseParams):
+    global_anchors: torch.Tensor
+    lambda_com: float
+    tau: float
 
 
 def separation_loss(anchors, tau=0.1):
@@ -88,7 +97,7 @@ class AnchorMapping(nn.Module):
         return F.normalize(out, p=2, dim=-1)
 
 
-def train(params):
+def train(p: Params):
     """
     FedLSA 客户端训练流程。
 
@@ -98,39 +107,24 @@ def train(params):
       L8:  L_COM ← ({a_j}, h_i)                  [公式 (8), 带 τ]
       L9:  L_HC = L_CE + λ * L_COM               [公式 (10)]
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        global_anchors,
-        lambda_com,
-        tau,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    raw_model = get_model(model_name, dataset_name, num_class, feature_dim)
+    raw_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim)
     model = FedLSAModel(raw_model)
-    model.load_state_dict(model_state)
+    model.load_state_dict(p.model_state)
     model.to(device)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     model.train()
     total_loss = 0.0
     num_batches = 0
-    global_anchors = global_anchors.to(device)
+    global_anchors = p.global_anchors.to(device)
 
     # 2. 训练循环 (伪代码 L3-L11)
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
 
@@ -142,10 +136,10 @@ def train(params):
             loss_ce = F.cross_entropy(logits, y)
 
             # 公式 (8): L_COM = -log(exp(a_{y_i}^T h_i / τ) / Σ_j exp(a_j^T h_i / τ))
-            loss_com = cos_similarity(h, global_anchors, y, tau=tau)
+            loss_com = cos_similarity(h, global_anchors, y, tau=p.tau)
 
             # 公式 (10): L_HC = L_CE + λ * L_COM
-            loss = loss_ce + lambda_com * loss_com
+            loss = loss_ce + p.lambda_com * loss_com
 
             optimizer.zero_grad()
             loss.backward()
@@ -205,12 +199,19 @@ class Server(BaseServer):
             # 生成下发前的最新当前语义锚点
             current_anchors = self.get_anchors().detach().cpu()
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
-                params.append(current_anchors)
-                params.append(self.lambda_com)
-                params.append(self.tau)
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
+
+            p = [
+                Params(
+                    **asdict(base),
+                    global_anchors=current_anchors,
+                    lambda_com=self.lambda_com,
+                    tau=self.tau,
+                )
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0

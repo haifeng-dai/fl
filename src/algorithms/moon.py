@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     get_model,
@@ -16,50 +18,42 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    prev_state: dict[str, torch.Tensor]
+    mu: float
+    tau: float
+
+
+def train(p: Params):
     """
     带有模型交叉学习对抗损失 (Model-Contrastive Loss) 的 MOON 本地训练流程。
     """
-    (
-        _,
-        device,
-        global_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        prev_state,
-        mu,
-        tau,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化包含全局权重的当前本地模型
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(global_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
     # 2. 初始化全局模型（冻结）用于计算对抗损失
-    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(
+    global_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
         device
     )
-    global_model.load_state_dict(global_state)
+    global_model.load_state_dict(p.model_state)
     global_model.eval()
 
     # 3. 初始化上一轮本地模型（冻结）用于计算对抗损失
-    prev_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    prev_model.load_state_dict(prev_state)
+    prev_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    prev_model.load_state_dict(p.prev_state)
     prev_model.eval()
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
     ce_moon = torch.nn.CosineSimilarity(dim=-1)
 
     total_loss = 0.0
     num_batches = 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
@@ -79,12 +73,12 @@ def train(params):
             pos_sim = ce_moon(z, z_glob)
             neg_sim = ce_moon(z, z_prev)
             logits = torch.cat([pos_sim.reshape(-1, 1), neg_sim.reshape(-1, 1)], dim=1)
-            logits /= tau
+            logits /= p.tau
             labels = torch.zeros(z.size(0)).to(device).long()
             loss_con = F.cross_entropy(logits, labels)
 
             # 整体损失
-            loss = loss_ce + mu * loss_con
+            loss = loss_ce + p.mu * loss_con
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -111,11 +105,15 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params.append(self.clients_state[i])
-                params.append(self.mu)
-                params.append(self.tau)
+            p = [
+                Params(
+                    **asdict(base),
+                    prev_state=self.clients_state[base.client_id],
+                    mu=self.mu,
+                    tau=self.tau,
+                )
+                for base in self.build_base_params(selected)
+            ]
             results = self.run_clients(train, p)
 
             # 汇集各客户端回传结果，增量计算加权平均损失

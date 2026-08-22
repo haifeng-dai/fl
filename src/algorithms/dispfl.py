@@ -1,6 +1,7 @@
 import math
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import torch
@@ -8,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     generate_adjacency_matrix,
@@ -33,56 +35,28 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    masks: dict[str, torch.Tensor]
+    round_idx: int
+    num_rounds: int
+    anneal_factor: float
+
+
+def train(p: Params):
     """
     DisPFL 客户端工作函数：稀疏训练，带动态掩码搜索
-
-    参数结构：
-        params: [
-            client_id,
-            device,
-            model_state (dict),
-            masks (dict),              # 稀疏掩码
-            train_set,
-            model_name,
-            dataset_name,
-            test_set,
-            num_classes,
-            feature_dim,
-            batch_size,
-            local_epochs,
-            lr,
-            round_idx,
-            num_rounds,
-            anneal_factor,
-        ]
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        masks,
-        round_idx,
-        num_rounds,
-        anneal_factor,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
     model.train()
 
     # 2. 准备数据加载器
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
 
     # 3. 本地训练循环（带梯度掩码）
     total_loss = 0.0
@@ -90,7 +64,7 @@ def train(params):
     total = 0
     num_batches = 0
 
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
@@ -103,8 +77,8 @@ def train(params):
 
             # DisPFL 核心：参数掩码（确保未被掩码的参数保持为 0）
             for name, param in model.named_parameters():
-                if name in masks:
-                    param.data.mul_(masks[name].to(device))
+                if name in p.masks:
+                    param.data.mul_(p.masks[name].to(device))
 
             total_loss += loss.item()
             _, predicted = torch.max(output.data, 1)
@@ -116,15 +90,15 @@ def train(params):
     # 4.1 计算当前的剪枝率 alpha_t（余弦退火）
     # alpha_t 随训练动态衰减：alpha_t = alpha_0 * 0.5 * (1 + cos(t * pi / T))
     alpha_t = (
-        anneal_factor
+        p.anneal_factor
         * 0.5
-        * (1 + torch.cos(torch.tensor(round_idx * torch.pi / num_rounds)))
+        * (1 + torch.cos(torch.tensor(p.round_idx * torch.pi / p.num_rounds)))
     ).to(device)
 
     # 4.2 获取用于重生长的梯度信息
     model.zero_grad()
     # 从 loader 中取一个 batch 的数据来计算全梯度
-    x, y = next(iter(loader))
+    x, y, *_ = next(iter(loader))
     x, y = x.to(device), y.to(device)
     output = model(x)
     loss = F.cross_entropy(output, y)
@@ -133,8 +107,8 @@ def train(params):
     # 4.3 逐层进行剪枝（Pruning）和生长（Regrowing）
     new_masks = {}
     for name, param in model.named_parameters():
-        if name in masks:
-            mask = masks[name].to(device)
+        if name in p.masks:
+            mask = p.masks[name].to(device)
             weights = param.data
             grads = param.grad.data
 
@@ -307,13 +281,20 @@ class Server(BaseServer):
             print(f"Selected clients: {selected}")
 
             # 3. 为每个选中的客户端准备参数（用聚合后的模型）
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
-                params.append(self.client_masks[i])
-                params.append(r)
-                params.append(self.rounds)
-                params.append(self.anneal_factor)
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
+
+            p = [
+                Params(
+                    **asdict(base),
+                    masks=self.client_masks[base.client_id],
+                    round_idx=r,
+                    num_rounds=self.rounds,
+                    anneal_factor=self.anneal_factor,
+                )
+                for base in base_params
+            ]
 
             # 4. 启动客户端并行训练 + 掩码搜索
             results = self.run_clients(train, p)

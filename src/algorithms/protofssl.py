@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 from torch.utils.data import DataLoader, Subset, TensorDataset
 
 from .utils import (
+    BaseParams,
     BaseServer,
     dist_contrastive_loss,
     extract_prototypes,
@@ -20,6 +22,16 @@ def get_path(args):
         f"_{fmt_num(args.lambda_)}_{fmt_num(args.sharpen_T)}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+@dataclass
+class Params(BaseParams):
+    label_ratio: float
+    support_size: int
+    unlabeled_query_size: int
+    lambda_: float
+    sharpen_T: float
+    helper_protos: torch.Tensor | None
 
 
 # --------------------------------------------------------------------------- #
@@ -78,56 +90,38 @@ def sample_per_class(labeled_idx_by_class, support_size):
 # --------------------------------------------------------------------------- #
 # 客户端本地训练（对应论文 RunClient）
 # --------------------------------------------------------------------------- #
-def train(params):
-    (
-        cid,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        label_ratio,
-        support_size,
-        unlabeled_query_size,
-        lambda_,
-        sharpen_T,
-        helper_protos,
-    ) = params
+def train(p: Params):
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型（仅使用 extractor 作为特征提取器 f_θ，不使用 classifier）
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
 
     # 2. 构造按类索引：有标签样本索引（按类分组）与无标签样本索引
-    y = train_set.y
-    labeled_mask = train_set.is_labeled
+    y = p.train_set.y
+    labeled_mask = p.train_set.is_labeled
     labeled_idx = torch.where(labeled_mask)[0]
     unlabeled_idx = torch.where(~labeled_mask)[0]
     labeled_idx_by_class = {
-        k: labeled_idx[y[labeled_idx] == k] for k in range(num_class)
+        k: labeled_idx[y[labeled_idx] == k] for k in range(p.num_class)
     }
 
     # 全量 Dataset（零拷贝引用），供各子集 loader 复用
-    full_ds = TensorDataset(train_set.x, train_set.y)
+    full_ds = TensorDataset(p.train_set.x, p.train_set.y)
 
     total_loss = 0.0
     num_batches = 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         # 每类采样支持集 S；查询集 Q 取全部剩余有标签样本（论文 D_k \ S_k）
-        sup_idx, que_idx, que_y = sample_per_class(labeled_idx_by_class, support_size)
+        sup_idx, que_idx, que_y = sample_per_class(labeled_idx_by_class, p.support_size)
 
         # 本地原型（基于支持集, Eq.2）；extract_prototypes 内部 index_add_ 向量化累加
         C_local = extract_prototypes(
             model,
-            DataLoader(Subset(full_ds, sup_idx), batch_size),
-            num_class,
-            feature_dim,
+            DataLoader(Subset(full_ds, sup_idx), p.batch_size),
+            p.num_class,
+            p.feature_dim,
             device,
         ).to(device)  # extract_prototypes 返回 CPU，这里一次性搬回
         model.train()  # 其内部置 eval，须恢复训练态（否则破坏后续 BN/随机失活）
@@ -135,8 +129,8 @@ def train(params):
         # 监督项（Eq.8 第一项）：全部剩余查询集按 batch_size 分批
         # → 本地原型距离概率 → CE(真实标签)，每 batch 一次更新
         q_loader = DataLoader(
-            TensorDataset(train_set.x[que_idx], que_y),
-            batch_size=batch_size,
+            TensorDataset(p.train_set.x[que_idx], que_y),
+            batch_size=p.batch_size,
             shuffle=True,
         )
         for xq_b, yq_b in q_loader:
@@ -223,21 +217,23 @@ class Server(BaseServer):
             # 辅助集 H_r = M_{r-1}（首轮为空）
             H_r = prev_selected
 
-            p = self.build_base_params(selected)
-            for params in p:
-                for extra in (
-                    self.label_ratio,
-                    self.support_size,
-                    self.unlabeled_query_size,
-                    self.lambda_,
-                    self.sharpen_T,
-                ):
-                    params.append(extra)
-                # 构造辅助原型 [H, K, D]（首轮 H_r 为空 → None）
-                aux_list = [
-                    self.client_protos[j].cpu() for j in H_r if j in self.client_protos
-                ]
-                params.append(torch.stack(aux_list) if aux_list else None)
+            aux_list = [
+                self.client_protos[j].cpu() for j in H_r if j in self.client_protos
+            ]
+            helper_protos = torch.stack(aux_list) if aux_list else None
+
+            p = [
+                Params(
+                    **asdict(base),
+                    label_ratio=self.label_ratio,
+                    support_size=self.support_size,
+                    unlabeled_query_size=self.unlabeled_query_size,
+                    lambda_=self.lambda_,
+                    sharpen_T=self.sharpen_T,
+                    helper_protos=helper_protos,
+                )
+                for base in self.build_base_params(selected)
+            ]
 
             results = self.run_clients(train, p)
 

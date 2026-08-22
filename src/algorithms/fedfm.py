@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     extract_prototypes,
     fmt_num,
@@ -18,43 +20,35 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    mu: float
+    mode: str
+    global_anchors: torch.Tensor | None
+
+
+def train(p: Params):
     """
     FedFM 客户端双阶段工作函数。
     通过 mode 参数区分当前执行的阶段：
       - mode='train'  : 阶段一，执行本地模型训练
       - mode='extract': 阶段二，使用聚合后的全局模型提取本地锚点
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        mu,
-        mode,
-        global_anchors,
-    ) = params
+    device = torch.device(p.client_gpu)
 
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # ==================== 阶段一：本地模型训练 ====================
-    if mode == "train":
-        global_anchors = global_anchors.to(device)
-        optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    if p.mode == "train":
+        global_anchors = p.global_anchors.to(device)
+        optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
         total_loss = 0.0
         num_batches = 0
 
         model.train()
-        for _ in range(epochs):
+        for _ in range(p.epochs):
             for data, target, *_ in loader:
                 data, target = data.to(device), target.to(device)
                 optimizer.zero_grad()
@@ -69,7 +63,7 @@ def train(params):
                 valid_mask = target_anchors.abs().sum(dim=1) > 0
                 if valid_mask.sum() > 0:
                     loss_cg = F.mse_loss(features[valid_mask], target_anchors[valid_mask])
-                    loss = loss_ce + mu * loss_cg
+                    loss = loss_ce + p.mu * loss_cg
                 else:
                     loss = loss_ce
 
@@ -85,7 +79,7 @@ def train(params):
         return {"loss": avg_loss, "state": model_state}
     else:
         local_anchors, local_counts = extract_prototypes(
-            model, loader, num_class, feature_dim, device, return_counts=True
+            model, loader, p.num_class, p.feature_dim, device, return_counts=True
         )
         return {"protos": local_anchors, "counts": local_counts}
 
@@ -107,11 +101,15 @@ class Server(BaseServer):
             print(f"Selected clients: {selected}")
 
             # ========== 阶段一：下发全局模型 + 全局锚点，执行本地训练 ==========
-            p_train = self.build_base_params(selected)
-            for params in p_train:
-                params.append(self.mu)
-                params.append("train")
-                params.append(self.global_anchors)
+            p_train = [
+                Params(
+                    **asdict(base),
+                    mu=self.mu,
+                    mode="train",
+                    global_anchors=self.global_anchors,
+                )
+                for base in self.build_base_params(selected)
+            ]
             results_train = self.run_clients(train, p_train)
 
             # 收集训练结果并聚合全局模型
@@ -129,12 +127,19 @@ class Server(BaseServer):
 
             # ========== 阶段二：下发聚合后的全局模型，提取对齐锚点 ==========
             global_state = self.model.state_dict()
-            p_extract = self.build_base_params(selected)
-            for params in p_extract:
-                params[2] = global_state
-                params.append(self.mu)
-                params.append("extract")
-                params.append(None)
+            base_extract = self.build_base_params(selected)
+            for base in base_extract:
+                base.model_state = global_state
+
+            p_extract = [
+                Params(
+                    **asdict(base),
+                    mu=self.mu,
+                    mode="extract",
+                    global_anchors=None,
+                )
+                for base in base_extract
+            ]
             results_extract = self.run_clients(train, p_extract)
 
             # 收集本地锚点并按样本数量加权聚合为全局锚点

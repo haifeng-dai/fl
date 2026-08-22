@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
+    BaseParams,
     BaseServer,
     get_model,
 )
@@ -16,34 +17,22 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+def train(p: BaseParams):
     """
     纯本地训练机制 - 无任何通信的独立训练流程。
     各个客户端完全基于私有数据持续训练自己的模型。
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-    ) = params
+    device = torch.device(p.client_gpu)
 
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     total_loss = 0.0
     num_batches = 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
@@ -75,8 +64,8 @@ class Server(BaseServer):
             print(f"Selected clients: {selected}")
 
             p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
+            for base in p:
+                base.model_state = self.clients_state[base.client_id]
             results = self.run_clients(train, p)
 
             total_loss = 0.0

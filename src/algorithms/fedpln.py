@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     dist_contrastive_loss,
     fmt_num,
@@ -16,6 +18,21 @@ from .utils import (
 def get_path(args):
     args.file_name = f"{args.common_name}_{fmt_num(args.lambda_)}_{fmt_num(args.epoch_pln)}_{fmt_num(args.lr_pln)}_{fmt_num(args.batch_size_pln)}_{fmt_num(args.depth_pln)}_{fmt_num(args.width_pln)}_{args.mode}_{fmt_num(args.fixed_proto)}_{fmt_num(args.init_emb)}_{fmt_num(args.har)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+@dataclass
+class Params(BaseParams):
+    pln_state: dict[str, torch.Tensor]
+    lambda_: float
+    epoch_pln: int
+    lr_pln: float
+    batch_size_pln: int
+    depth_pln: int
+    width_pln: int
+    mode: str
+    fixed_proto: int
+    init_emb: int
+    har: int
 
 
 class PLN(torch.nn.Module):
@@ -71,56 +88,33 @@ class PLN(torch.nn.Module):
         return out
 
 
-def train(params):
+def train(p: Params):
     """
     带有原型学习网络 (PLN) 的 FedPLN 本地训练流程。
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        pln_state,
-        lambda_,
-        epoch_pln,
-        lr_pln,
-        batch_size_pln,
-        depth_pln,
-        width_pln,
-        mode,
-        fixed_proto,
-        init_emb,
-        har,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型与 PLN 网络
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
-    pln = PLN(num_class, width_pln, feature_dim, depth_pln, fixed_proto, init_emb)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
+    pln = PLN(p.num_class, p.width_pln, p.feature_dim, p.depth_pln, p.fixed_proto, p.init_emb)
     pln.to(device)
-    pln.load_state_dict(pln_state)
-    all_classes = torch.arange(0, num_class).to(device)
+    pln.load_state_dict(p.pln_state)
+    all_classes = torch.arange(0, p.num_class).to(device)
 
     # 2. 阶段一：训练核心模型（特征提取器）
     avg_loss_m = 0.0
     model.train()
     pln.eval()
-    opt = torch.optim.SGD(model.parameters(), lr=lr)
+    opt = torch.optim.SGD(model.parameters(), lr=p.lr)
     total_loss_m = 0.0
     num_batches_m = 0
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 原型损失：特征向量与 PLN 对应原型之间的欧式距离
     with torch.no_grad():
         protos = pln(all_classes)
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             feature = model.extractor(x)
@@ -129,7 +123,7 @@ def train(params):
 
             loss_proto = dist_contrastive_loss(feature, protos, y)
 
-            loss = loss_ce + lambda_ * loss_proto
+            loss = loss_ce + p.lambda_ * loss_proto
 
             opt.zero_grad()
             loss.backward()
@@ -143,19 +137,19 @@ def train(params):
     avg_loss_p = 0.0
     model.eval()
     pln.train()
-    opt_pln = torch.optim.SGD(pln.parameters(), lr=lr_pln)
+    opt_pln = torch.optim.SGD(pln.parameters(), lr=p.lr_pln)
     total_loss_p = 0.0
     num_batches_p = 0
 
-    if batch_size_pln != batch_size:
+    if p.batch_size_pln != p.batch_size:
         loader_pln = torch.utils.data.DataLoader(
-            train_set, batch_size=batch_size_pln, shuffle=True
+            p.train_set, batch_size=p.batch_size_pln, shuffle=True
         )
     else:
         loader_pln = loader
 
-    for _ in range(epoch_pln):
-        for x, y in loader_pln:
+    for _ in range(p.epoch_pln):
+        for x, y, *_ in loader_pln:
             x, y = x.to(device), y.to(device)
             protos = pln(all_classes)
 
@@ -218,19 +212,23 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params in p:
-                params.append(self.pln.state_dict())
-                params.append(self.lambda_)
-                params.append(self.epoch_pln)
-                params.append(self.lr_pln)
-                params.append(self.batch_size_pln)
-                params.append(self.depth_pln)
-                params.append(self.width_pln)
-                params.append(self.mode)
-                params.append(self.fixed_proto)
-                params.append(self.init_emb)
-                params.append(self.har)
+            p = [
+                Params(
+                    **asdict(base),
+                    pln_state=self.pln.state_dict(),
+                    lambda_=self.lambda_,
+                    epoch_pln=self.epoch_pln,
+                    lr_pln=self.lr_pln,
+                    batch_size_pln=self.batch_size_pln,
+                    depth_pln=self.depth_pln,
+                    width_pln=self.width_pln,
+                    mode=self.mode,
+                    fixed_proto=self.fixed_proto,
+                    init_emb=self.init_emb,
+                    har=self.har,
+                )
+                for base in self.build_base_params(selected)
+            ]
             results = self.run_clients(train, p)
 
             # 汇集各客户端的回传结果，计算模型与 PLN 的加权整体损失

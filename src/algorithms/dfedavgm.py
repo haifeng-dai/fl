@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     compute_mh_weights,
     flattened_matrix_aggregate,
@@ -27,41 +29,33 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    optimizer_state: dict | None
+
+
+def train(p: Params):
     """
     标准的 FedAvg 本地训练流程，支持动量。
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        optimizer_state,  # 新增：接收动量状态
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载最新的全局模型参数
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
     # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)  # , momentum=0.9)
-    if optimizer_state is not None:
-        optimizer.load_state_dict(optimizer_state)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)  # , momentum=0.9)
+    if p.optimizer_state is not None:
+        optimizer.load_state_dict(p.optimizer_state)
 
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 3. 本地模型多轮次 (Epochs) 训练
     total_loss = 0.0
     num_batches = 0
     model.train()
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
@@ -76,21 +70,10 @@ def train(params):
 
     # 4. 整理返回结果
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    # 导出动量状态字典
-    # new_optimizer_state = {
-    #     "state": {
-    #         k: {
-    #             mk: mv.cpu().detach().clone() if torch.is_tensor(mv) else mv
-    #             for mk, mv in v.items()
-    #         }
-    #         for k, v in optimizer.state_dict()["state"].items()
-    #     },
-    #     "param_groups": optimizer.state_dict()["param_groups"],
-    # }
     return {
         "loss": avg_loss,
         "state": model_state,
-        "opt_state": None,  # new_optimizer_state,
+        "opt_state": None,
     }
 
 
@@ -111,11 +94,11 @@ class Server(BaseServer):
 
     def aggregate_mh(self):
         """执行分布式聚合（GPU 矩阵化版本）：S' = MH_weights @ S"""
-        state_list = [self.clients_state[j] for j in range(self.num_clients)]
+        state_list = list(self.clients_state)
         new_state_list = flattened_matrix_aggregate(
             state_list, self.mh_weights, self.device
         )
-        self.clients_state = {i: new_state_list[i] for i in range(self.num_clients)}
+        self.clients_state = new_state_list
 
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
@@ -128,10 +111,17 @@ class Server(BaseServer):
             print(f"Selected clients: {selected}")
 
             # 1. 为每个选中的客户端准备参数
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
-                params.append(self.opt_states[i])
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
+
+            p = [
+                Params(
+                    **asdict(base),
+                    optimizer_state=self.opt_states[base.client_id],
+                )
+                for base in base_params
+            ]
             # 2. 启动客户端多进程并行训练
             results = self.run_clients(train, p)
 

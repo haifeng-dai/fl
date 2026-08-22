@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import torch
@@ -8,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     generate_adjacency_matrix,
@@ -36,49 +38,36 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train_phase1(params):
+@dataclass
+class ParamsPhase1(BaseParams):
+    val_ratio: float
+
+
+@dataclass
+class ParamsPhase2(BaseParams):
+    theta_t: dict[str, torch.Tensor]
+    neighbor_deltas: list[dict[str, torch.Tensor]]
+    alpha: torch.Tensor
+    val_indices: list[int]
+    lr_alpha: float
+
+
+def train_phase1(p: ParamsPhase1):
     """
     L2C 客户端第一阶段：本地训练并计算参数增量 Delta Theta
-
-    参数结构：
-        params: [
-            device,
-            model_state (dict),
-            train_set,
-            model_name,
-            dataset_name,
-            feature_dim,
-            batch_size,
-            local_epochs,
-            lr,
-            val_ratio,
-        ]
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        local_epochs,
-        feature_dim,
-        num_class,
-        val_ratio,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
     # 保存初始状态用于计算 Delta
     theta_t = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
     # 2. 准备数据划分（分训练集和验证集）
-    n_samples = len(train_set)
-    n_val = int(n_samples * val_ratio)
+    n_samples = len(p.train_set)
+    n_val = int(n_samples * p.val_ratio)
     indices = list(range(n_samples))
     np.random.shuffle(indices)
 
@@ -86,15 +75,15 @@ def train_phase1(params):
     train_indices = indices[n_val:]
 
     # 3. 执行本地训练
-    train_subset = Subset(train_set, train_indices)
-    loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    train_subset = Subset(p.train_set, train_indices)
+    loader = DataLoader(train_subset, batch_size=p.batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
 
     model.train()
     total_loss = 0.0
     num_batches = 0
 
-    for _ in range(local_epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
@@ -121,72 +110,39 @@ def train_phase1(params):
     }
 
 
-def train_phase2(params):
+def train_phase2(p: ParamsPhase2):
     """
     L2C 客户端第二阶段：元学习更新 alpha 并执行最终加权聚合
-
-    参数结构：
-        params: [
-            device,
-            model_state (dict),
-            train_set,
-            theta_t (dict),
-            model_name,
-            dataset_name,
-            feature_dim,
-            batch_size,
-            neighbor_deltas (list),
-            alpha (tensor),
-            val_indices (list),
-            lr_alpha,
-        ]
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        _,
-        batch_size,
-        _,
-        feature_dim,
-        num_class,
-        theta_t,
-        neighbor_deltas,
-        alpha,
-        val_indices,
-        lr_alpha,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
 
     # 2. 准备验证集
-    alpha = alpha.to(device).detach().requires_grad_(True)
+    alpha = p.alpha.to(device).detach().requires_grad_(True)
 
     # 3. 计算混合权重 w = softmax(alpha)
     w = F.softmax(alpha, dim=0)
 
     # 4. 虚拟聚合：theta_agg = theta^t - sum(w_j * delta_j)
-    theta_agg = {k: theta_t[k].to(device).clone() for k in theta_t.keys()}
+    theta_agg = {k: p.theta_t[k].to(device).clone() for k in p.theta_t.keys()}
     for k in theta_agg.keys():
         # 堆叠所有邻居的增量
-        layer_deltas = torch.stack([d[k].to(device) for d in neighbor_deltas])
+        layer_deltas = torch.stack([d[k].to(device) for d in p.neighbor_deltas])
         # w: [num_neighbors] -> reshape for broadcasting
         dims = [1] * (layer_deltas.dim() - 1)
         theta_agg[k] -= torch.sum(layer_deltas * w.view(-1, *dims), dim=0)
 
     # 5. 在验证集上执行元更新
-    if len(val_indices) > 0:
-        val_subset = Subset(train_set, val_indices)
-        val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
+    if len(p.val_indices) > 0:
+        val_subset = Subset(p.train_set, p.val_indices)
+        val_loader = DataLoader(val_subset, batch_size=p.batch_size, shuffle=False)
 
         # 使用第一个 batch 进行估算
         if len(val_loader) > 0:
-            x_val, y_val = next(iter(val_loader))
+            x_val, y_val, *_ = next(iter(val_loader))
             x_val, y_val = x_val.to(device), y_val.to(device)
 
             # 在聚合模型上计算验证损失 (使用 functional_call 以支持元梯度回传)
@@ -198,7 +154,7 @@ def train_phase2(params):
 
             # 元学习步长更新 alpha
             with torch.no_grad():
-                alpha -= lr_alpha * alpha_grads
+                alpha -= p.lr_alpha * alpha_grads
 
     # 6. 整理返回结果（严格遵守伪代码：返回 alpha 更新前的聚合模型）
     return {
@@ -255,10 +211,17 @@ class Server(BaseServer):
             logger.info(f"Selected clients: {selected}")
 
             # --- Phase 1：并行计算所有客户端的本地 Delta ---
-            payloads_p1 = self.build_base_params(selected)
-            for params, cid in zip(payloads_p1, selected):
-                params[2] = self.clients_state[cid]
-                params.append(self.val_ratio)
+            base_p1 = self.build_base_params(selected)
+            for base in base_p1:
+                base.model_state = self.clients_state[base.client_id]
+
+            payloads_p1 = [
+                ParamsPhase1(
+                    **asdict(base),
+                    val_ratio=self.val_ratio,
+                )
+                for base in base_p1
+            ]
 
             p1_results = self.run_clients(train_phase1, payloads_p1)
 
@@ -277,9 +240,11 @@ class Server(BaseServer):
             self.loss.append(total_loss / len(selected))
 
             # --- Phase 2：分发邻居 Delta 并执行元更新与最终聚合 ---
-            p2_base = self.build_base_params(selected)
+            base_p2 = self.build_base_params(selected)
             payloads_p2 = []
-            for params, i in zip(p2_base, selected):
+            for base in base_p2:
+                i = base.client_id
+                base.model_state = self.clients_state[i]
                 # 获取节点 i 的协作邻居
                 neighbors = torch.where(self.A[i] > 0)[0].tolist()
                 neighbors.sort()
@@ -298,13 +263,16 @@ class Server(BaseServer):
                         }
                         neighbor_deltas.append(zero_delta)
 
-                params[2] = self.clients_state[i]
-                params.append(cid_to_theta_t[i])
-                params.append(neighbor_deltas)
-                params.append(self.alphas[i])
-                params.append(cid_to_indices[i]["val"])
-                params.append(self.lr_alpha)
-                payloads_p2.append(params)
+                payloads_p2.append(
+                    ParamsPhase2(
+                        **asdict(base),
+                        theta_t=cid_to_theta_t[i],
+                        neighbor_deltas=neighbor_deltas,
+                        alpha=self.alphas[i],
+                        val_indices=cid_to_indices[i]["val"],
+                        lr_alpha=self.lr_alpha,
+                    )
+                )
 
             p2_results = self.run_clients(train_phase2, payloads_p2)
 

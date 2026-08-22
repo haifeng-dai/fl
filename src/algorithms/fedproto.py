@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     extract_prototypes,
     fmt_num,
@@ -18,37 +20,29 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
-    (
-        _,
-        device,
-        local_model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_classes,
-        mu,
-        global_protos,
-    ) = params
+@dataclass
+class Params(BaseParams):
+    mu: float
+    global_protos: torch.Tensor | None
 
-    model = get_model(model_name, dataset_name, num_classes, feature_dim).to(device)
-    model.load_state_dict(local_model_state)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+def train(p: Params):
+    device = torch.device(p.client_gpu)
+
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     global_protos_tensor = (
-        global_protos.to(device) if global_protos is not None else None
+        p.global_protos.to(device) if p.global_protos is not None else None
     )
 
     total_loss = 0.0
     num_batches = 0
     model.train()
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             feature = model.extractor(x)
@@ -58,7 +52,7 @@ def train(params):
             if global_protos_tensor is not None:
                 target_protos = global_protos_tensor[y]
                 loss_proto = F.mse_loss(feature, target_protos)
-                loss = loss_ce + mu * loss_proto
+                loss = loss_ce + p.mu * loss_proto
             else:
                 loss = loss_ce
 
@@ -71,7 +65,7 @@ def train(params):
 
     # 提取本地原型及样本计数
     local_protos, local_counts = extract_prototypes(
-        model, loader, num_classes, feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, device, return_counts=True
     )
 
     return {
@@ -99,13 +93,22 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
-                params.append(self.mu)
-                params.append(
-                    self.global_protos.cpu() if self.global_protos is not None else None
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
+
+            p = [
+                Params(
+                    **asdict(base),
+                    mu=self.mu,
+                    global_protos=(
+                        self.global_protos.cpu()
+                        if self.global_protos is not None
+                        else None
+                    ),
                 )
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0

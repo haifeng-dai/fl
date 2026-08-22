@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     get_model,
@@ -15,6 +17,15 @@ from .utils import (
 def get_path(args):
     args.file_name = f"{args.common_name}_{fmt_num(args.lr_g)}_{fmt_num(args.energy)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+@dataclass
+class Params(BaseParams):
+    compressed_params_g: dict[str, dict | torch.Tensor]
+    prev_local_state: dict[str, torch.Tensor] | None
+    wh_state: dict[str, torch.Tensor] | None
+    lr_g: float
+    energy_threshold: float
 
 
 def decompose_param(param, energy_threshold):
@@ -105,61 +116,43 @@ def reconstruct_param(compressed_param, device):
         raise ValueError(f"Unknown parameter type: {type(compressed_param)}")
 
 
-def train(params):
+def train(p: Params):
     """
     FedKD 本地训练流程，采用基于 SVD 的通信压缩与相互知识蒸馏机制。
     """
-    # 安全解包参数
-    (
-        _,
-        device,
-        compressed_params_g,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        prev_local_state,
-        wh_state,
-        lr_g,
-        energy_threshold,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
     # 本地个性化专家模型 (Student)
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
     # 全局代理模型 (从压缩的 SVD 参数重建)
-    model_g = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
+    model_g = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
 
     with torch.no_grad():
         # A. 从 SVD 参数中重建并加载全局代理模型参数
         global_state_dict = {}
-        for name, param_data in compressed_params_g.items():
+        for name, param_data in p.compressed_params_g.items():
             global_state_dict[name] = reconstruct_param(param_data, device)
         model_g.load_state_dict(global_state_dict)
 
         # B. 加载本地模型参数
-        if prev_local_state is not None:
-            model.load_state_dict(prev_local_state)
+        if p.prev_local_state is not None:
+            model.load_state_dict(p.prev_local_state)
         else:
-            # 首轮训练：从全局状态起始
             model.load_state_dict(global_state_dict)
 
     # 2. 初始化特征对齐层 (W_h)
-    W_h = torch.nn.Linear(feature_dim, feature_dim, bias=False, device=device)
-    if wh_state is not None:
-        W_h.load_state_dict(wh_state)
+    W_h = torch.nn.Linear(p.feature_dim, p.feature_dim, bias=False, device=device)
+    if p.wh_state is not None:
+        W_h.load_state_dict(p.wh_state)
 
     # 3. 初始化优化器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    optimizer_g = torch.optim.SGD(model_g.parameters(), lr=lr_g)
-    optimizer_W = torch.optim.SGD(W_h.parameters(), lr=lr)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    optimizer_g = torch.optim.SGD(model_g.parameters(), lr=p.lr_g)
+    optimizer_W = torch.optim.SGD(W_h.parameters(), lr=p.lr)
 
     # 4. 训练循环 (Mutual Knowledge Distillation)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     model.train()
     model_g.train()
@@ -168,7 +161,7 @@ def train(params):
     total_loss = 0.0
     num_batches = 0
 
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             rep = model.extractor(x)
@@ -214,7 +207,7 @@ def train(params):
     avg_loss = total_loss / num_batches
     compressed_params_g_new = {}
     for name, param in model_g.state_dict().items():
-        compressed_params_g_new[name] = decompose_param(param, energy_threshold)
+        compressed_params_g_new[name] = decompose_param(param, p.energy_threshold)
 
     # 准备返回状态数据
     local_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
@@ -253,13 +246,17 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.compressed_params
-                params.append(self.clients_state[i])
-                params.append(self.client_wh_states[i])
-                params.append(self.lr_g)
-                params.append(self.energy)
+            p = [
+                Params(
+                    **asdict(base),
+                    compressed_params_g=self.compressed_params,
+                    prev_local_state=self.clients_state[base.client_id],
+                    wh_state=self.client_wh_states[base.client_id],
+                    lr_g=self.lr_g,
+                    energy_threshold=self.energy,
+                )
+                for base in self.build_base_params(selected)
+            ]
             results = self.run_clients(train, p)
 
             # 汇集各客户端回传结果并更新服务器端存储的客户端本地状态

@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     flattened_matrix_aggregate,
     fmt_num,
@@ -28,57 +30,49 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    mu: float
+    head_state: dict[str, torch.Tensor]
+    lr_v: float
+    local_v_epochs: int
+    momentum: float
+    weight_decay: float
+
+
+def train(p: Params):
     """
     DFedPGP 客户端工作函数：实现解耦更新和梯度推送
     """
-    (
-        _,
-        device,
-        body_biased,
-        train_set,
-        model_name,
-        dataset_name,
-        lr_u,
-        batch_size,
-        local_u_epochs,
-        feature_dim,
-        num_class,
-        mu,
-        head_state,
-        lr_v,
-        local_v_epochs,
-        momentum,
-        weight_decay,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
 
     # 合并 body 和 head 参数以加载完整模型
     full_state = {}
-    full_state.update(body_biased)
-    full_state.update(head_state)
+    full_state.update(p.model_state)
+    full_state.update(p.head_state)
     model.load_state_dict(full_state)
 
     # 2. 准备解偏后的特征提取器参考值 (z_0 = u/mu)
     with torch.no_grad():
-        z_0 = {k: v.to(device) / mu for k, v in body_biased.items()}
+        z_0 = {k: v.to(device) / p.mu for k, v in p.model_state.items()}
 
     # 3. 初始化两个独立的优化器
     optimizer_v = torch.optim.SGD(
         model.classifier.parameters(),
-        lr=lr_v,
+        lr=p.lr_v,
     )
     optimizer_u = torch.optim.SGD(
         model.extractor.parameters(),
-        lr=lr_u,
-        momentum=momentum,
-        weight_decay=weight_decay,
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
     )
 
     # 4. 准备数据加载器
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # ========== Phase 1: 训练分类头 V (固定 Body 为初始解偏值 z_0) ==========
     for param in model.extractor.parameters():
@@ -92,7 +86,7 @@ def train(params):
     )
 
     model.train()
-    for _ in range(local_v_epochs):
+    for _ in range(p.local_v_epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             optimizer_v.zero_grad()
@@ -109,20 +103,20 @@ def train(params):
 
     # 恢复为原始带偏的 body_biased (U)
     model.extractor.load_state_dict(
-        {k.replace("extractor.", ""): v.to(device) for k, v in body_biased.items()}
+        {k.replace("extractor.", ""): v.to(device) for k, v in p.model_state.items()}
     )
 
     total_loss = 0.0
     num_batches = 0
 
-    for _ in range(local_u_epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
 
             # a. 执行 U -> Z 转换 (除以 mu)，使 Forward 作用在解偏状态上
             with torch.no_grad():
                 for param in model.extractor.parameters():
-                    param.data.div_(mu)
+                    param.data.div_(p.mu)
 
             # b. 标准前向与反向传播
             optimizer_u.zero_grad()
@@ -134,8 +128,8 @@ def train(params):
             with torch.no_grad():
                 for param in model.extractor.parameters():
                     if param.grad is not None:
-                        param.grad.data.div_(mu)
-                    param.data.mul_(mu)
+                        param.grad.data.div_(p.mu)
+                    param.data.mul_(p.mu)
 
             # d. 执行局部更新
             optimizer_u.step()
@@ -222,17 +216,24 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.client_body[i]
-                params[6] = self.lr_u
-                params[8] = self.local_u_epochs
-                params.append(self.client_mu[i])
-                params.append(self.client_head[i])
-                params.append(self.lr_v)
-                params.append(self.local_v_epochs)
-                params.append(self.momentum_v)
-                params.append(self.weight_decay_v)
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.client_body[base.client_id]
+                base.lr = self.lr_u
+                base.epochs = self.local_u_epochs
+
+            p = [
+                Params(
+                    **asdict(base),
+                    mu=self.client_mu[base.client_id],
+                    head_state=self.client_head[base.client_id],
+                    lr_v=self.lr_v,
+                    local_v_epochs=self.local_v_epochs,
+                    momentum=self.momentum_v,
+                    weight_decay=self.weight_decay_v,
+                )
+                for base in base_params
+            ]
 
             # 3. 启动客户端并行训练
             results = self.run_clients(train, p)

@@ -1,5 +1,6 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import ray
@@ -10,6 +11,7 @@ from torch.utils.data import DataLoader
 from src import TrainingFailureError
 
 from .utils import (
+    BaseParams,
     BaseServer,
     compute_mh_weights,
     evaluate,
@@ -33,55 +35,47 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    consensus_P: torch.Tensor
+    lambda_sa: float
+    lambda_so: float
+    confidence_mode: str
+
+
+def train(p: Params):
     """
     DFedSET Worker: 联合训练 + S/W 原型提取。
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        consensus_P,
-        lambda_sa,
-        lambda_so,
-        confidence_mode,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
-    consensus_P = consensus_P.to(device)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
+    consensus_P = p.consensus_P.to(device)
 
     # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 3. 本地训练
     model.train()
     total_loss, num_batches = 0.0, 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             features = model.extractor(x)
             logits = model.classifier(features)
 
             loss = F.cross_entropy(logits, y)
-            if lambda_sa != 0 or lambda_so != 0:
+            if p.lambda_sa != 0 or p.lambda_so != 0:
                 target_protos = consensus_P[y]
-                if lambda_sa != 0:
-                    loss = loss + lambda_sa * F.mse_loss(features, target_protos)
-                if lambda_so != 0:
+                if p.lambda_sa != 0:
+                    loss = loss + p.lambda_sa * F.mse_loss(features, target_protos)
+                if p.lambda_so != 0:
                     loss = (
                         loss
-                        + lambda_so
+                        + p.lambda_so
                         * (
                             1 - F.cosine_similarity(features, target_protos, dim=-1)
                         ).mean()
@@ -96,11 +90,11 @@ def train(params):
 
     # 4. 提取本地最新原型 (S 和 W)
     local_protos, local_counts = extract_prototypes(
-        model, loader, num_class, feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, device, return_counts=True
     )
-    if confidence_mode == "count":
+    if p.confidence_mode == "count":
         confidence = local_counts.unsqueeze(-1).float()
-    elif confidence_mode == "none":
+    elif p.confidence_mode == "none":
         confidence = torch.ones_like(local_counts.unsqueeze(-1))
     else:
         confidence = torch.log(1 + local_counts.unsqueeze(-1))
@@ -123,9 +117,9 @@ class Server(BaseServer):
         super().__init__(pfl=True, args=args)
         self.lambda_sa = args.lambda_sa
         self.lambda_so = args.lambda_so
-        self.gamma_global = args.gamma_global
-        self.eta = args.eta
         self.ablate = args.ablate
+        self.gamma_global = self.ablate.get("gamma_global", 0.001)
+        self.eta = args.eta
 
         # 生成静态物理拓扑邻接矩阵
         adj = generate_adjacency_matrix(args).to(self.device).float()
@@ -185,13 +179,20 @@ class Server(BaseServer):
             trigger_mode = ablate.get("trigger", "adaptive")
             use_redirect = ablate.get("aggregator", True)
 
-            p = self.build_base_params(selected_clients)
-            for params, i in zip(p, selected_clients):
-                params[2] = self.clients_state[i]
-                params.append(self.consensus_P[i])
-                params.append(self.lambda_sa)
-                params.append(self.lambda_so)
-                params.append(confidence_mode)
+            base_params = self.build_base_params(selected_clients)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
+
+            p = [
+                Params(
+                    **asdict(base),
+                    consensus_P=self.consensus_P[base.client_id],
+                    lambda_sa=self.lambda_sa,
+                    lambda_so=self.lambda_so,
+                    confidence_mode=confidence_mode,
+                )
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0
@@ -427,7 +428,7 @@ class Server(BaseServer):
         target_states = model_states if model_states is not None else self.clients_state
         futures = []
         for i in range(self.num_clients):
-            client_proto = protos[i] if protos is not None else None
+            client_proto = protos[i].cpu() if protos is not None else None
             futures.append(
                 evaluate.options(
                     num_gpus=self.ray_gpu_fraction,
@@ -439,6 +440,7 @@ class Server(BaseServer):
                     target_states[i],
                     self.test_set_refs[i],
                     self.client_gpu[i],
+                    self.num_class,
                     client_proto,
                 )
             )

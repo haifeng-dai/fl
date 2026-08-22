@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     cos_similarity,
     extract_prototypes,
@@ -18,37 +20,29 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        global_protos,
-        alpha,
-    ) = params
+@dataclass
+class Params(BaseParams):
+    global_protos: torch.Tensor
+    alpha: float
+
+
+def train(p: Params):
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
-    global_protos = global_protos.data.clone().to(device)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
+    global_protos = p.global_protos.data.clone().to(device)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 2. 本地模型多轮次训练
     total_loss = 0.0
     num_batches = 0
 
     model.train()
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for data, target, *_ in loader:
             data, target = data.to(device), target.to(device)
             optimizer.zero_grad()
@@ -59,7 +53,7 @@ def train(params):
             # 基于原型的对比损失 (Prototypical Contrastive Loss)
             loss_con = cos_similarity(features, global_protos, target, tau=1.0)
 
-            loss = (1 - alpha) * loss_ce + alpha * loss_con
+            loss = (1 - p.alpha) * loss_ce + p.alpha * loss_con
             loss.backward()
             optimizer.step()
 
@@ -68,7 +62,7 @@ def train(params):
 
     # 3. 提取本地原型及样本计数
     local_protos, local_counts = extract_prototypes(
-        model, loader, num_class, feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, device, return_counts=True
     )
 
     return {
@@ -95,10 +89,14 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params in p:
-                params.append(self.global_protos)
-                params.append(1.0 - (r / self.rounds))
+            p = [
+                Params(
+                    **asdict(base),
+                    global_protos=self.global_protos,
+                    alpha=1.0 - (r / self.rounds),
+                )
+                for base in self.build_base_params(selected)
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0

@@ -1,6 +1,7 @@
 import os
 import random
 import time
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import torch
@@ -8,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     get_model,
@@ -17,6 +19,17 @@ from .utils import (
 def get_path(args):
     args.file_name = f"{args.common_name}_{fmt_num(args.eta)}_{fmt_num(args.rand_percent)}_{fmt_num(args.layer_idx)}_{fmt_num(args.ala_threshold)}_{fmt_num(args.num_pre_loss)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+@dataclass
+class Params(BaseParams):
+    local_model_state: dict[str, torch.Tensor]
+    saved_weights: list[torch.Tensor] | None
+    eta: float
+    rand_percent: int
+    layer_idx: int
+    ala_threshold: float
+    num_pre_loss: int
 
 
 class ALA:
@@ -166,72 +179,50 @@ class ALA:
             param.data = param_t.data.clone()
 
 
-def train(params):
-    """
-    带有自适应本地聚合的 FedALA 客户端 worker 进程。
-    """
-    (
-        client_id,
-        device,
-        global_model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        local_model_state,
-        saved_weights,
-        eta,
-        rand_percent,
-        layer_idx,
-        ala_threshold,
-        num_pre_loss,
-    ) = params
+def train(p: Params):
+    device = torch.device(p.client_gpu)
 
     # 初始化模型
-    global_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    global_model.load_state_dict(global_model_state)
-    local_model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    local_model.load_state_dict(local_model_state)
+    global_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    global_model.load_state_dict(p.model_state)
+    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    local_model.load_state_dict(p.local_model_state)
 
     # 初始化 ALA 模块
     ala = ALA(
-        client_id=client_id,
-        train_data=train_set,
-        batch_size=batch_size,
-        model_name=model_name,
-        dataset_name=dataset_name,
-        rand_percent=rand_percent,
-        layer_idx=layer_idx,
-        eta=eta,
+        client_id=p.client_id,
+        train_data=p.train_set,
+        batch_size=p.batch_size,
+        model_name=p.model_name,
+        dataset_name=p.dataset,
+        rand_percent=p.rand_percent,
+        layer_idx=p.layer_idx,
+        eta=p.eta,
         device=device,
-        threshold=ala_threshold,
-        num_pre_loss=num_pre_loss,
-        feature_dim=feature_dim,
-        n_class=num_class,
+        threshold=p.ala_threshold,
+        num_pre_loss=p.num_pre_loss,
+        feature_dim=p.feature_dim,
+        n_class=p.num_class,
     )
 
     # 如果存在（非首次参与），则加载先前学习到的聚合权重
-    if saved_weights is not None:
-        ala.weights = [w.to(device) for w in saved_weights]
+    if p.saved_weights is not None:
+        ala.weights = [w.to(device) for w in p.saved_weights]
 
     # 确定 ALA 阶段：从未参与过的客户端（无权重）执行收敛学习，
     # 而对于具有聚合历史记录的客户端，则进行后续的微观调优。
-    ala.start_phase = saved_weights is None
+    ala.start_phase = p.saved_weights is None
 
     # 执行 ALA（内部逻辑会自动处理模型一致的情况并跳过）
     ala.adaptive_local_aggregation(global_model, local_model)
 
     # 执行标准的本地训练流程
-    optimizer = torch.optim.SGD(local_model.parameters(), lr=lr)
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(local_model.parameters(), lr=p.lr)
+    loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     total_loss = 0.0
     num_batches = 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             output = local_model(x)
@@ -287,16 +278,23 @@ class Server(BaseServer):
                 k: v.cpu() for k, v in self.model.state_dict().items()
             }
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = global_model_state_cpu
-                params.append(self.clients_state[i])
-                params.append(self.clients_weights[i])
-                params.append(self.eta)
-                params.append(self.rand_percent)
-                params.append(self.layer_idx)
-                params.append(self.ala_threshold)
-                params.append(self.num_pre_loss)
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = global_model_state_cpu
+
+            p = [
+                Params(
+                    **asdict(base),
+                    local_model_state=self.clients_state[base.client_id],
+                    saved_weights=self.clients_weights[base.client_id],
+                    eta=self.eta,
+                    rand_percent=self.rand_percent,
+                    layer_idx=self.layer_idx,
+                    ala_threshold=self.ala_threshold,
+                    num_pre_loss=self.num_pre_loss,
+                )
+                for base in base_params
+            ]
             # 运行并行客户端训练任务
             results = self.run_clients(train, p)
 

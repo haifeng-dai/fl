@@ -1,10 +1,12 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 
 from .utils import (
+    BaseParams,
     BaseServer,
     get_model,
     param_aggregate,
@@ -16,41 +18,33 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
+@dataclass
+class Params(BaseParams):
+    global_head_state: dict[str, torch.Tensor]
+
+
+def train(p: Params):
     """
     LG-FedAvg 本地训练流程:
     - 接收本地特征提取器状态与全局分类器状态。
     - 训练完整模型。
     - 训练完毕后返回更新后的提取器 (用于本地缓存) 和分类器 (用于全局聚合)。
     """
-    (
-        _,
-        device,
-        local_body_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        global_head_state,
-    ) = params
+    device = torch.device(p.client_gpu)
 
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
 
     # 加载子模块 (注意：字典中的键不应带前缀)
-    model.extractor.load_state_dict(local_body_state)
-    model.classifier.load_state_dict(global_head_state)
+    model.extractor.load_state_dict(p.model_state)
+    model.classifier.load_state_dict(p.global_head_state)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     model.train()
     total_loss = 0.0
     num_batches = 0
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             output = model(x)
@@ -93,10 +87,17 @@ class Server(BaseServer):
             # 获取当前的全局共享分类头 (Head)
             global_head_state = self.model.classifier.state_dict()
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
-                params.append(global_head_state)
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
+
+            p = [
+                Params(
+                    **asdict(base),
+                    global_head_state=global_head_state,
+                )
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0

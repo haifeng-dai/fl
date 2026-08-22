@@ -1,5 +1,6 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn as nn
@@ -7,6 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
+    BaseParams,
     BaseServer,
     extract_prototypes,
     fmt_num,
@@ -18,6 +20,17 @@ from .utils import (
 def get_path(args):
     args.file_name = f"{args.common_name}_{fmt_num(args.lamda_)}_{fmt_num(args.head_epochs)}_{fmt_num(args.body_epochs)}_{fmt_num(args.lr_head)}_{fmt_num(args.lr_body)}_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}_{fmt_num(args.lambda_p)}_{fmt_num(args.lambda_acl)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
+
+
+@dataclass
+class Params(BaseParams):
+    head_epochs: int
+    body_epochs: int
+    lr_head: float
+    lr_body: float
+    lamda_: float
+    global_protos: torch.Tensor | None
+    lambda_p: float
 
 
 class PLN(nn.Module):
@@ -50,41 +63,22 @@ class PLN(nn.Module):
         return out
 
 
-def train(params):
+def train(p: Params):
     """
     FedDPC 客户端训练流程：解耦的交替优化。
     Phase 1: 冻结特征提取器，仅优化分类头。
     Phase 2: 冻结分类头，仅微调特征提取器并对齐全局原型。
     """
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        _,
-        batch_size,
-        _,
-        feature_dim,
-        num_class,
-        head_epochs,
-        body_epochs,
-        lr_head,
-        lr_body,
-        lamda_,
-        global_protos,
-        lambda_p,
-    ) = params
+    device = torch.device(p.client_gpu)
 
     # 初始化模型并加载本地持久化状态
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
+    loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 预处理全局原型：从单一 Tensor 快速搬运到 GPU
     global_protos_tensor = (
-        global_protos.to(device) if global_protos is not None else None
+        p.global_protos.to(device) if p.global_protos is not None else None
     )
 
     # === Phase 1: Local Head Optimization ===
@@ -94,19 +88,19 @@ def train(params):
     for param in model.classifier.parameters():
         param.requires_grad = True
 
-    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=lr_head)
+    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=p.lr_head)
     model.train()
 
     total_loss_ce = 0.0
     num_batches_head = 0
     # 提前准备原型标签 (用于在 Phase 1 中锚定分类器)
     proto_labels = (
-        torch.arange(num_class, device=device)
+        torch.arange(p.num_class, device=device)
         if global_protos_tensor is not None
         else None
     )
 
-    for _ in range(head_epochs):
+    for _ in range(p.head_epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
 
@@ -121,7 +115,7 @@ def train(params):
                 loss_ce_proto = F.cross_entropy(p_out, proto_labels)
 
             # 合并损失：在拟合本地数据的同时，保持对全局原型的判别力
-            loss = loss_ce_local + lambda_p * loss_ce_proto
+            loss = loss_ce_local + p.lambda_p * loss_ce_proto
 
             optimizer_head.zero_grad()
             loss.backward()
@@ -140,46 +134,45 @@ def train(params):
         param.requires_grad = True
 
     if global_protos_tensor is not None:
-        optimizer_body = torch.optim.SGD(model.extractor.parameters(), lr=lr_body)
+        optimizer_body = torch.optim.SGD(model.extractor.parameters(), lr=p.lr_body)
 
         total_loss_proto = 0.0
         num_batches_body = 0
-        for _ in range(body_epochs):
+        model.train()
+
+        for _ in range(p.body_epochs):
             for x, y, *_ in loader:
                 x, y = x.to(device), y.to(device)
+
+                # 仅计算特征与对应类别全局原型的 MSE 损失
                 features = model.extractor(x)
-
-                # 恢复语义锚定：计算分类损失以维持特征的判别力
-                out = model.classifier(features)
-                l_ce = F.cross_entropy(out, y)
-
                 target_protos = global_protos_tensor[y]
-                l_proto = F.mse_loss(features, target_protos)
-
-                # 双重约束：本地决策稳定性 + 全局流形靠拢
-                loss = l_ce + lamda_ * l_proto
+                loss_proto = F.mse_loss(features, target_protos)
 
                 optimizer_body.zero_grad()
-                loss.backward()
+                loss_proto.backward()
                 optimizer_body.step()
 
-                total_loss_proto += l_proto.item()
+                total_loss_proto += loss_proto.item()
                 num_batches_body += 1
 
-        avg_loss_proto = total_loss_proto / num_batches_body
+        avg_loss_proto = (
+            total_loss_proto / num_batches_body if num_batches_body > 0 else 0.0
+        )
     else:
         avg_loss_proto = 0.0
 
-    # === Phase 3: Recalculate Precise Prototypes ===
-    model.eval()
-    local_protos_avg = extract_prototypes(model, loader, num_class, feature_dim, device)
+    # 提取本地原型用于在服务器端指导全局 PLN 学习
+    local_protos = extract_prototypes(
+        model, loader, p.num_class, p.feature_dim, device, return_counts=False
+    )
 
     model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     return {
         "loss": avg_loss_ce,
         "loss_proto": avg_loss_proto,
         "state": model_state,
-        "protos": local_protos_avg,
+        "protos": local_protos.cpu().detach().clone(),
     }
 
 
@@ -218,20 +211,23 @@ class Server(BaseServer):
             print(f"\n--- FedDPC Round {r + 1}/{self.rounds} ---")
 
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
-            print(f"Selected clients: {selected}")
+            base_params = self.build_base_params(selected)
+            for base in base_params:
+                base.model_state = self.clients_state[base.client_id]
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params[2] = self.clients_state[i]
-                params.append(self.head_epochs)
-                params.append(self.body_epochs)
-                params.append(self.lr_head)
-                params.append(self.lr_body)
-                params.append(self.lamda_)
-                params.append(
-                    self.global_protos.cpu() if self.global_protos is not None else None
+            p = [
+                Params(
+                    **asdict(base),
+                    head_epochs=self.head_epochs,
+                    body_epochs=self.body_epochs,
+                    lr_head=self.lr_head,
+                    lr_body=self.lr_body,
+                    lamda_=self.lamda_,
+                    global_protos=self.global_protos.cpu() if self.global_protos is not None else None,
+                    lambda_p=self.lambda_p,
                 )
-                params.append(self.lambda_p)
+                for base in base_params
+            ]
             results = self.run_clients(train, p)
 
             total_loss_ce = 0.0

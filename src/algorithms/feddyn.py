@@ -1,11 +1,13 @@
 import os
 import time
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 from .utils import (
+    BaseParams,
     BaseServer,
     fmt_num,
     get_model,
@@ -17,41 +19,33 @@ def get_path(args):
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
-def train(params):
-    (
-        _,
-        device,
-        model_state,
-        train_set,
-        model_name,
-        dataset_name,
-        lr,
-        batch_size,
-        epochs,
-        feature_dim,
-        num_class,
-        grad_prev,
-        global_model_vector,
-        alpha_coef,
-    ) = params
+@dataclass
+class Params(BaseParams):
+    grad_prev: torch.Tensor | None
+    global_model_vector: torch.Tensor | None
+    alpha_coef: float
+
+
+def train(p: Params):
+    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(model_name, dataset_name, num_class, feature_dim).to(device)
-    model.load_state_dict(model_state)
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model.load_state_dict(p.model_state)
+    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 将参数向量移动到计算设备
-    if grad_prev is not None:
-        grad_prev = grad_prev.to(device)
-    if global_model_vector is not None:
-        global_model_vector = global_model_vector.to(device)
+    grad_prev = p.grad_prev.to(device) if p.grad_prev is not None else None
+    global_model_vector = (
+        p.global_model_vector.to(device) if p.global_model_vector is not None else None
+    )
 
     total_loss = 0.0
     num_batches = 0
 
     model.train()
-    for _ in range(epochs):
+    for _ in range(p.epochs):
         for x, y, *_ in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
@@ -70,7 +64,7 @@ def train(params):
             quad_penalty = 0.0
             if global_model_vector is not None:
                 diff = curr_params - global_model_vector
-                quad_penalty = (alpha_coef / 2.0) * torch.sum(diff**2)
+                quad_penalty = (p.alpha_coef / 2.0) * torch.sum(diff**2)
 
             loss = task_loss + lin_penalty + quad_penalty
 
@@ -118,11 +112,15 @@ class Server(BaseServer):
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
             print(f"Selected clients: {selected}")
 
-            p = self.build_base_params(selected)
-            for params, i in zip(p, selected):
-                params.append(self.local_grads[i])
-                params.append(global_model_vector)
-                params.append(self.alpha_coef)
+            p = [
+                Params(
+                    **asdict(base),
+                    grad_prev=self.local_grads[base.client_id],
+                    global_model_vector=global_model_vector,
+                    alpha_coef=self.alpha_coef,
+                )
+                for base in self.build_base_params(selected)
+            ]
             results = self.run_clients(train, p)
 
             total_loss = 0.0
