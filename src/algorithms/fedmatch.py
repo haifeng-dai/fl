@@ -135,18 +135,20 @@ def train(p: Params):
     num_steps = round(len(x_l) / p.batch_size)
     bsize_u = math.ceil(len(x_u) / max(1, num_steps))
 
-    l_loader = DataLoader(TensorDataset(x_l, y_l), batch_size=p.batch_size, shuffle=True)
+    l_loader = DataLoader(
+        TensorDataset(x_l, y_l), batch_size=p.batch_size, shuffle=True
+    )
     u_loader = DataLoader(TensorDataset(x_u), batch_size=bsize_u, shuffle=True)
 
     # 6. 本地训练：每步先监督（仅 σ）再无监督（仅 ψ），步后重建 θ
     total_loss = 0.0
     num_batches = 0
     for _ in range(p.epochs):
-        for (x_l, y_l), (x_u,) in zip(l_loader, u_loader):
-            x_l, y_l = x_l.to(device), y_l.to(device)
-            x_u = x_u.to(device)
+        for (x_lb, y_lb), (x_ub,) in zip(l_loader, u_loader):
+            x_lb, y_lb = x_lb.to(device), y_lb.to(device)
+            x_ub = x_ub.to(device)
             optimizer_s.zero_grad()
-            loss_s = p.lambda_s * F.cross_entropy(dm.theta(x_l), y_l)
+            loss_s = p.lambda_s * F.cross_entropy(dm.theta(x_lb), y_lb)
             loss_s.backward()
             optimizer_s.step()
             dm.sync_theta()
@@ -157,34 +159,30 @@ def train(p: Params):
             #    第 1、2 项合并为 phi = mean(KL) + CE，统一 × lambda_iccs；
             # 3. L1(ψ) × lambda_l1：稀疏化正则（配合评估时的 l1_thres 硬阈值）；
             # 4. L2(σ − ψ) × lambda_l2：限制 ψ 偏离 σ 过大（disjoint 约束）。
-            # 无监督损失（分两步 backward 以极大节省显存）
-            # 第一次 backward：KL 损失单独执行，释放 y_logits 相关的计算图
             optimizer_u.zero_grad()
-            y_logits = dm.theta(x_u)
+            y_logits = dm.theta(x_ub)
 
             with torch.no_grad():
                 helper_logits = []
                 if helper_net is not None:
                     for hs in helper_states:
                         helper_net.load_state_dict(hs)
-                        helper_logits.append(helper_net(x_u))
+                        helper_logits.append(helper_net(x_ub))
 
-            phi_kl = torch.tensor(0.0, device=x_u.device)
-            for h_logits in helper_logits:
-                phi_kl = phi_kl + kl_loss(y_logits, h_logits) / max(
-                    1, len(helper_logits)
-                )
-
-            loss_u_kl = p.lambda_iccs * phi_kl
-            loss_u_kl.backward()  # 第一次 backward：仅 KL 损失
-            total_u_loss_val = loss_u_kl.item()
+            if helper_logits:
+                phi_kl = sum(kl_loss(y_logits, h_logits) for h_logits in helper_logits) / len(helper_logits)
+                loss_u_kl = p.lambda_iccs * phi_kl
+                loss_u_kl.backward()  # 第一次 backward：仅 KL 损失（存在 helper 时）
+                total_u_loss_val = loss_u_kl.item()
+            else:
+                total_u_loss_val = 0.0
 
             # 第二次 backward：CE 伪标签损失 + L1/L2 正则合并执行
             y_probs = torch.softmax(y_logits.detach(), dim=1)
             conf_mask = y_probs.max(dim=1).values >= p.confidence
-            loss_u_ce = torch.tensor(0.0, device=x_u.device)
+            loss_u_ce = None
             if int(conf_mask.sum().item()) > 0:
-                x_conf = x_u[conf_mask]
+                x_conf = x_ub[conf_mask]
                 y_conf_logits = y_logits.detach()[conf_mask]
                 with torch.no_grad():
                     helper_conf_logits = []
@@ -204,13 +202,13 @@ def train(p: Params):
                 loss_u_ce = p.lambda_iccs * F.cross_entropy(y_hard_logits, y_pseudo)
 
             # L1(ψ) 与 L2(σ − ψ) 正则化项（与 CE 损失一起完成第二次 backward）
-            loss_reg = torch.tensor(0.0, device=x_u.device)
-            for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters()):
-                loss_reg = loss_reg + p.lambda_l1 * pp.abs().sum()
-                loss_reg = loss_reg + p.lambda_l2 * (sp - pp).square().sum()
+            reg_l1 = [pp.abs().sum() for pp in dm.psi.parameters()]
+            reg_l2 = [(sp - pp).square().sum() for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters())]
+            loss_reg = p.lambda_l1 * sum(reg_l1) + p.lambda_l2 * sum(reg_l2)
 
-            (loss_u_ce + loss_reg).backward()  # 第二次 backward：CE + L1 + L2 正则
-            total_u_loss_val += loss_u_ce.item() + loss_reg.item()
+            loss_u_second = loss_reg if loss_u_ce is None else (loss_u_ce + loss_reg)
+            loss_u_second.backward()  # 第二次 backward：CE + L1 + L2 正则
+            total_u_loss_val += loss_u_second.item()
 
             optimizer_u.step()
             dm.sync_theta()
@@ -250,12 +248,12 @@ class Server(BaseServer):
         self.lambda_l1 = args.lambda_l1
         self.l1_thres = args.l1_thres
 
-        # 分解模型状态（σ/ψ 同构初始化自 BaseServer.model）
+        # 分解模型状态（σ 初始化为全局模型权重，ψ 初始化为全零稀疏个性化参数）
         self.sigma_state = {
             k: v.cpu().detach().clone() for k, v in self.model.state_dict().items()
         }
         self.psi_state = {
-            k: v.cpu().detach().clone() for k, v in self.model.state_dict().items()
+            k: torch.zeros_like(v).cpu() for k, v in self.model.state_dict().items()
         }
 
         # 聚合权重与辅助历史缓存（按客户端 ID 索引）
