@@ -193,7 +193,7 @@ def train(p: Params):
 class Server(BaseServer):
     def __init__(self, args):
         # ProtoFSSL 为全局联邦方法，pfl=False
-        super().__init__(False, args)
+        super().__init__(args, is_ssl=True)
         self.label_ratio = args.label_ratio
         self.support_size = args.support_size
         self.unlabeled_query_size = args.unlabeled_query_size

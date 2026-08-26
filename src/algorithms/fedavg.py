@@ -54,7 +54,7 @@ def train(p: BaseParams):
 class Server(BaseServer):
     def __init__(self, args):
         # FedAvg 是传统的全局联邦学习方法，因此 pfl=False
-        super().__init__(False, args)
+        super().__init__(args)
 
     def fit(self):
         """运行 FedAvg 训练流程"""

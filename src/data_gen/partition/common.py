@@ -60,6 +60,7 @@ def resolve_n_class(args, num_classes):
 def get_output_dir(args, dataset_name):
     """数据划分输出目录（唯一真源），编码完整场景以避免缓存串味。"""
     n = args.num_clients
+    split_suffix = f"_{args.seed}_{args.test_ratio}"
     if args.partition == "iid":
         part_seg = f"iid_{n}"
     elif args.partition == "dirichlet":
@@ -71,15 +72,15 @@ def get_output_dir(args, dataset_name):
     if args.ssl == "sfd":
         ld = sanitize(args.label_domain)
         ud = sanitize(args.unlabel_domain)
-        part_str = f"sfd_{part_seg}_{ld}_{ud}_{args.label_ratio}"
+        part_str = f"sfd_{part_seg}_{ld}_{ud}_{args.label_ratio}{split_suffix}"
     elif args.ssl in ("sample", "client"):
-        part_str = f"{args.ssl}_{part_seg}_{args.label_ratio}"
+        part_str = f"{args.ssl}_{part_seg}_{args.label_ratio}{split_suffix}"
     elif args.fdg:
         dom = sanitize(args.selected_domains)
         td = sanitize(args.target_domain)
-        part_str = f"fdg_{part_seg}_{dom}_{td}"
+        part_str = f"fdg_{part_seg}_{dom}_{td}{split_suffix}"
     else:
-        part_str = part_seg
+        part_str = f"{part_seg}{split_suffix}"
     return os.path.join("./datasets", dataset_name, part_str)
 
 
@@ -92,8 +93,11 @@ def is_fresh(output_dir, num_clients):
     各场景后处理步骤口径完全一致，避免此前掩码被反复叠加执行、
     把数据逐级啃空的 bug。
     """
-    return not (
-        os.path.exists(output_dir) and len(os.listdir(output_dir)) >= num_clients
+    if not os.path.isdir(output_dir):
+        return True
+    return any(
+        not os.path.isfile(os.path.join(output_dir, f"client_{i}.pt"))
+        for i in range(num_clients)
     )
 
 

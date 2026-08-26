@@ -111,7 +111,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(True, args)
+        super().__init__(args, pfl=True)
         self.mu = args.mu
 
         # 为每个客户端初始化对应的代理模型 (Public/Shared)

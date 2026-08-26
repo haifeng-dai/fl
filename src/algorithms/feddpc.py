@@ -178,7 +178,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(True, args)
+        super().__init__(args, pfl=True)
         self.head_epochs = args.head_epochs
         self.body_epochs = args.body_epochs
         self.lr_head = args.lr_head

@@ -231,7 +231,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(False, args)
+        super().__init__(args, is_ssl=True)
 
         if not self.is_sfd:
             raise ValueError("fedmatch requires SFD data (ssl must be 'sfd')")

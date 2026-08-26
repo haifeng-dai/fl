@@ -60,7 +60,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(True, args)
+        super().__init__(args, pfl=True)
         self.client_head_states = [
             self.model.classifier.state_dict() for _ in range(self.num_clients)
         ]

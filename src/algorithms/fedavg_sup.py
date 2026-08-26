@@ -64,7 +64,7 @@ def train(p: BaseParams):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(False, args)
+        super().__init__(args, is_ssl=True)
         self.labeled_counts = [
             int(train_set.is_labeled.sum().item())
             for train_set in self.train_sets.values()

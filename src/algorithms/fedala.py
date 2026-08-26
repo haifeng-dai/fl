@@ -252,7 +252,7 @@ def train(p: Params):
 class Server(BaseServer):
     def __init__(self, args):
         # FedALA 是一种个性化联邦学习 (pFL) 方法
-        super().__init__(True, args)
+        super().__init__(args, pfl=True)
         self.eta = args.eta
         self.rand_percent = args.rand_percent
         self.layer_idx = args.layer_idx

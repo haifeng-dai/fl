@@ -112,7 +112,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(False, args)
+        super().__init__(args)
         self.global_lr = args.global_lr
 
         # 获取所有可训练参数的名称

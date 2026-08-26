@@ -161,7 +161,7 @@ class Server(BaseServer):
     """
 
     def __init__(self, args):
-        super().__init__(pfl=True, args=args)
+        super().__init__(args, pfl=True)
         self.erk_power_scale = args.erk_power_scale
         self.anneal_factor = args.anneal_factor
         self.dense_ratio = args.dense_ratio

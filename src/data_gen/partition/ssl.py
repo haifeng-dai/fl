@@ -9,6 +9,8 @@ import torch
 # ──────────────────────────────────────────────────────────────────────────
 def apply_label_ratio_sample(output_dir, num_clients, label_ratio, seed=42):
     """场景B：每客户端内按 label_ratio 随机掩码样本为无标签（标签/未标签同分布）。"""
+    if not 0 <= label_ratio <= 1:
+        raise ValueError("label_ratio 必须位于 [0, 1] 区间")
     rng = torch.Generator().manual_seed(seed)
     for i in range(num_clients):
         path = os.path.join(output_dir, f"client_{i}.pt")
@@ -16,7 +18,7 @@ def apply_label_ratio_sample(output_dir, num_clients, label_ratio, seed=42):
         train = data["train"]
         n = len(train["y"])
         perm = torch.randperm(n, generator=rng)
-        num_labeled = max(1, int(n * label_ratio))
+        num_labeled = min(n, max(1, int(n * label_ratio))) if n > 0 else 0
         is_labeled = torch.zeros(n, dtype=torch.bool)
         is_labeled[perm[:num_labeled]] = True
         train["is_labeled"] = is_labeled
@@ -25,6 +27,8 @@ def apply_label_ratio_sample(output_dir, num_clients, label_ratio, seed=42):
 
 def apply_label_ratio_client(output_dir, num_clients, label_ratio, seed=42):
     """场景A：按 label_ratio 选取客户端为全标签，其余全无标签（同分布）。"""
+    if not 0 <= label_ratio <= 1:
+        raise ValueError("label_ratio 必须位于 [0, 1] 区间")
     rng = torch.Generator().manual_seed(seed)
     perm = torch.randperm(num_clients, generator=rng)
     n_labeled = max(1, int(num_clients * label_ratio))

@@ -125,7 +125,7 @@ def train(p: Params):
 class Server(BaseServer):
     def __init__(self, args):
         # FedSA 是个性化联邦学习算法 (pfl=True)
-        super().__init__(True, args)
+        super().__init__(args, pfl=True)
         self.alpha_sa = args.alpha_sa
         self.lambda_r = args.lambda_r
         self.lambda_mcl = args.lambda_mcl

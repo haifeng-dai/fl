@@ -75,7 +75,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(False, args)
+        super().__init__(args)
 
         self.global_protos = torch.zeros((self.num_class, self.feature_dim))
 

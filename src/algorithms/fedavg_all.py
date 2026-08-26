@@ -65,7 +65,7 @@ def train(p: BaseParams):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(False, args)
+        super().__init__(args)
 
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))

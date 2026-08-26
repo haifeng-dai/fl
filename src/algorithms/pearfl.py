@@ -133,7 +133,7 @@ class Server(BaseServer):
     """
 
     def __init__(self, args):
-        super().__init__(pfl=True, args=args)
+        super().__init__(args, pfl=True)
         self.momentum = args.momentum
         self.weight_decay = args.weight_decay
         self.lamda = args.lamda

@@ -126,7 +126,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(True, args)
+        super().__init__(args, pfl=True)
         self.lamda_ = args.lamda_
         self.server_epochs = args.server_epochs
         self.server_lr = args.server_lr

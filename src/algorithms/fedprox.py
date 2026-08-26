@@ -75,7 +75,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(False, args)
+        super().__init__(args)
         self.mu = args.mu
 
     def fit(self):

@@ -45,6 +45,16 @@ def prepare_data(args):
         if is_fresh(output_dir, args.num_clients):
             prepare_label_data(args, dataset_name, raw_data)
             if args.ssl == "sample":
-                apply_label_ratio_sample(output_dir, args.num_clients, args.label_ratio)
+                apply_label_ratio_sample(
+                    output_dir,
+                    args.num_clients,
+                    args.label_ratio,
+                    seed=args.seed,
+                )
             elif args.ssl == "client":
-                apply_label_ratio_client(output_dir, args.num_clients, args.label_ratio)
+                apply_label_ratio_client(
+                    output_dir,
+                    args.num_clients,
+                    args.label_ratio,
+                    seed=args.seed,
+                )

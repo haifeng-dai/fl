@@ -81,7 +81,7 @@ class Server(BaseServer):
     # DFedAvgM Server: 使用 Metropolis-Hastings (MH) 权重矩阵进行去中心化模型聚合
 
     def __init__(self, args):
-        super().__init__(pfl=True, args=args)
+        super().__init__(args, pfl=True)
 
         # 使用通用的邻接矩阵生成函数
         self.adj_matrix = generate_adjacency_matrix(args)

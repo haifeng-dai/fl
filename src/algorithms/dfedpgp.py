@@ -166,7 +166,7 @@ class Server(BaseServer):
     """
 
     def __init__(self, args):
-        super().__init__(pfl=True, args=args)
+        super().__init__(args, pfl=True)
 
         # 验证模型架构：必须有 extractor 和 classifier
         init_state = self.model.state_dict()

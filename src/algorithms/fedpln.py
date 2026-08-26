@@ -179,7 +179,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(False, args)
+        super().__init__(args)
         self.width_pln = args.width_pln
         self.depth_pln = args.depth_pln
         self.fixed_proto = args.fixed_proto

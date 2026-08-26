@@ -223,7 +223,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(True, args)
+        super().__init__(args, pfl=True)
         self.lr_g = args.lr_g
         self.energy = args.energy
 

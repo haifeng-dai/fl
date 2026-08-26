@@ -114,7 +114,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(pfl=True, args=args)
+        super().__init__(args, pfl=True)
         self.lambda_sa = args.lambda_sa
         self.lambda_so = args.lambda_so
         self.ablate = args.ablate

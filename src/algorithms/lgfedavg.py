@@ -70,7 +70,7 @@ def train(p: Params):
 class Server(BaseServer):
     def __init__(self, args):
         # pfl=True 表示此算法是个性化算法，评估时使用本地测试集
-        super().__init__(True, args)
+        super().__init__(args, pfl=True)
         # 覆盖 BaseServer 的初始化逻辑：LG-FedAvg 只需存储各客户端的特征提取器 (Extractor) 状态
         self.clients_state = [
             self.model.extractor.state_dict() for _ in range(self.num_clients)

@@ -78,7 +78,7 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(pfl=True, args=args)
+        super().__init__(args, pfl=True)
 
         self.adj_matrix = generate_adjacency_matrix(args)
         self.mh_weights = compute_mh_weights(self.adj_matrix, device=self.device)

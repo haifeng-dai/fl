@@ -32,6 +32,8 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     # ════════════════════════════════════════════════════════════════
     if not args.label_domain or not args.unlabel_domain:
         raise ValueError("SFD 场景必须指定 label_domain 与 unlabel_domain")
+    if not 0 <= args.label_ratio <= 1:
+        raise ValueError("label_ratio 必须位于 [0, 1] 区间")
     if args.label_domain == args.unlabel_domain:
         raise ValueError(
             f"SFD 要求 label_domain != unlabel_domain，当前均为 '{args.label_domain}'"
@@ -145,7 +147,9 @@ def prepare_sfd_data(args, dataset_name, raw_data):
 
         # label_domain：按 label_ratio 采样保留
         lbl = np.where(arr == args.label_domain)[0]
-        n_keep = int(len(lbl) * args.label_ratio)
+        n_keep = 0
+        if len(lbl) > 0:
+            n_keep = min(len(lbl), max(1, int(len(lbl) * args.label_ratio)))
         if len(lbl) > 0 and n_keep > 0:
             perm = torch.randperm(len(lbl), generator=rng).numpy()
             keep_idx = lbl[perm[:n_keep]]

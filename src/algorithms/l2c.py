@@ -179,7 +179,7 @@ class Server(BaseServer):
     """
 
     def __init__(self, args):
-        super().__init__(pfl=True, args=args)
+        super().__init__(args, pfl=True)
         self.val_ratio = args.val_ratio
         self.lr_alpha = args.lr_alpha
         self.prune_round = args.prune_round
