@@ -2,14 +2,14 @@
 
 # 数据相关 (Data)
 dataset: # cifar10, cifar100, cinic10, tiny_imagenet, mnist, fashionmnist, emnist
-    # - cifar10
+    - cifar10
     # - cifar100
     # - cinic10
     # - tiny_imagenet
     # - mnist
     # - fashionmnist
     # - emnist
-    - cifar10_dg
+    # - cifar10_dg
 model:
     - cnn
     # - resnet18
@@ -54,7 +54,7 @@ label_domain: clean # str，指定有标签源域。
 unlabel_domain: rotate_cutout # str，指定无标签目标域。
 
 # 训练相关 (Training)
-rounds: 0 # pFL: 1000, gFL: 200, 0 表示自动调整
+rounds: 1000 # 完整正式训练的通信轮数
 epochs: 1
 lr: 0.01
 momentum: 0.0

@@ -88,13 +88,6 @@ class BaseServer:
         self.pfl = pfl
         self.is_ssl = is_ssl
 
-        # 自适应 Round 调整逻辑
-        if self.rounds == 0:
-            self.rounds = 1000 if self.pfl else 200
-            print(
-                f"-> Adaptive Rounds: detected {'PFL' if self.pfl else 'GFL'} algorithm, setting rounds={self.rounds}"
-            )
-
         self.acc: list[float] = []
         self.acc_proto: list[float] = []
         self.loss: list[float] = []
@@ -106,9 +99,7 @@ class BaseServer:
 
         self.ssl = args.ssl
         if self.ssl != "none" and not self.is_ssl:
-            raise ValueError(
-                f"算法 {args.algo} 不支持半监督配置 ssl={self.ssl}"
-            )
+            raise ValueError(f"算法 {args.algo} 不支持半监督配置 ssl={self.ssl}")
         if self.is_sfd:
             self.label_domain = args.label_domain
             self.unlabel_domain = args.unlabel_domain
@@ -168,7 +159,6 @@ class BaseServer:
     @property
     def is_sfd(self) -> bool:
         return self.ssl == "sfd"
-
 
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs

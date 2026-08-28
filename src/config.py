@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import yaml
 
-from .data_gen.partition.common import sanitize
+from .naming import build_common_name, build_result_folder
 
 
 def load_yaml(path):
@@ -13,13 +13,6 @@ def load_yaml(path):
         return {}
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
-
-
-def fmt_value(value):
-    """格式化命名字段，保持与算法工具中的 fmt_num 一致。"""
-    if isinstance(value, float) and value == int(value):
-        return str(int(value))
-    return str(value)
 
 
 def get_config():
@@ -58,7 +51,7 @@ def get_config():
         "--rounds",
         type=int,
         default=None,
-        help="Communication rounds, overrides config 'rounds' (0 = auto)",
+        help="Communication rounds, overrides config 'rounds'",
     )
 
     # 解析命令行参数
@@ -190,45 +183,8 @@ def _apply_ablation(configs, ablation_str):
 
 def get_pre_name(args):
     """设置并创建实验所需的保存路径和日志路径"""
-    # partition 片段：{partition}_{n} + dirichlet 加 alpha / pathological 加 n_class
-    part_seg = f"{args.partition}_{args.num_clients}"
-    if args.partition == "dirichlet":
-        part_seg += f"_{args.alpha}"
-    elif args.partition == "pathological":
-        part_seg += f"_{args.n_class}"
-
-    fold_path = os.path.join(f"{args.algo}", f"{args.dataset}_{args.model}_{part_seg}")
-
-    name_parts = [
-        fmt_value(args.epochs),
-        fmt_value(args.batch_size),
-        fmt_value(args.lr),
-    ]
-    if args.ssl != "none":
-        name_parts.extend(
-            [
-                args.ssl,
-                fmt_value(args.unlabeled_ratio),
-                fmt_value(args.label_ratio),
-                fmt_value(args.lam),
-                fmt_value(args.confidence),
-            ]
-        )
-        if args.ssl == "sfd":
-            name_parts.extend(
-                [
-                    sanitize(args.label_domain),
-                    sanitize(args.unlabel_domain),
-                ]
-            )
-    elif args.fdg:
-        name_parts.extend(
-            [
-                sanitize(args.selected_domains),
-                sanitize(args.target_domain),
-            ]
-        )
-    args.common_name = "_".join(name_parts)
+    fold_path = build_result_folder(args)
+    args.common_name = build_common_name(args)
     base_save = os.path.join("results", fold_path)
     base_log = os.path.join("logs", fold_path)
     ablate_name = args.ablate_name

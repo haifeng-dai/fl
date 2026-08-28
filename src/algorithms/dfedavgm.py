@@ -49,7 +49,9 @@ def train(p: Params):
     if p.optimizer_state is not None:
         optimizer.load_state_dict(p.optimizer_state)
 
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     # 3. 本地模型多轮次 (Epochs) 训练
     total_loss = 0.0
