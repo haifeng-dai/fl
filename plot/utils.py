@@ -1,18 +1,17 @@
+import numbers
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+import src
+from src.naming import build_common_name, build_result_folder
+
 os.makedirs("figures", exist_ok=True)
-
-
-def _fmt_num(x):
-    """数值统一转字符串，整数不保留 .0"""
-    if isinstance(x, float) and x == int(x):
-        return str(int(x))
-    return str(x)
 
 
 PARAM_MAP = {
@@ -39,18 +38,6 @@ PARAM_MAP = {
 }
 
 
-def get_adj_suffix(args):
-    adj_type = args["adj_type"]
-    suffix = f"{adj_type}"
-    if adj_type == "random":
-        suffix += f"_{_fmt_num(args['edge_p'])}"
-    elif adj_type == "small_world":
-        suffix += f"_{_fmt_num(args['k_small_world'])}_{_fmt_num(args['edge_p'])}"
-    elif adj_type == "scale_free":
-        suffix += f"_{_fmt_num(args['m_scale_free'])}"
-    return suffix
-
-
 def beautify_label(name):
     """Converts code-style parameter names to LaTeX symbols or cleaner names."""
     if not name:
@@ -71,79 +58,25 @@ def beautify_label(name):
 class ResultLoader:
     def __init__(self, base_dir="results"):
         self.base_dir = base_dir
-        self.algo_patterns = {
-            "fedala": lambda args: (
-                f"_{_fmt_num(args['eta'])}_{_fmt_num(args['rand_percent'])}_{_fmt_num(args['layer_idx'])}_{_fmt_num(args['ala_threshold'])}_{_fmt_num(args['num_pre_loss'])}"
-            ),
-            "fedavg": lambda args: "",
-            "feddyn": lambda args: f"_{_fmt_num(args['alpha_coef'])}",
-            "fedfm": lambda args: f"_{_fmt_num(args['mu'])}",
-            "fedkd": lambda args: (
-                f"_{_fmt_num(args['lr_g'])}_{_fmt_num(args['energy'])}"
-            ),
-            "fedlsa": lambda args: (
-                f"_{_fmt_num(args['lambda_com'])}_{_fmt_num(args['alpha_sep'])}_{_fmt_num(args['server_epochs'])}_{_fmt_num(args['server_lr'])}_{_fmt_num(args['tau'])}"
-            ),
-            "fedper": lambda args: "",
-            "fedpln": lambda args: (
-                f"_{_fmt_num(args['lambda_'])}_{_fmt_num(args['epoch_pln'])}_{_fmt_num(args['lr_pln'])}_{_fmt_num(args['batch_size_pln'])}_{_fmt_num(args['depth_pln'])}_{_fmt_num(args['width_pln'])}_{args['mode']}_{_fmt_num(args['fixed_proto'])}_{_fmt_num(args['init_emb'])}_{_fmt_num(args['har'])}"
-            ),
-            "fedproc": lambda args: "",
-            "fedproto": lambda args: f"_{_fmt_num(args['mu'])}",
-            "fedprox": lambda args: f"_{_fmt_num(args['mu'])}",
-            "fedrep": lambda args: f"_{_fmt_num(args['epochs_head'])}",
-            "fedsa": lambda args: (
-                f"_{_fmt_num(args['alpha_sa'])}_{_fmt_num(args['lambda_r'])}_{_fmt_num(args['lambda_mcl'])}_{_fmt_num(args['lambda_cc'])}"
-            ),
-            "scaffold": lambda args: f"_{_fmt_num(args['global_lr'])}",
-            "fedtgp": lambda args: (
-                f"_{_fmt_num(args['lamda_'])}_{_fmt_num(args['server_epochs'])}_{_fmt_num(args['server_lr'])}_{_fmt_num(args['margin_threshold'])}"
-            ),
-            "feddpc": lambda args: (
-                f"_{_fmt_num(args['lamda_'])}_{_fmt_num(args['head_epochs'])}_{_fmt_num(args['body_epochs'])}_{_fmt_num(args['lr_head'])}_{_fmt_num(args['lr_body'])}_{_fmt_num(args['server_epochs'])}_{_fmt_num(args['server_lr'])}_{_fmt_num(args['lambda_p'])}_{_fmt_num(args['lambda_acl'])}"
-            ),
-            "fml": lambda args: (
-                f"_{_fmt_num(args['alpha_fml'])}_{_fmt_num(args['beta_fml'])}"
-            ),
-            "lgfedavg": lambda args: "",
-            "moon": lambda args: f"_{_fmt_num(args['mu'])}_{_fmt_num(args['tau'])}",
-            "fedtest": lambda args: (
-                f"_{_fmt_num(args['confidence_threshold'])}_{_fmt_num(args['beta'])}"
-                f"_{_fmt_num(args['lambda_pl'])}_{_fmt_num(args['lambda_mixup'])}"
-                f"_{_fmt_num(args['mixup_alpha'])}_{_fmt_num(args['lambda_pa'])}"
-            ),
-            "local": lambda args: "",
-            # Decentralized Algorithms
-            "l2c": lambda args: (
-                f"_{get_adj_suffix(args)}_{_fmt_num(args['val_ratio'])}_{_fmt_num(args['lr_alpha'])}_{_fmt_num(args['prune_round'])}_{_fmt_num(args['prune_num'])}"
-            ),
-            "dispfl": lambda args: (
-                f"_{get_adj_suffix(args)}_{_fmt_num(args['dense_ratio'])}_{_fmt_num(args['anneal_factor'])}_{_fmt_num(args.get('erk_power_scale', 1.0))}"
-            ),
-            "pearfl": lambda args: f"_{get_adj_suffix(args)}_{_fmt_num(args['lamda'])}",
-            "dfedavgm": lambda args: f"_{get_adj_suffix(args)}",
-            "dfedpgp": lambda args: (
-                f"_{get_adj_suffix(args)}_{_fmt_num(args['local_v_epochs'])}_{_fmt_num(args['lr_v'])}_{_fmt_num(args['momentum_v'])}_{_fmt_num(args['weight_decay_v'])}"
-            ),
-            "proxyfl": lambda args: f"_{get_adj_suffix(args)}_{_fmt_num(args['mu'])}",
-            "dfedset": lambda args: (
-                f"_{get_adj_suffix(args)}_{_fmt_num(args.get('lambda_sa', args.get('mu')))}_{_fmt_num(args['eta'])}_{_fmt_num(args.get('lambda_so', args.get('lambda_cos')))}"
-            ),
-            "efhc": lambda args: (
-                f"_{get_adj_suffix(args)}_{_fmt_num(args['event_r'])}_{_fmt_num(args['bandwidth_mean'])}"
-            ),
-        }
 
     def _average_recursive(self, data_list):
         if not data_list:
             return None
         first = data_list[0]
+        if all(isinstance(data, numbers.Number) for data in data_list):
+            return float(np.mean(data_list))
         if isinstance(first, list):
             min_len = min(len(d) for d in data_list)
-            return np.mean(np.array([d[:min_len] for d in data_list]), axis=0).tolist()
+            return [
+                self._average_recursive([data[i] for data in data_list])
+                for i in range(min_len)
+            ]
         elif isinstance(first, dict):
             res = {}
-            for key in first.keys():
+            keys = set().union(
+                *(data.keys() for data in data_list if isinstance(data, dict))
+            )
+            for key in keys:
                 sub_list = [
                     d[key] for d in data_list if isinstance(d, dict) and key in d
                 ]
@@ -151,6 +84,121 @@ class ResultLoader:
                     res[key] = self._average_recursive(sub_list)
             return res
         return first
+
+    def _build_naming_args(self, algo, kwargs):
+        values = dict(kwargs)
+        values["algo"] = algo
+        values.setdefault("model", "cnn")
+        values.setdefault("ssl", "none")
+        values.setdefault("fdg", False)
+        required = [
+            "dataset",
+            "model",
+            "partition",
+            "num_clients",
+            "epochs",
+            "batch_size",
+            "lr",
+        ]
+        if values["partition"] == "dirichlet":
+            required.append("alpha")
+        elif values["partition"] == "pathological":
+            required.append("n_class")
+        if values["ssl"] != "none":
+            required.extend(["unlabeled_ratio", "label_ratio", "lam", "confidence"])
+            if values["ssl"] == "sfd":
+                required.extend(["label_domain", "unlabel_domain"])
+        elif values["fdg"]:
+            required.extend(["selected_domains", "target_domain"])
+        missing = [key for key in required if key not in values]
+        if missing:
+            raise ValueError(f"缺少结果命名参数: {', '.join(missing)}")
+        args = SimpleNamespace(**values)
+        args.common_name = build_common_name(args)
+        return args
+
+    def _resolve_folder_path(self, args, ablate_name):
+        folder_path = os.path.join(self.base_dir, build_result_folder(args))
+        if ablate_name:
+            folder_path = os.path.join(folder_path, ablate_name)
+        return folder_path
+
+    def _resolve_file_name(self, args):
+        try:
+            _, get_path = src.load_algorithm(args.algo)
+            args.log_path = ""
+            args.cur_time = 0
+            get_path(args)
+        except (AttributeError, KeyError) as exc:
+            raise ValueError(f"算法 {args.algo} 无法生成结果文件名，缺少参数") from exc
+        file_name = getattr(args, "file_name", "")
+        if not file_name:
+            raise ValueError(f"算法 {args.algo} 未生成有效结果文件名")
+        return file_name
+
+    def _discover_run_files(self, folder_path, file_name, specific_run=None):
+        if not os.path.isdir(folder_path):
+            return []
+        pattern = re.compile(rf"^{re.escape(file_name)}_(\d+)\.pt$")
+        matches = []
+        for entry in os.listdir(folder_path):
+            match = pattern.fullmatch(entry)
+            if match:
+                run = int(match.group(1))
+                if specific_run is None or run == specific_run:
+                    matches.append((run, os.path.join(folder_path, entry)))
+        return sorted(matches)
+
+    def _load_metrics_file(self, file_path, keys=None):
+        try:
+            data = torch.load(file_path, map_location="cpu", weights_only=True)
+        except Exception as exc:
+            raise ValueError(f"结果文件损坏: {file_path}") from exc
+        if keys is None:
+            return data
+        return {key: data[key] for key in keys if key in data}
+
+    def load_runs(
+        self,
+        algo,
+        dataset,
+        partition,
+        num_clients,
+        specific_run=None,
+        ablate_name=None,
+        keys=None,
+        **kwargs,
+    ):
+        args = self._build_naming_args(
+            algo,
+            {
+                **kwargs,
+                "dataset": dataset,
+                "partition": partition,
+                "num_clients": num_clients,
+            },
+        )
+        folder_path = self._resolve_folder_path(args, ablate_name)
+        try:
+            file_name = self._resolve_file_name(args)
+        except ValueError as exc:
+            print(f"  [错误] {exc}")
+            return []
+        files = self._discover_run_files(folder_path, file_name, specific_run)
+        if not files:
+            candidates = []
+            if os.path.isdir(folder_path):
+                candidates = sorted(
+                    entry
+                    for entry in os.listdir(folder_path)
+                    if entry.endswith(".pt") and not entry.endswith("_params.pt")
+                )
+            print(
+                f"  [提示] 未找到结果：目录={folder_path}，期望前缀={file_name}，"
+                f"同目录候选={candidates}"
+            )
+            return []
+        return [self._load_metrics_file(path, keys) for _, path in files]
 
     def load(
         self,
@@ -163,86 +211,36 @@ class ResultLoader:
         keys=None,
         **kwargs,
     ):
-        model = kwargs.get("model", "cnn")
-        folder_name = f"{dataset}_{model}_{partition}_{_fmt_num(num_clients)}"
-        if partition == "dirichlet":
-            folder_name += f"_{_fmt_num(kwargs['alpha'])}"
-        elif partition == "pathological":
-            folder_name += f"_{_fmt_num(kwargs['n_class'])}"
-
-        # 结果目录路径：算法 / 数据集 /
-        folder_path = os.path.join(self.base_dir, algo, folder_name)
-        if ablate_name:
-            folder_path = os.path.join(folder_path, ablate_name)
-
-        if not os.path.exists(folder_path):
-            if specific_run is None or specific_run == 0:
-                print(f"  [提示] 实验目录不存在: {folder_path}")
-            return None
-
-        # 构造基础文件名 (包含公共参数前缀)
-        common_name = f"{_fmt_num(kwargs['epochs'])}_{_fmt_num(kwargs['batch_size'])}_{_fmt_num(kwargs['lr'])}"
-        base_name = common_name
-
-        # 添加算法特定的后缀以实现严格参数匹配
-        suffix_gen = self.algo_patterns.get(algo)
-
-        # 动态匹配逻辑：对于 dfedset 的各种消融实验版本，自动匹配基础模式
-        # 增加 .lower() 确保匹配鲁棒性
-        if not suffix_gen and algo.lower().startswith("dfedset"):
-            suffix_gen = self.algo_patterns.get("dfedset")
-
-        if suffix_gen:
-            base_name += suffix_gen(kwargs)
-
-        def get_indices(b_name):
-            if specific_run is not None:
-                if os.path.exists(
-                    os.path.join(folder_path, f"{b_name}_{specific_run}.pt")
-                ):
-                    return [specific_run]
-                return []
-            else:
-                indices = []
-                idx = 0
-                while os.path.exists(os.path.join(folder_path, f"{b_name}_{idx}.pt")):
-                    indices.append(idx)
-                    idx += 1
-                return indices
-
-        # 严格匹配
-        run_indices = get_indices(base_name)
-        if not run_indices:
-            if specific_run is None or specific_run == 0:
-                print(
-                    f"  [提示] 结果文件不存在: {os.path.join(folder_path, base_name)}_X.pt"
-                )
-            return None
-
-        loaded_data = []
-        for idx in run_indices:
-            file_path = os.path.join(folder_path, f"{base_name}_{idx}.pt")
-            try:
-                data = torch.load(file_path, map_location="cpu", weights_only=True)
-                if keys is not None:
-                    data = {k: data[k] for k in keys if k in data}
-                loaded_data.append(data)
-            except Exception as e:
-                # 真正的加载错误（如文件损坏）才报错
-                print(f"  [Error] Failed to load {file_path}: {e}")
-
+        loaded_data = self.load_runs(
+            algo,
+            dataset,
+            partition,
+            num_clients,
+            specific_run,
+            ablate_name,
+            keys,
+            **kwargs,
+        )
         if not loaded_data:
             return None
         if len(loaded_data) == 1:
             return loaded_data[0]
+        keys_to_average = set().union(*(data.keys() for data in loaded_data))
+        return {
+            key: self._average_recursive(
+                [data[key] for data in loaded_data if key in data]
+            )
+            for key in keys_to_average
+        }
 
-        avg_result = {}
-        for key in ["acc", "loss"]:
-            if key in loaded_data[0]:
-                avg_result[key] = self._average_recursive(
-                    [d[key] for d in loaded_data if key in d]
-                )
-        return avg_result
+    def load_file(self, metrics_path, keys=None):
+        if metrics_path.endswith("_params.pt"):
+            raise ValueError("load_file 只接受指标文件，不能加载 _params.pt")
+        if not metrics_path.endswith(".pt"):
+            raise ValueError("load_file 只接受 .pt 指标文件")
+        if not os.path.isfile(metrics_path):
+            raise FileNotFoundError(metrics_path)
+        return self._load_metrics_file(metrics_path, keys)
 
 
 def plot_results(
@@ -549,7 +547,12 @@ def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
 
 
 def load_plot(
-    selected_group, experiments, common_args, loader, x_lim=200, do_plot=True
+    selected_group,
+    experiments,
+    common_args,
+    loader,
+    x_lim=1000,
+    do_plot=True,
 ):
     """
     加载并绘制对比图，根据数据格式自动识别是单线还是 Model/Proto 分离。
@@ -590,7 +593,7 @@ def load_plot(
         )
 
 
-def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=200):
+def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=1000):
     """
     加载并统计多轮实验的均值和标准差。
     """
@@ -606,14 +609,7 @@ def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=2
         algo_name, kwargs = experiments[label]
         merged_args = {**common_args, **kwargs}
 
-        run_results = []
-        idx = 0
-        while True:
-            data = loader.load(algo_name, **merged_args, specific_run=idx)
-            if data is None:
-                break
-            run_results.append(data)
-            idx += 1
+        run_results = loader.load_runs(algo_name, **merged_args)
 
         if not run_results:
             continue
@@ -665,7 +661,7 @@ def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=2
                     )
 
 
-def print_stats(selected_group, experiments, common_args, loader, x_lim=200):
+def print_stats(selected_group, experiments, common_args, loader, x_lim=1000):
     """
     加载并打印多轮实验的均值汇总（Model 和 Proto 分列显示）。
     """
@@ -682,14 +678,7 @@ def print_stats(selected_group, experiments, common_args, loader, x_lim=200):
         algo_name, kwargs = experiments[label]
         merged_args = {**common_args, **kwargs}
 
-        run_results = []
-        idx = 0
-        while True:
-            data = loader.load(algo_name, **merged_args, specific_run=idx)
-            if data is None:
-                break
-            run_results.append(data)
-            idx += 1
+        run_results = loader.load_runs(algo_name, **merged_args)
 
         if not run_results:
             continue
@@ -756,6 +745,18 @@ def print_stats(selected_group, experiments, common_args, loader, x_lim=200):
         )
 
 
+def _freeze_cache_value(value):
+    if isinstance(value, dict):
+        return tuple(
+            sorted((key, _freeze_cache_value(item)) for key, item in value.items())
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_cache_value(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted(_freeze_cache_value(item) for item in value))
+    return value
+
+
 def batch_cached_load(loader, algo, specs, data_cache=None, keys=None, max_workers=8):
     """并行批量加载结果文件，兼容现有 data_cache。
 
@@ -778,7 +779,7 @@ def batch_cached_load(loader, algo, specs, data_cache=None, keys=None, max_worke
     missing_specs = []
 
     for i, kw in enumerate(specs):
-        kt = tuple(sorted(kw.items()))
+        kt = _freeze_cache_value(kw)
         kk = tuple(keys) if keys else None
         ck = (algo, kk, kt)
         cache_keys.append(ck)
