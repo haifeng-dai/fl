@@ -1,5 +1,8 @@
 # 算法专属配置 (Algorithm Specific Arguments)
 
+sage:
+    temperature: 1.0
+
 fedtest:
     beta: 0.8
     lambda_pl: 1.0

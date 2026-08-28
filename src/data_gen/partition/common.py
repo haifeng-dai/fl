@@ -73,12 +73,14 @@ def get_output_dir(args, dataset_name):
         ld = sanitize(args.label_domain)
         ud = sanitize(args.unlabel_domain)
         part_str = f"sfd_{part_seg}_{ld}_{ud}_{args.label_ratio}{split_suffix}"
-    elif args.ssl in ("sample", "client"):
-        part_str = f"{args.ssl}_{part_seg}_{args.label_ratio}{split_suffix}"
     elif args.fdg:
         dom = sanitize(args.selected_domains)
         td = sanitize(args.target_domain)
         part_str = f"fdg_{part_seg}_{dom}_{td}{split_suffix}"
+    elif args.ssl in ("sample", "client"):
+        part_str = f"{args.ssl}_{part_seg}_{args.label_ratio}{split_suffix}"
+    elif args.ssl == "double":
+        part_str = f"double_{part_seg}_{args.label_ratio}{split_suffix}"
     else:
         part_str = f"{part_seg}{split_suffix}"
     return os.path.join("./datasets", dataset_name, part_str)
@@ -95,10 +97,40 @@ def is_fresh(output_dir, num_clients):
     """
     if not os.path.isdir(output_dir):
         return True
-    return any(
-        not os.path.isfile(os.path.join(output_dir, f"client_{i}.pt"))
-        for i in range(num_clients)
-    )
+    for i in range(num_clients):
+        path = os.path.join(output_dir, f"client_{i}.pt")
+        if not os.path.isfile(path):
+            return True
+        data = torch.load(path, weights_only=False)
+        train = data["train"]
+        test = data["test"]
+        if len(train["x"]) == 0:
+            return True
+        if len(test["x"]) == 0:
+            return True
+    return False
+
+
+def _ensure_nonempty_client_indices(client_indices, rng, split_name):
+    """仅在出现空客户端时转移一个既有索引。"""
+    clients = [list(indices) for indices in client_indices]
+    if not clients or not any(not indices for indices in clients):
+        return clients
+    total = sum(len(indices) for indices in clients)
+    if total < len(clients):
+        raise ValueError(
+            f"{split_name} 样本总量不足，无法保证 {len(clients)} 个客户端均非空。"
+        )
+    while True:
+        receivers = [i for i, indices in enumerate(clients) if not indices]
+        if not receivers:
+            return clients
+        donor = max(range(len(clients)), key=lambda i: len(clients[i]))
+        if len(clients[donor]) <= 1:
+            raise RuntimeError(f"{split_name} 样本保底转移失败")
+        receiver = receivers[0]
+        position = int(rng.integers(len(clients[donor])))
+        clients[receiver].append(clients[donor].pop(position))
 
 
 # ──────────────────────────────────────────────────────────────────────────

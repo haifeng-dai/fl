@@ -5,6 +5,7 @@ import torch
 from .partition import (
     apply_label_ratio_client,
     apply_label_ratio_sample,
+    prepare_double_ssl_data,
     prepare_fdg_data,
     prepare_label_data,
     prepare_sfd_data,
@@ -19,13 +20,15 @@ __all__ = [
 
 
 def prepare_data(args):
-    """数据划分总入口（三维模型，优先级 sfd > fdg > category）。
+    """数据划分总入口。
 
     - sfd=true ：SFD 双域半监督场景（域偏移 + 类异质 + 半监督），
         完整流程内聚于 partition/sfd.py（域划分 + is_labeled 掩码）。
     - fdg=true ：FDG 纯域泛化，源域全训练、目标域作测试，
         完整流程内聚于 partition/fdg.py。
     - 其余     ：类别划分（iid/dirichlet/pathological）+ 可选 ssl 掩码。
+
+    配置层已保证 SSL 与 FDG 互斥；以下分支仅负责分派各个互斥场景。
     """
     dataset_name = args.dataset
     raw_dir = "./datasets/raw"
@@ -40,6 +43,8 @@ def prepare_data(args):
         prepare_sfd_data(args, dataset_name, raw_data)
     elif args.fdg:
         prepare_fdg_data(args, dataset_name, raw_data)
+    elif args.ssl == "double":
+        prepare_double_ssl_data(args, dataset_name, raw_data)
     else:
         output_dir = get_output_dir(args, dataset_name)
         if is_fresh(output_dir, args.num_clients):

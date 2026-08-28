@@ -4,6 +4,7 @@ import numpy as np
 
 from .common import (
     distribute_by_class,
+    _ensure_nonempty_client_indices,
     get_output_dir,
     resolve_n_class,
     save_client_data,
@@ -70,6 +71,8 @@ def prepare_label_data(args, dataset_name, raw_data):
     cli_te_idx = [
         np.concatenate(c) if len(c) else np.array([], dtype=int) for c in test_client
     ]
+    cli_tr_idx = _ensure_nonempty_client_indices(cli_tr_idx, rng, "train")
+    cli_te_idx = _ensure_nonempty_client_indices(cli_te_idx, rng, "test")
 
     # 类别划分：无 domains 字段；is_labeled 默认全有标签（ssl 掩码时再写入）
     save_client_data(output_dir, X, Y, cli_tr_idx, cli_te_idx, num_classes)

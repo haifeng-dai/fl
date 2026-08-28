@@ -15,6 +15,13 @@ def load_yaml(path):
         return yaml.safe_load(f) or {}
 
 
+def fmt_value(value):
+    """格式化命名字段，保持与算法工具中的 fmt_num 一致。"""
+    if isinstance(value, float) and value == int(value):
+        return str(int(value))
+    return str(value)
+
+
 def get_config():
     """
     核心配置加载逻辑：
@@ -97,6 +104,10 @@ def get_config():
 
     # 6. 展开参数搜索 (Sweep)
     configs = expand_sweep(config_dict)
+
+    for config in configs:
+        if config.ssl != "none" and config.fdg:
+            raise ValueError("ssl 与 fdg 不能同时启用。")
 
     # 7. 将 CLI 独有参数注入每个配置（不经过 YAML/sweep）
     if args.run_time is not None:
@@ -186,28 +197,38 @@ def get_pre_name(args):
     elif args.partition == "pathological":
         part_seg += f"_{args.n_class}"
 
-    if args.ssl == "sfd":
-        fold_path = os.path.join(
-            f"{args.algo}",
-            f"{args.dataset}_{args.label_domain}_{args.unlabel_domain}_{args.model}_{part_seg}_{args.label_ratio}",
-        )
-    elif args.fdg:
-        fold_path = os.path.join(
-            f"{args.algo}",
-            f"{args.dataset}_{sanitize(args.selected_domains)}_{sanitize(args.target_domain)}_{args.model}_{part_seg}",
-        )
-    elif args.ssl in ("sample", "client"):
-        fold_path = os.path.join(
-            f"{args.algo}",
-            f"{args.dataset}_{args.model}_{part_seg}_{args.label_ratio}_{args.lam}_{args.confidence}",
-        )
-    else:
-        fold_path = os.path.join(
-            f"{args.algo}",
-            f"{args.dataset}_{args.model}_{part_seg}",
-        )
+    fold_path = os.path.join(f"{args.algo}", f"{args.dataset}_{args.model}_{part_seg}")
 
-    args.common_name = f"{args.epochs}_{args.batch_size}_{args.lr}"
+    name_parts = [
+        fmt_value(args.epochs),
+        fmt_value(args.batch_size),
+        fmt_value(args.lr),
+    ]
+    if args.ssl != "none":
+        name_parts.extend(
+            [
+                args.ssl,
+                fmt_value(args.unlabeled_ratio),
+                fmt_value(args.label_ratio),
+                fmt_value(args.lam),
+                fmt_value(args.confidence),
+            ]
+        )
+        if args.ssl == "sfd":
+            name_parts.extend(
+                [
+                    sanitize(args.label_domain),
+                    sanitize(args.unlabel_domain),
+                ]
+            )
+    elif args.fdg:
+        name_parts.extend(
+            [
+                sanitize(args.selected_domains),
+                sanitize(args.target_domain),
+            ]
+        )
+    args.common_name = "_".join(name_parts)
     base_save = os.path.join("results", fold_path)
     base_log = os.path.join("logs", fold_path)
     ablate_name = args.ablate_name

@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from .common import (
+    _ensure_nonempty_client_indices,
     get_output_dir,
     hetero_split,
     is_fresh,
@@ -131,6 +132,8 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     cli_te = [
         np.concatenate([lbl_te[i], unlbl_te[i]]).tolist() for i in range(num_clients)
     ]
+    cli_tr = _ensure_nonempty_client_indices(cli_tr, rng, "train")
+    cli_te = _ensure_nonempty_client_indices(cli_te, rng, "test")
 
     # ════════════════════════════════════════════════════════════════
     # 第四阶段：内存掩码（不二次读写文件）
