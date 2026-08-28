@@ -43,19 +43,35 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化代理模型 (公共/共享模型)
-    proxy_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    proxy_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+        device
+    )
     proxy_model.load_state_dict(p.model_state)
 
     # 2. 初始化本地模型 (私有/个性化模型)
-    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+        device
+    )
     local_model.load_state_dict(p.local_state)
 
     # 优化器设置
     # 通常 ProxyFL 允许设置不同的学习率 LR，但为了简便我们在未指明时均使用相同学习率
-    opt_p = torch.optim.SGD(proxy_model.parameters(), lr=p.lr)
-    opt_l = torch.optim.SGD(local_model.parameters(), lr=p.lr)
+    opt_p = torch.optim.SGD(
+        proxy_model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    opt_l = torch.optim.SGD(
+        local_model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
 
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     proxy_model.train()
     local_model.train()
@@ -186,6 +202,11 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
-        metrics = {"acc": self.acc, "acc_p": self.acc_p, "loss": self.loss, "loss_p": self.loss_p}
+        metrics = {
+            "acc": self.acc,
+            "acc_p": self.acc_p,
+            "loss": self.loss,
+            "loss_p": self.loss_p,
+        }
         params = {"client": self.clients_state, "aux": {"proxy": self.client_states_p}}
         self.deal_save(metrics, params)

@@ -115,8 +115,15 @@ def train(p: Params):
     model.load_state_dict(p.model_state)
     model.to(device)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     model.train()
     total_loss = 0.0

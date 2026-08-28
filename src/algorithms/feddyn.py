@@ -32,8 +32,15 @@ def train(p: Params):
     # 1. 初始化模型并加载全局状态
     model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
     model.load_state_dict(p.model_state)
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     # 将参数向量移动到计算设备
     grad_prev = p.grad_prev.to(device) if p.grad_prev is not None else None

@@ -43,14 +43,28 @@ def train(p: Params):
     global_model.load_state_dict(p.model_state)
 
     # 2. 初始化本地模型 (个性化模型)
-    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+        device
+    )
     local_model.load_state_dict(p.local_state)
 
     # 优化器设置
-    opt_g = torch.optim.SGD(global_model.parameters(), lr=p.lr)
-    opt_l = torch.optim.SGD(local_model.parameters(), lr=p.lr)
+    opt_g = torch.optim.SGD(
+        global_model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    opt_l = torch.optim.SGD(
+        local_model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
 
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     global_model.train()
     local_model.train()

@@ -35,6 +35,8 @@ def build_common_name(args):
         fmt_value(args.epochs),
         fmt_value(args.batch_size),
         fmt_value(args.lr),
+        fmt_value(args.momentum),
+        fmt_value(args.weight_decay),
     ]
     if args.ssl != "none":
         parts.extend(

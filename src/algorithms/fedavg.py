@@ -27,8 +27,15 @@ def train(p: BaseParams):
     model.load_state_dict(p.model_state)
 
     # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     # 3. 本地模型多轮次 (Epochs) 训练
     total_loss = 0.0

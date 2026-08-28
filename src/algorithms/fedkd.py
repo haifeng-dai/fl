@@ -147,12 +147,29 @@ def train(p: Params):
         W_h.load_state_dict(p.wh_state)
 
     # 3. 初始化优化器
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
-    optimizer_g = torch.optim.SGD(model_g.parameters(), lr=p.lr_g)
-    optimizer_W = torch.optim.SGD(W_h.parameters(), lr=p.lr)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    optimizer_g = torch.optim.SGD(
+        model_g.parameters(),
+        lr=p.lr_g,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    optimizer_W = torch.optim.SGD(
+        W_h.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
 
     # 4. 训练循环 (Mutual Knowledge Distillation)
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     model.train()
     model_g.train()
@@ -313,5 +330,9 @@ class Server(BaseServer):
 
     def save(self):
         metrics = {"acc": self.acc, "loss": self.loss}
-        params = {"global": self.model.state_dict(), "client": self.clients_state, "aux": {"client_wh_states": self.client_wh_states}}
+        params = {
+            "global": self.model.state_dict(),
+            "client": self.clients_state,
+            "aux": {"client_wh_states": self.client_wh_states},
+        }
         self.deal_save(metrics, params)

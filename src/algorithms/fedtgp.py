@@ -70,7 +70,12 @@ def train(p: Params):
     model.load_state_dict(p.model_state)
 
     # 设置配置与优化器
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
     loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     model.train()
@@ -163,7 +168,9 @@ class Server(BaseServer):
                 Params(
                     **asdict(base),
                     lamda_=self.lamda_,
-                    global_protos=self.global_protos.cpu() if self.global_protos is not None else None,
+                    global_protos=self.global_protos.cpu()
+                    if self.global_protos is not None
+                    else None,
                 )
                 for base in base_params
             ]

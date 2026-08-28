@@ -74,9 +74,7 @@ def load_data(args, pfl=False):
         train_x = data["train"]["x"]
         train_y = data["train"]["y"]
         train_is_labeled = data["train"].get("is_labeled", None)
-        train_datasets[i] = MetaDataset(
-            train_x, train_y, is_labeled=train_is_labeled
-        )
+        train_datasets[i] = MetaDataset(train_x, train_y, is_labeled=train_is_labeled)
         train_counts[i] = len(train_x)
 
         test_x = data["test"]["x"]

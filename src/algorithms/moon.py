@@ -43,12 +43,21 @@ def train(p: Params):
     global_model.eval()
 
     # 3. 初始化上一轮本地模型（冻结）用于计算对抗损失
-    prev_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    prev_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+        device
+    )
     prev_model.load_state_dict(p.prev_state)
     prev_model.eval()
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
     ce_moon = torch.nn.CosineSimilarity(dim=-1)
 
     total_loss = 0.0

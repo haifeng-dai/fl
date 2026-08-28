@@ -55,7 +55,12 @@ def train(p: Params):
     consensus_P = p.consensus_P.to(device)
 
     # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
     loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 3. 本地训练

@@ -38,12 +38,19 @@ def train(p: Params):
 
     model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
     model.load_state_dict(p.model_state)
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     # ==================== 阶段一：本地模型训练 ====================
     if p.mode == "train":
         global_anchors = p.global_anchors.to(device)
-        optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+        optimizer = torch.optim.SGD(
+            model.parameters(),
+            lr=p.lr,
+            momentum=p.momentum,
+            weight_decay=p.weight_decay,
+        )
         total_loss = 0.0
         num_batches = 0
 
@@ -62,7 +69,9 @@ def train(p: Params):
                 # 过滤掉全零锚点（第一轮尚未建立有效锚点时的保护措施）
                 valid_mask = target_anchors.abs().sum(dim=1) > 0
                 if valid_mask.sum() > 0:
-                    loss_cg = F.mse_loss(features[valid_mask], target_anchors[valid_mask])
+                    loss_cg = F.mse_loss(
+                        features[valid_mask], target_anchors[valid_mask]
+                    )
                     loss = loss_ce + p.mu * loss_cg
                 else:
                     loss = loss_ce

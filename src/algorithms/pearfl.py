@@ -34,8 +34,6 @@ def get_path(args):
 
 @dataclass
 class Params(BaseParams):
-    momentum: float
-    weight_decay: float
     lamda: float
     personalized_protos: torch.Tensor | None
 
@@ -209,10 +207,10 @@ class Server(BaseServer):
                 p = [
                     Params(
                         **asdict(base),
-                        momentum=self.momentum,
-                        weight_decay=self.weight_decay,
                         lamda=self.lamda,
-                        personalized_protos=self.personalized_protos[base.client_id].cpu(),
+                        personalized_protos=self.personalized_protos[
+                            base.client_id
+                        ].cpu(),
                     )
                     for base in base_params
                 ]

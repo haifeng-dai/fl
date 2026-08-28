@@ -36,8 +36,15 @@ def train(p: Params):
     # 2. 缓存全局模型参数，用于计算近端正则化项
     global_model_params = {k: v.to(device) for k, v in p.model_state.items()}
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     total_loss = 0.0
     num_batches = 0
@@ -60,7 +67,9 @@ def train(p: Params):
                         assert param.grad is not None
                         if name in global_model_params and param.requires_grad:
                             # grad += mu * (param - global_param)
-                            param.grad.add_(param - global_model_params[name], alpha=p.mu)
+                            param.grad.add_(
+                                param - global_model_params[name], alpha=p.mu
+                            )
 
             optimizer.step()
 

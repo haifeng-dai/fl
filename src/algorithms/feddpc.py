@@ -88,7 +88,12 @@ def train(p: Params):
     for param in model.classifier.parameters():
         param.requires_grad = True
 
-    optimizer_head = torch.optim.SGD(model.classifier.parameters(), lr=p.lr_head)
+    optimizer_head = torch.optim.SGD(
+        model.classifier.parameters(),
+        lr=p.lr_head,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
     model.train()
 
     total_loss_ce = 0.0
@@ -134,7 +139,12 @@ def train(p: Params):
         param.requires_grad = True
 
     if global_protos_tensor is not None:
-        optimizer_body = torch.optim.SGD(model.extractor.parameters(), lr=p.lr_body)
+        optimizer_body = torch.optim.SGD(
+            model.extractor.parameters(),
+            lr=p.lr_body,
+            momentum=p.momentum,
+            weight_decay=p.weight_decay,
+        )
 
         total_loss_proto = 0.0
         num_batches_body = 0
@@ -223,7 +233,9 @@ class Server(BaseServer):
                     lr_head=self.lr_head,
                     lr_body=self.lr_body,
                     lamda_=self.lamda_,
-                    global_protos=self.global_protos.cpu() if self.global_protos is not None else None,
+                    global_protos=self.global_protos.cpu()
+                    if self.global_protos is not None
+                    else None,
                     lambda_p=self.lambda_p,
                 )
                 for base in base_params

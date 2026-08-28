@@ -20,8 +20,6 @@ class Params(BaseParams):
     lambda_u: float
     confidence: float
     temperature: float
-    momentum: float
-    weight_decay: float
 
 
 def get_path(args):
@@ -195,8 +193,6 @@ class Server(BaseServer):
                     lambda_u=self.lambda_u,
                     confidence=self.confidence,
                     temperature=self.temperature,
-                    momentum=self.momentum,
-                    weight_decay=self.weight_decay,
                 )
                 for base in self.build_base_params(selected)
             ]

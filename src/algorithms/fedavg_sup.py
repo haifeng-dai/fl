@@ -34,7 +34,12 @@ def train(p: BaseParams):
         }
         return {"loss": 0.0, "state": model_state}
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
     loader = DataLoader(
         TensorDataset(x_lb, y_lb),
         batch_size=p.batch_size,

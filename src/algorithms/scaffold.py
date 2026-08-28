@@ -27,10 +27,13 @@ class SCAFFOLDOptimizer(optim.Optimizer):
 
     def step(self, c_global, c_local):
         for group in self.param_groups:
+            weight_decay = group["weight_decay"]
             for p, c_g, c_l in zip(group["params"], c_global, c_local):
                 if p.grad is None:
                     continue
                 d_p = p.grad.data
+                if weight_decay != 0:
+                    d_p = d_p.add(p.data, alpha=weight_decay)
                 p.data.add_(d_p + c_g.data - c_l.data, alpha=-group["lr"])
 
 
@@ -51,8 +54,12 @@ def train(p: Params):
     trainable_names = [n for n, _ in model.named_parameters()]
 
     if p.c_global_state is None:
-        c_global_dict = {n: torch.zeros_like(param) for n, param in model.named_parameters()}
-        c_local_dict = {n: torch.zeros_like(param) for n, param in model.named_parameters()}
+        c_global_dict = {
+            n: torch.zeros_like(param) for n, param in model.named_parameters()
+        }
+        c_local_dict = {
+            n: torch.zeros_like(param) for n, param in model.named_parameters()
+        }
     else:
         c_global_dict = {k: v.to(device) for k, v in p.c_global_state.items()}
         c_local_dict = {k: v.to(device) for k, v in p.c_local_state.items()}
@@ -61,8 +68,13 @@ def train(p: Params):
     c_global_list = [c_global_dict[n] for n in trainable_names]
     c_local_list = [c_local_dict[n] for n in trainable_names]
 
-    optimizer = SCAFFOLDOptimizer(model.parameters(), lr=p.lr, weight_decay=0.0)
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    # SCAFFOLD 自定义优化器：传入全局 weight_decay；momentum 需独立算法推导，未纳入本轮
+    optimizer = SCAFFOLDOptimizer(
+        model.parameters(), lr=p.lr, weight_decay=p.weight_decay
+    )
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     # 3. 本地模型多轮次训练
     model.train()

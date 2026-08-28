@@ -104,7 +104,9 @@ class ALA:
                 param.data = param_g.data.clone()
 
         # 初始化用于精炼聚合权重的辅助模型
-        model_t = get_model(self.model_name, self.dataset_name, self.n_class, self.feature_dim)
+        model_t = get_model(
+            self.model_name, self.dataset_name, self.n_class, self.feature_dim
+        )
         model_t.to(self.device)
         model_t.load_state_dict(local_model.state_dict())
         params_t = list(model_t.parameters())
@@ -183,9 +185,13 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 初始化模型
-    global_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    global_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+        device
+    )
     global_model.load_state_dict(p.model_state)
-    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+        device
+    )
     local_model.load_state_dict(p.local_model_state)
 
     # 初始化 ALA 模块
@@ -217,7 +223,12 @@ def train(p: Params):
     ala.adaptive_local_aggregation(global_model, local_model)
 
     # 执行标准的本地训练流程
-    optimizer = torch.optim.SGD(local_model.parameters(), lr=p.lr)
+    optimizer = torch.optim.SGD(
+        local_model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
     loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     total_loss = 0.0

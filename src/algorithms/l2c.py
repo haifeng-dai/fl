@@ -77,7 +77,12 @@ def train_phase1(p: ParamsPhase1):
     # 3. 执行本地训练
     train_subset = Subset(p.train_set, train_indices)
     loader = DataLoader(train_subset, batch_size=p.batch_size, shuffle=True)
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
 
     model.train()
     total_loss = 0.0

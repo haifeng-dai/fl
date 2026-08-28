@@ -56,7 +56,12 @@ def train(p: Params):
 
     # 2. 准备数据加载器
     loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
 
     # 3. 本地训练循环（带梯度掩码）
     total_loss = 0.0

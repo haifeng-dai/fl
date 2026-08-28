@@ -21,6 +21,8 @@ class BaseParams:
     model_name: str
     dataset: str
     lr: float
+    momentum: float
+    weight_decay: float
     batch_size: int
     epochs: int
     feature_dim: int
@@ -76,6 +78,8 @@ class BaseServer:
         self.epochs: int = args.epochs
         self.batch_size: int = args.batch_size
         self.lr: float = args.lr
+        self.momentum: float = args.momentum
+        self.weight_decay: float = args.weight_decay
         self.model_name: str = args.model
         self.dataset: str = args.dataset
         self.feature_dim: int = args.feature_dim
@@ -246,6 +250,8 @@ class BaseServer:
                 model_name=self.model_name,
                 dataset=self.dataset,
                 lr=self.lr,
+                momentum=self.momentum,
+                weight_decay=self.weight_decay,
                 batch_size=self.batch_size,
                 epochs=self.epochs,
                 feature_dim=self.feature_dim,

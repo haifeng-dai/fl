@@ -45,7 +45,12 @@ def train(p: Params):
     model.load_state_dict(p.model_state)
 
     # 2. 设置优化器与数据加载器
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)  # , momentum=0.9)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
     if p.optimizer_state is not None:
         optimizer.load_state_dict(p.optimizer_state)
 

@@ -36,8 +36,8 @@ class Params(BaseParams):
     head_state: dict[str, torch.Tensor]
     lr_v: float
     local_v_epochs: int
-    momentum: float
-    weight_decay: float
+    momentum_v: float
+    weight_decay_v: float
 
 
 def train(p: Params):
@@ -63,6 +63,8 @@ def train(p: Params):
     optimizer_v = torch.optim.SGD(
         model.classifier.parameters(),
         lr=p.lr_v,
+        momentum=p.momentum_v,
+        weight_decay=p.weight_decay_v,
     )
     optimizer_u = torch.optim.SGD(
         model.extractor.parameters(),
@@ -72,7 +74,9 @@ def train(p: Params):
     )
 
     # 4. 准备数据加载器
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     # ========== Phase 1: 训练分类头 V (固定 Body 为初始解偏值 z_0) ==========
     for param in model.extractor.parameters():
@@ -229,8 +233,8 @@ class Server(BaseServer):
                     head_state=self.client_head[base.client_id],
                     lr_v=self.lr_v,
                     local_v_epochs=self.local_v_epochs,
-                    momentum=self.momentum_v,
-                    weight_decay=self.weight_decay_v,
+                    momentum_v=self.momentum_v,
+                    weight_decay_v=self.weight_decay_v,
                 )
                 for base in base_params
             ]

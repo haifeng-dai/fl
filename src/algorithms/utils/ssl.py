@@ -28,8 +28,8 @@ def build_fixmatch_loaders(
 ) -> FixMatchLoaders:
     """从客户端训练集构建固定 ``B:μB`` 的有/无标签数据流。
 
-    有标签流仅使用 ``is_labeled=True`` 的样本；无标签流使用该客户端
-    的全部训练样本，因而也包含有标签样本。两个 loader 均在单次遍历内
+    有标签流仅使用 ``is_labeled=True`` 的样本；无标签流仅使用
+    ``is_labeled=False`` 的样本。两个 loader 均在单次遍历内
     无放回随机采样，迭代器重启由 :func:`iterate_ssl_batches` 处理。
 
     ``steps_per_epoch`` 以无标签池大小和监督 batch 大小计算，匹配
@@ -42,7 +42,7 @@ def build_fixmatch_loaders(
 
     labeled_mask = train_set.is_labeled.bool()
     labeled_indices = torch.where(labeled_mask)[0]
-    unlabeled_indices = torch.arange(len(train_set.y))
+    unlabeled_indices = torch.where(~labeled_mask)[0]
     labeled_count = len(labeled_indices)
     unlabeled_count = len(unlabeled_indices)
     unlabeled_batch_size = batch_size * unlabeled_ratio

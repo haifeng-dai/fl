@@ -59,8 +59,15 @@ def train(p: Params):
     model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
     model.load_state_dict(p.model_state)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     model.train()
     total_loss = 0.0
@@ -93,7 +100,9 @@ def train(p: Params):
             loss_mcl = dist_contrastive_loss(features, global_anchors, y, margin=d_star)
 
             # 公式 (8): 分类器校准损失
-            loss_cc = F.cross_entropy(output_cc, torch.arange(p.num_class, device=device))
+            loss_cc = F.cross_entropy(
+                output_cc, torch.arange(p.num_class, device=device)
+            )
 
             # 公式 (9): 总体损失
             loss = (

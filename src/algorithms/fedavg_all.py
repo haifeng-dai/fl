@@ -33,7 +33,12 @@ def train(p: BaseParams):
         }
         return {"loss": 0.0, "state": model_state}
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
     loader = DataLoader(
         TensorDataset(x_all, y_all),
         batch_size=p.batch_size,
@@ -57,9 +62,7 @@ def train(p: BaseParams):
             num_batches += 1
 
     avg_loss = total_loss / max(1, num_batches)
-    model_state = {
-        k: v.cpu().detach().clone() for k, v in model.state_dict().items()
-    }
+    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
     return {"loss": avg_loss, "state": model_state}
 
 

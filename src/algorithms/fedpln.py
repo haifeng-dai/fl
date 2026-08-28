@@ -97,7 +97,9 @@ def train(p: Params):
     # 1. 初始化模型与 PLN 网络
     model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
     model.load_state_dict(p.model_state)
-    pln = PLN(p.num_class, p.width_pln, p.feature_dim, p.depth_pln, p.fixed_proto, p.init_emb)
+    pln = PLN(
+        p.num_class, p.width_pln, p.feature_dim, p.depth_pln, p.fixed_proto, p.init_emb
+    )
     pln.to(device)
     pln.load_state_dict(p.pln_state)
     all_classes = torch.arange(0, p.num_class).to(device)
@@ -106,10 +108,17 @@ def train(p: Params):
     avg_loss_m = 0.0
     model.train()
     pln.eval()
-    opt = torch.optim.SGD(model.parameters(), lr=p.lr)
+    opt = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
     total_loss_m = 0.0
     num_batches_m = 0
-    loader = torch.utils.data.DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
+    loader = torch.utils.data.DataLoader(
+        p.train_set, batch_size=p.batch_size, shuffle=True
+    )
 
     # 原型损失：特征向量与 PLN 对应原型之间的欧式距离
     with torch.no_grad():
@@ -137,7 +146,12 @@ def train(p: Params):
     avg_loss_p = 0.0
     model.eval()
     pln.train()
-    opt_pln = torch.optim.SGD(pln.parameters(), lr=p.lr_pln)
+    opt_pln = torch.optim.SGD(
+        pln.parameters(),
+        lr=p.lr_pln,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
     total_loss_p = 0.0
     num_batches_p = 0
 

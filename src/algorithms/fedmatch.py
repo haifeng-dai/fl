@@ -107,8 +107,18 @@ def train(p: Params):
     dm.load_sigma_psi(p.sigma_state, p.psi_state)
 
     # 2. 两个独立优化器实现 disjoint learning：σ ← 监督损失，ψ ← 无监督损失
-    optimizer_s = torch.optim.SGD(dm.sigma.parameters(), lr=p.lr)
-    optimizer_u = torch.optim.SGD(dm.psi.parameters(), lr=p.lr)
+    optimizer_s = torch.optim.SGD(
+        dm.sigma.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
+    optimizer_u = torch.optim.SGD(
+        dm.psi.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
 
     # 3. helper 模型权重准备：在 CPU 上计算好合并的权重，避免占用显存
     helper_states = []
@@ -170,7 +180,9 @@ def train(p: Params):
                         helper_logits.append(helper_net(x_ub))
 
             if helper_logits:
-                phi_kl = sum(kl_loss(y_logits, h_logits) for h_logits in helper_logits) / len(helper_logits)
+                phi_kl = sum(
+                    kl_loss(y_logits, h_logits) for h_logits in helper_logits
+                ) / len(helper_logits)
                 loss_u_kl = p.lambda_iccs * phi_kl
                 loss_u_kl.backward()  # 第一次 backward：仅 KL 损失（存在 helper 时）
                 total_u_loss_val = loss_u_kl.item()
@@ -203,7 +215,10 @@ def train(p: Params):
 
             # L1(ψ) 与 L2(σ − ψ) 正则化项（与 CE 损失一起完成第二次 backward）
             reg_l1 = [pp.abs().sum() for pp in dm.psi.parameters()]
-            reg_l2 = [(sp - pp).square().sum() for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters())]
+            reg_l2 = [
+                (sp - pp).square().sum()
+                for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters())
+            ]
             loss_reg = p.lambda_l1 * sum(reg_l1) + p.lambda_l2 * sum(reg_l2)
 
             loss_u_second = loss_reg if loss_u_ce is None else (loss_u_ce + loss_reg)
