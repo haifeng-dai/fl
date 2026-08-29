@@ -13,6 +13,7 @@ import torch
 from .common import (
     distribute_by_class,
     _ensure_nonempty_client_indices,
+    _has_mixed_ssl_clients,
     get_output_dir,
     is_fresh,
     save_client_data,
@@ -30,8 +31,8 @@ def split_labeled_unlabeled_by_class(
     ``label_ratio`` 表示每个类别的有标签比例。对于非零比例但样本数
     很少的类别，至少保留一个有标签样本；比例为零时不强制保留样本。
     """
-    if not 0 <= label_ratio <= 1:
-        raise ValueError("label_ratio 必须位于 [0, 1] 区间")
+    if not (0 < label_ratio < 1):
+        raise ValueError("混合 SSL (double) 要求 label_ratio 必须位于 (0, 1) 开区间")
 
     labeled_by_class = []
     unlabeled_by_class = []
@@ -70,6 +71,9 @@ def _merge_client_indices(client_labeled, client_unlabeled):
 
 def prepare_double_ssl_data(args, dataset_name, raw_data):
     """准备双异质半监督数据并保存为统一的客户端 ``.pt`` 文件。"""
+    if not (0 < args.label_ratio < 1):
+        raise ValueError("混合 SSL (double) 要求 label_ratio 必须位于 (0, 1) 开区间")
+
     X, Y = raw_data["x"], raw_data["y"]
     rng = np.random.default_rng(args.seed)
 
@@ -77,7 +81,9 @@ def prepare_double_ssl_data(args, dataset_name, raw_data):
         Y, args.test_ratio, rng
     )
     output_dir = get_output_dir(args, dataset_name)
-    if not is_fresh(output_dir, args.num_clients):
+    if not is_fresh(output_dir, args.num_clients) and _has_mixed_ssl_clients(
+        output_dir, args.num_clients
+    ):
         print(f"-> Double SSL partition already exists at {output_dir}. Skipping.")
         return output_dir
     print(f"-> Partitioning double SSL data ({os.path.basename(output_dir)})...")
@@ -122,6 +128,9 @@ def prepare_double_ssl_data(args, dataset_name, raw_data):
     ]
     client_labeled = _ensure_nonempty_client_indices(
         client_labeled, rng, "double 有标签 train"
+    )
+    client_unlabeled = _ensure_nonempty_client_indices(
+        client_unlabeled, rng, "double 无标签 train"
     )
     client_train, client_is_labeled = _merge_client_indices(
         client_labeled, client_unlabeled

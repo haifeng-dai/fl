@@ -5,9 +5,6 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 
 
-DEFAULT_UNLABELED_RATIO = 2
-
-
 @dataclass
 class FixMatchLoaders:
     """固定 ``B:μB`` 本地训练协议所需的双数据流。"""
@@ -24,7 +21,7 @@ class FixMatchLoaders:
 def build_fixmatch_loaders(
     train_set,
     batch_size: int,
-    unlabeled_ratio: int = DEFAULT_UNLABELED_RATIO,
+    unlabeled_ratio: int,
 ) -> FixMatchLoaders:
     """从客户端训练集构建固定 ``B:μB`` 的有/无标签数据流。
 

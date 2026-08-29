@@ -111,6 +111,34 @@ def is_fresh(output_dir, num_clients):
     return False
 
 
+def _has_mixed_ssl_clients(output_dir, num_clients):
+    """检查 output_dir 中的所有客户端数据是否都具有混合 SSL 所需的 L/U 掩码。
+
+    仅当所有 client_*.pt 均满足以下条件时返回 True：
+    1. 包含 train.is_labeled 字段；
+    2. is_labeled 长度等于 train.y 长度；
+    3. 至少包含一个 True（至少 1 个有标签样本）；
+    4. 至少包含一个 False（至少 1 个无标签样本）。
+    """
+    if not os.path.isdir(output_dir):
+        return False
+    for i in range(num_clients):
+        path = os.path.join(output_dir, f"client_{i}.pt")
+        if not os.path.isfile(path):
+            return False
+        data = torch.load(path, weights_only=False)
+        train = data.get("train", {})
+        if "is_labeled" not in train:
+            return False
+        is_labeled = train["is_labeled"]
+        y = train.get("y", [])
+        if len(is_labeled) != len(y) or len(y) == 0:
+            return False
+        if not bool(is_labeled.any()) or not bool((~is_labeled).any()):
+            return False
+    return True
+
+
 def _ensure_nonempty_client_indices(client_indices, rng, split_name):
     """仅在出现空客户端时转移一个既有索引。"""
     clients = [list(indices) for indices in client_indices]

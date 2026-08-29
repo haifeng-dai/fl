@@ -9,16 +9,20 @@ import torch
 # ──────────────────────────────────────────────────────────────────────────
 def apply_label_ratio_sample(output_dir, num_clients, label_ratio, seed=42):
     """场景B：每客户端内按 label_ratio 随机掩码样本为无标签（标签/未标签同分布）。"""
-    if not 0 <= label_ratio <= 1:
-        raise ValueError("label_ratio 必须位于 [0, 1] 区间")
+    if not (0 < label_ratio < 1):
+        raise ValueError("混合 SSL (sample) 要求 label_ratio 必须位于 (0, 1) 开区间")
     rng = torch.Generator().manual_seed(seed)
     for i in range(num_clients):
         path = os.path.join(output_dir, f"client_{i}.pt")
         data = torch.load(path, weights_only=False)
         train = data["train"]
         n = len(train["y"])
+        if n < 2:
+            raise ValueError(
+                f"客户端 {i} 训练样本数为 {n}，不足 2 个，无法在混合 SSL (sample) 模式下保证同时拥有有标签与无标签样本"
+            )
         perm = torch.randperm(n, generator=rng)
-        num_labeled = min(n, max(1, int(n * label_ratio))) if n > 0 else 0
+        num_labeled = min(n - 1, max(1, int(n * label_ratio)))
         is_labeled = torch.zeros(n, dtype=torch.bool)
         is_labeled[perm[:num_labeled]] = True
         train["is_labeled"] = is_labeled

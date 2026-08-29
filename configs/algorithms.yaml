@@ -114,6 +114,14 @@ dfedpgp:
 proxyfl:
     mu: 0.01
 
+proxyfl_ssl:
+    temperature: 1.0
+    gpt_lr: 0.01
+    gpt_epochs: 100
+    gpt_batch_size: 10
+    gpt_threshold: 100.0
+    ema_beta: 0.99
+
 efhc:
     event_r: 250
     bandwidth_mean: 5000

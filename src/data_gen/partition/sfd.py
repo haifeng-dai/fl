@@ -5,6 +5,7 @@ import torch
 
 from .common import (
     _ensure_nonempty_client_indices,
+    _has_mixed_ssl_clients,
     get_output_dir,
     hetero_split,
     is_fresh,
@@ -33,8 +34,8 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     # ════════════════════════════════════════════════════════════════
     if not args.label_domain or not args.unlabel_domain:
         raise ValueError("SFD 场景必须指定 label_domain 与 unlabel_domain")
-    if not 0 <= args.label_ratio <= 1:
-        raise ValueError("label_ratio 必须位于 [0, 1] 区间")
+    if not (0 < args.label_ratio < 1):
+        raise ValueError("混合 SSL (sfd) 要求 label_ratio 必须位于 (0, 1) 开区间")
     if args.label_domain == args.unlabel_domain:
         raise ValueError(
             f"SFD 要求 label_domain != unlabel_domain，当前均为 '{args.label_domain}'"
@@ -65,7 +66,9 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     # ════════════════════════════════════════════════════════════════
     output_dir = get_output_dir(args, dataset_name)
 
-    if not is_fresh(output_dir, num_clients):
+    if not is_fresh(output_dir, num_clients) and _has_mixed_ssl_clients(
+        output_dir, num_clients
+    ):
         print(
             f"-> SFD partition for {dataset_name} already exists at {output_dir}. Skipping."
         )
@@ -123,6 +126,12 @@ def prepare_sfd_data(args, dataset_name, raw_data):
         Y,
         rng,
         args.n_class,
+    )
+
+    # 分别保证两个域各自在每个客户端的训练集非空
+    lbl_tr = _ensure_nonempty_client_indices(lbl_tr, rng, "sfd label_domain train")
+    unlbl_tr = _ensure_nonempty_client_indices(
+        unlbl_tr, rng, "sfd unlabel_domain train"
     )
 
     # 拼接：每个客户端的 train/test = label 域切片 + unlabel 域切片

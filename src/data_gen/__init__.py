@@ -10,7 +10,12 @@ from .partition import (
     prepare_label_data,
     prepare_sfd_data,
 )
-from .partition.common import get_output_dir, is_fresh, resolve_n_class
+from .partition.common import (
+    _has_mixed_ssl_clients,
+    get_output_dir,
+    is_fresh,
+    resolve_n_class,
+)
 from .process import process_dataset
 
 __all__ = [
@@ -47,7 +52,15 @@ def prepare_data(args):
         prepare_double_ssl_data(args, dataset_name, raw_data)
     else:
         output_dir = get_output_dir(args, dataset_name)
-        if is_fresh(output_dir, args.num_clients):
+        should_partition = is_fresh(output_dir, args.num_clients)
+        if (
+            not should_partition
+            and args.ssl == "sample"
+            and not _has_mixed_ssl_clients(output_dir, args.num_clients)
+        ):
+            should_partition = True
+
+        if should_partition:
             prepare_label_data(args, dataset_name, raw_data)
             if args.ssl == "sample":
                 apply_label_ratio_sample(
