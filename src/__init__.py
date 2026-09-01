@@ -9,13 +9,13 @@ class TrainingFailureError(Exception):
 
 
 __all__ = [
-    "load_algorithm",
-    "prepare_data",
+    "TrainingFailureError",
     "get_config",
     "get_pre_name",
     "init_ray",
+    "load_algorithm",
+    "prepare_data",
     "set_seed",
     "setup_runtime_env",
     "shutdown_ray",
-    "TrainingFailureError",
 ]

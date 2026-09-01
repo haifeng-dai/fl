@@ -122,7 +122,7 @@ def download_domain(domain, save_path):
 
         urllib.request.urlretrieve(url, save_path)
         return
-    except Exception as e:
+    except OSError as e:
         print(f"  urllib download failed: {e}")
 
     import subprocess
@@ -134,8 +134,8 @@ def download_domain(domain, save_path):
             capture_output=True,
         )
         return
-    except Exception:
-        pass
+    except (OSError, subprocess.CalledProcessError):
+        print("  wget 下载失败，请参考下方手动下载指引。")
 
     raise RuntimeError(
         f"DomainNet/{domain} download failed.\n"

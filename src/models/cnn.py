@@ -1,11 +1,11 @@
-import torch.nn as nn
+from torch import nn
 
 
 class CNN(nn.Module):
     def __init__(
         self, input_channels=1, num_classes=10, feature_dim=512, dataset_name="mnist"
     ):
-        super(CNN, self).__init__()
+        super().__init__()
         # 计算展平后的特征维度
         if dataset_name in ["mnist", "fashionmnist", "femnist", "emnist"]:
             # 28x28 -> MaxPool(2x2) -> 14x14 -> MaxPool(2x2) -> 7x7

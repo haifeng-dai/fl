@@ -42,7 +42,7 @@ def run_experiment(args, t):
                 f"Config:\n{json.dumps(vars(args), indent=4, ensure_ascii=False)}\n{'-' * 80}"
             )
             print(
-                f"Seed: {args.seed} | Start Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Seed: {args.seed} | Start Time: {datetime.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')}\n"
             )
 
             # 4. 实例化 Server 并执行训练与保存
@@ -52,7 +52,7 @@ def run_experiment(args, t):
 
             end_time = time.time()
             print(
-                f"\nEnd Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                f"\nEnd Time: {datetime.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')}"
             )
             print(
                 f"Total Duration: {datetime.timedelta(seconds=int(end_time - start_time))}"

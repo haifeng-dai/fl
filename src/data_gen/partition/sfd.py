@@ -4,9 +4,9 @@ import numpy as np
 import torch
 
 from .common import (
-    _ensure_nonempty_client_indices,
-    _has_mixed_ssl_clients,
+    ensure_nonempty_client_indices,
     get_output_dir,
+    has_mixed_ssl_clients,
     hetero_split,
     is_fresh,
     per_domain_train_test_split,
@@ -66,7 +66,7 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     # ════════════════════════════════════════════════════════════════
     output_dir = get_output_dir(args, dataset_name)
 
-    if not is_fresh(output_dir, num_clients) and _has_mixed_ssl_clients(
+    if not is_fresh(output_dir, num_clients) and has_mixed_ssl_clients(
         output_dir, num_clients
     ):
         print(
@@ -129,8 +129,8 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     )
 
     # 分别保证两个域各自在每个客户端的训练集非空
-    lbl_tr = _ensure_nonempty_client_indices(lbl_tr, rng, "sfd label_domain train")
-    unlbl_tr = _ensure_nonempty_client_indices(
+    lbl_tr = ensure_nonempty_client_indices(lbl_tr, rng, "sfd label_domain train")
+    unlbl_tr = ensure_nonempty_client_indices(
         unlbl_tr, rng, "sfd unlabel_domain train"
     )
 
@@ -141,8 +141,8 @@ def prepare_sfd_data(args, dataset_name, raw_data):
     cli_te = [
         np.concatenate([lbl_te[i], unlbl_te[i]]).tolist() for i in range(num_clients)
     ]
-    cli_tr = _ensure_nonempty_client_indices(cli_tr, rng, "train")
-    cli_te = _ensure_nonempty_client_indices(cli_te, rng, "test")
+    cli_tr = ensure_nonempty_client_indices(cli_tr, rng, "train")
+    cli_te = ensure_nonempty_client_indices(cli_te, rng, "test")
 
     # ════════════════════════════════════════════════════════════════
     # 第四阶段：内存掩码（不二次读写文件）

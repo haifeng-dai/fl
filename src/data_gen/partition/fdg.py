@@ -4,7 +4,7 @@ import numpy as np
 
 from .common import (
     domain_as_client_partition,
-    _ensure_nonempty_client_indices,
+    ensure_nonempty_client_indices,
     get_output_dir,
     is_fresh,
     per_domain_train_test_split,
@@ -105,8 +105,8 @@ def prepare_fdg_data(args, dataset_name, raw_data):
     for i in range(num_clients):
         cli_te[i] = cli_te[i] + td_splits[i].tolist()
 
-    cli_tr = _ensure_nonempty_client_indices(cli_tr, rng, "train")
-    cli_te = _ensure_nonempty_client_indices(cli_te, rng, "test")
+    cli_tr = ensure_nonempty_client_indices(cli_tr, rng, "train")
+    cli_te = ensure_nonempty_client_indices(cli_te, rng, "test")
 
     # FDG 客户端不保存 domains（train/test 仅含 x/y）
     save_client_data(output_dir, X_full, Y_full, cli_tr, cli_te, num_classes)

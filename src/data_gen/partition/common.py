@@ -1,4 +1,5 @@
 import os
+import pickle
 
 import numpy as np
 import torch
@@ -77,10 +78,8 @@ def get_output_dir(args, dataset_name):
         dom = sanitize(args.selected_domains)
         td = sanitize(args.target_domain)
         part_str = f"fdg_{part_seg}_{dom}_{td}{split_suffix}"
-    elif args.ssl in ("sample", "client"):
+    elif args.ssl in ("sample", "double", "client"):
         part_str = f"{args.ssl}_{part_seg}_{args.label_ratio}{split_suffix}"
-    elif args.ssl == "double":
-        part_str = f"double_{part_seg}_{args.label_ratio}{split_suffix}"
     else:
         part_str = f"{part_seg}{split_suffix}"
     return os.path.join("./datasets", dataset_name, part_str)
@@ -111,7 +110,7 @@ def is_fresh(output_dir, num_clients):
     return False
 
 
-def _has_mixed_ssl_clients(output_dir, num_clients):
+def has_mixed_ssl_clients(output_dir, num_clients):
     """检查 output_dir 中的所有客户端数据是否都具有混合 SSL 所需的 L/U 掩码。
 
     仅当所有 client_*.pt 均满足以下条件时返回 True：
@@ -124,9 +123,9 @@ def _has_mixed_ssl_clients(output_dir, num_clients):
         return False
     for i in range(num_clients):
         path = os.path.join(output_dir, f"client_{i}.pt")
-        if not os.path.isfile(path):
+        data = load_pt_or_none(path)
+        if data is None:
             return False
-        data = torch.load(path, weights_only=False)
         train = data.get("train", {})
         if "is_labeled" not in train:
             return False
@@ -139,7 +138,23 @@ def _has_mixed_ssl_clients(output_dir, num_clients):
     return True
 
 
-def _ensure_nonempty_client_indices(client_indices, rng, split_name):
+def load_pt_or_none(path):
+    """读取缓存文件；缺失、空文件或损坏时返回 None（视为缓存无效）。
+
+    只捕获预期的缓存损坏异常类型，避免吞掉编程错误。
+    """
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return None
+    try:
+        return torch.load(path, weights_only=False)
+    except (OSError, EOFError, RuntimeError, pickle.UnpicklingError):
+        return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 客户端非空保底（sample / double 之外仍被 client 沿用）
+# ──────────────────────────────────────────────────────────────────────────
+def ensure_nonempty_client_indices(client_indices, rng, split_name):
     """仅在出现空客户端时转移一个既有索引。"""
     clients = [list(indices) for indices in client_indices]
     if not clients or not any(not indices for indices in clients):
@@ -179,13 +194,18 @@ def per_domain_train_test_split(all_domains, test_ratio, rng):
 
 
 def distribute_by_class(
-    indices_by_class, num_clients, partition, rng, alpha=0.5, n_classes_per_client=2
+    indices_by_class,
+    num_clients,
+    partition,
+    rng,
+    alpha=0.5,
+    n_classes_per_client=2,
 ):
     """按类分组的索引列表，以 partition 策略分布到 num_clients 个客户端。
 
-    这是 dirichlet / iid / pathological 三类异质分布的【唯一实现】，供类别划分
-    （label.py 的 prepare_label_data）与域内核质（hetero_split）共用，
-    消除两者之间的逻辑重复。
+    这是 iid / dirichlet / pathological 三类异质分布的【唯一实现】，供类别划分
+    （label.py 的 prepare_label_data）、域内核质（hetero_split）与混合 SSL
+    （sample / double）共用，消除这些场景间的逻辑重复。
 
     indices_by_class: list[np.ndarray]，按类索引（顺序无关）。
     返回 client_idx: list[list[np.ndarray]]，client_idx[i] 为客户端 i 拿到的各分片，
@@ -194,8 +214,9 @@ def distribute_by_class(
     if partition not in ("iid", "dirichlet", "pathological"):
         raise ValueError(f"未知分区方法: {partition}")
 
-    num_classes = len(indices_by_class)
+    pools = [np.asarray(class_indices, dtype=int) for class_indices in indices_by_class]
     client_idx = [[] for _ in range(num_clients)]
+    num_classes = len(pools)
 
     if partition == "pathological":
         total_slots = num_clients * n_classes_per_client
@@ -204,39 +225,41 @@ def distribute_by_class(
                 f"[Pathological Partition Error] 总需求分片数 ({total_slots}) "
                 f"小于类别总数 ({num_classes})。"
             )
-        shards_per_class_list = [total_slots // num_classes] * num_classes
-        remainder = total_slots % num_classes
-        for i in range(remainder):
-            shards_per_class_list[i] += 1
+        shards_per_class = [total_slots // num_classes] * num_classes
+        for i in range(total_slots % num_classes):
+            shards_per_class[i] += 1
 
         shards = []
-        for k in range(num_classes):
-            c_idx = indices_by_class[k]
-            if len(c_idx) == 0:
-                # 空类按槽位数补空分片，保持总数 = total_slots（索引对齐）
-                shards.extend([np.array([], dtype=int)] * shards_per_class_list[k])
+        for class_id, class_indices in enumerate(pools):
+            required = shards_per_class[class_id]
+            if len(class_indices) == 0:
+                shards.extend([np.array([], dtype=int)] * required)
                 continue
-            if len(c_idx) < shards_per_class_list[k]:
+            if len(class_indices) < required:
                 raise ValueError(
-                    f"[Pathological Partition Error] 类别 {k} 样本量不足以切分为 "
-                    f"{shards_per_class_list[k]} 个分片。"
+                    f"[Pathological Partition Error] 类别 {class_id} 仅有 "
+                    f"{len(class_indices)} 个样本，不足以切成 {required} 个分片 "
+                    f"（num_clients={num_clients}, n_classes_per_client="
+                    f"{n_classes_per_client}）。"
                 )
-            shards.extend(np.array_split(c_idx, shards_per_class_list[k]))
+            shards.extend(np.array_split(class_indices, required))
 
-        rng.shuffle(shards)  # 跨类全局打乱
-        for i in range(num_clients):
-            for j in range(n_classes_per_client):
-                client_idx[i].append(shards[i * n_classes_per_client + j])
+        rng.shuffle(shards)
+        for client_id in range(num_clients):
+            start = client_id * n_classes_per_client
+            end = start + n_classes_per_client
+            client_idx[client_id].extend(shards[start:end])
         return client_idx
 
-    # dirichlet / iid：逐类独立分布
-    for c_idx in indices_by_class:
+    for c, pool in enumerate(pools):
         if partition == "iid":
-            splits = np.array_split(c_idx, num_clients)
-        else:  # dirichlet
-            props = rng.dirichlet([alpha] * num_clients)
-            counts = (np.cumsum(props) * len(c_idx)).astype(int)[:-1]
-            splits = np.split(c_idx, counts)
+            splits = np.array_split(pool, num_clients)
+        elif partition == "dirichlet":
+            proportions = rng.dirichlet([alpha] * num_clients)
+            counts = (np.cumsum(proportions) * len(pool)).astype(int)[:-1]
+            splits = np.split(pool, counts)
+        else:
+            raise ValueError(f"未知分区方法: {partition}")
         for i in range(num_clients):
             client_idx[i].append(splits[i])
     return client_idx

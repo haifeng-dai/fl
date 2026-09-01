@@ -106,7 +106,7 @@ def download_officehome(zip_path):
     try:
         urllib.request.urlretrieve(OFFICEHOME_URL, zip_path)
         return
-    except Exception as e:
+    except OSError as e:
         print(f"  Direct download failed: {e}")
 
     import subprocess
@@ -118,8 +118,8 @@ def download_officehome(zip_path):
             capture_output=True,
         )
         return
-    except Exception:
-        pass
+    except (OSError, subprocess.CalledProcessError):
+        print("  wget 下载失败，请参考下方手动下载指引。")
 
     raise RuntimeError(
         "OfficeHome dataset download failed. Please download manually:\n"

@@ -1,9 +1,9 @@
-import torch.nn as nn
+from torch import nn
 
 
 class HARCNN(nn.Module):
     def __init__(self, in_channels=9, num_classes=6, feature_dim=512):
-        super(HARCNN, self).__init__()
+        super().__init__()
 
         # 特征提取器
         self.extractor = nn.Sequential(

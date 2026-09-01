@@ -27,7 +27,7 @@ def get_path(args):
 
 
 def train(p: Params):
-    device = torch.device(p.clientargets_gpu)
+    device = torch.device(p.client_gpu)
     model_l = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
     model_l.load_state_dict(p.model_state)
     model_g = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
@@ -161,10 +161,8 @@ class Server(BaseServer):
         for round_index in range(self.rounds):
             started = time.time()
             selected = sorted(torch.randperm(self.num_clients)[:num_join].tolist())
-            print(
-                f"\n--- SAGE Round {round_index + 1}/{self.rounds} ---"
-                f" selected_clients={selected}"
-            )
+            print(f"\n--- SAGE Round {round_index + 1}/{self.rounds} ---")
+            print(f" selected_clients={selected}")
             parameters = [
                 Params(
                     **asdict(base),

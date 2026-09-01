@@ -54,10 +54,12 @@ class MetaDataset(torch.utils.data.Dataset):
 def load_data(args, pfl=False):
     """加载已划分好的客户端数据。
 
-    - 划分目录由 get_output_dir(args, dataset_name) 唯一确定（sfd/fdg/category 自动区分）。
-    - is_labeled 始终透传（ssl/sfd 掩码场景存在该字段，其余场景缺省为全有标签）。
-    - 非 pfl：各客户端 test 合并为全局测试集，保留 domains/is_labeled，
-      供算法内部按域切分评估（SFD 按 unlabel_domain）。
+    - 划分目录由 get_output_dir(args, dataset_name) 唯一确定（sfd/fdg/category/mixed 自动区分）。
+    - 所有模式均走同一通用加载路径：每个 client_i.pt 含 train 与 test；
+      train 的 is_labeled 透传（sample/double 掩码场景存在该字段，其余缺省全有标签）。
+    - ``pfl`` 只决定返回的测试集形态：``pfl=False`` 合并各客户端 test 为单个全局
+      MetaDataset；``pfl=True`` 保留每客户端 test 字典。``pfl`` 不参与 SSL 场景判断，
+      算法与数据场景是否适配由调用方保证。
     """
     dataset_name = args.dataset
     part_dir = get_output_dir(args, dataset_name)

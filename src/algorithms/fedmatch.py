@@ -248,10 +248,8 @@ class Server(BaseServer):
     def __init__(self, args):
         super().__init__(args, is_ssl=True)
 
-        if not self.is_sfd:
-            raise ValueError("fedmatch requires SFD data (ssl must be 'sfd')")
-        if self.unlabel_domain is None:
-            raise ValueError("fedmatch requires unlabel_domain to be set")
+        if args.ssl == "client":
+            raise ValueError("fedmatch does not support ssl='client'")
 
         # 算法专属超参与置信度阈值（configs/algorithms.yaml 及 default.yaml 中配置）
         self.confidence = args.confidence
@@ -375,8 +373,6 @@ class Server(BaseServer):
 
             print(
                 f"Global Acc: {self.acc[-1]:.2f}%, "
-                f"Source Acc: {self.acc_source[-1]:.2f}%, "
-                f"Target Acc: {self.acc_target[-1]:.2f}%, "
                 f"Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
@@ -384,8 +380,6 @@ class Server(BaseServer):
     def save(self):
         """保存指标与最终参数（global = σ+ψ 合并、sigma、psi 分开存档）。"""
         metrics = {"acc": self.acc, "loss": self.loss}
-        metrics["acc_target"] = self.acc_target
-        metrics["acc_source"] = self.acc_source
         params = {
             "global": merge_state(self.sigma_state, self.psi_state, self.l1_thres),
             "sigma": self.sigma_state,

@@ -1,6 +1,6 @@
 import torch
-import torch.nn as nn
-import torchvision.models as models
+from torch import nn
+from torchvision import models
 
 
 def _get_flatten_dim(extractor, dataset_name):
@@ -50,7 +50,7 @@ def _adapt_resnet_input_layer(resnet, dataset_name):
 
 class ResNet18(nn.Module):
     def __init__(self, num_classes=10, feature_dim=512, dataset_name="cifar10"):
-        super(ResNet18, self).__init__()
+        super().__init__()
         # 使用预训练的ResNet18作为基础
         base_resnet = models.resnet18(weights=None)
         base_resnet = _adapt_resnet_input_layer(base_resnet, dataset_name)
@@ -89,7 +89,7 @@ class ResNet18(nn.Module):
 
 class ResNet50(nn.Module):
     def __init__(self, num_classes=10, feature_dim=512, dataset_name="cifar10"):
-        super(ResNet50, self).__init__()
+        super().__init__()
         # 使用预训练的ResNet50作为基础
         base_resnet = models.resnet50(weights=None)
         base_resnet = _adapt_resnet_input_layer(base_resnet, dataset_name)

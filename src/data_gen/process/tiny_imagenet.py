@@ -43,7 +43,7 @@ def process(output_dir="./datasets/raw"):
     # 1. 建立类别映射 (WNID -> Label ID)
     wnids_path = os.path.join(dataset_path, "wnids.txt")
     with open(wnids_path, "r") as f:
-        wnids = [line.strip() for line in f.readlines()]
+        wnids = [line.strip() for line in f]
     wnid_to_label = {wnid: i for i, wnid in enumerate(wnids)}
 
     transform = transforms.Compose(
@@ -70,7 +70,7 @@ def process(output_dir="./datasets/raw"):
     print("-> Loading Validation Data (10,000 images)...")
     val_annotations_path = os.path.join(dataset_path, "val", "val_annotations.txt")
     with open(val_annotations_path, "r") as f:
-        for line in f.readlines():
+        for line in f:
             parts = line.strip().split("\t")
             img_name = parts[0]
             wnid = parts[1]

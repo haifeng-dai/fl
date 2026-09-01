@@ -46,7 +46,7 @@ target_domain: rotate_cutout # str，仅 FDG 模式生效：该域为测试
 #  sfd     : SFD 双域半监督场景（源域按 label_rate 保留标签 + 目标域全无标签）。
 ssl: double # none | sample | client | double | sfd
 unlabeled_ratio: 2 # 无标签 batch 相对于有标签 batch 的比例
-label_ratio: 0.5 # float (0~1]，统一适用于 sample / client / double / sfd 场景的有标签数据比例
+label_ratio: 0.1 # float (0~1]，统一适用于 sample / client / double / sfd 场景的有标签数据比例
 lam: 1.0 # float，fedtest 无监督损失权重；0 = 退化为纯监督。
 confidence: 0.95 # float，fedtest FixMatch 伪标签置信度阈值。
 # SFD 专属配置（当 ssl: sfd 时生效）

@@ -1,9 +1,9 @@
-import torch.nn as nn
+from torch import nn
 
 
 class HARMLP(nn.Module):
     def __init__(self, input_dim=561, num_classes=6, feature_dim=512):
-        super(HARMLP, self).__init__()
+        super().__init__()
 
         # 特征提取器 (主体)
         self.extractor = nn.Sequential(

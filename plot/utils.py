@@ -572,7 +572,7 @@ def load_plot(
             return
 
         # 尝试检查第一个结果的 'acc' 类型来决定绘图函数
-        first_res = list(results.values())[0]
+        first_res = next(iter(results.values()))
         if isinstance(first_res.get("acc"), dict):
             plot_results_split(
                 results,

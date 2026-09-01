@@ -6,6 +6,7 @@ import torch
 from PIL import Image
 from torchvision import datasets, transforms
 
+
 def process(output_dir="./datasets/raw"):
     """
     使用 kagglehub 自动下载并处理 GTSRB (德国交通标志) 数据集。
@@ -68,7 +69,7 @@ def process(output_dir="./datasets/raw"):
                     img = Image.open(img_path).convert("RGB")
                     batch_x.append(transform(img))
                     batch_y.append(torch.tensor(label))
-                except Exception as e:
+                except (OSError, ValueError) as e:
                     print(f"跳过损坏图片 {img_path}: {e}")
 
             # 分批处理以节省内存并显示进度

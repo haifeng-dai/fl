@@ -414,7 +414,8 @@ class Server(BaseServer):
             print(
                 f"FedAvg Acc: {fedavg_acc:.2f}%, GPT Loss: {gpt_loss:.4f}, GPT Min Class Dist: {min_class_distance:.4f}"
             )
-            print(f"Pred Dist: {fedavg_pred_dist.tolist()} -> {gpt_pred_dist.tolist()}")
+            fmt = lambda d: "[" + ", ".join(f"{v:.3f}" for v in d.tolist()) + "]"
+            print(f"Pred Dist: {fmt(fedavg_pred_dist)} -> {fmt(gpt_pred_dist)}")
             print(f"Round finished in {time.time() - start:.2f} seconds")
 
     def save(self):
