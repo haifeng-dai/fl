@@ -24,11 +24,10 @@ def train(p: BaseParams):
     model.load_state_dict(p.model_state)
     model.to(device)
 
-    labeled_mask = p.train_set.is_labeled
-    x_lb = p.train_set.x[labeled_mask]
-    y_lb = p.train_set.y[labeled_mask]
+    x_all = p.train_set.x
+    y_all = p.train_set.y
 
-    if len(x_lb) == 0:
+    if len(x_all) == 0:
         model_state = {
             k: v.cpu().detach().clone() for k, v in model.state_dict().items()
         }
@@ -41,7 +40,7 @@ def train(p: BaseParams):
         weight_decay=p.weight_decay,
     )
     loader = DataLoader(
-        TensorDataset(x_lb, y_lb),
+        TensorDataset(x_all, y_all),
         batch_size=p.batch_size,
         shuffle=True,
     )
@@ -69,18 +68,16 @@ def train(p: BaseParams):
 
 class Server(BaseServer):
     def __init__(self, args):
-        super().__init__(args, is_ssl=True)
-        self.labeled_counts = [
-            int(train_set.is_labeled.sum().item())
-            for train_set in self.train_sets.values()
-        ]
+        if args.ssl not in ("sample", "double", "sfd"):
+            raise ValueError("fedavg_sl 要求 ssl 为 sample、double 或 sfd。")
+        super().__init__(args, is_ssl=True, pfl=False)
 
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
         for r in range(self.rounds):
             t0 = time.time()
-            print(f"\n--- FedAvgSup Round {r + 1}/{self.rounds} ---")
+            print(f"\n--- FedAvg-SL Round {r + 1}/{self.rounds} ---")
 
             selected = sorted(torch.randperm(self.num_clients)[:num_join].tolist())
             print(f"Selected clients: {selected}")
@@ -94,7 +91,7 @@ class Server(BaseServer):
             for cid, res in results.items():
                 total_loss += res["loss"]
                 selected_states.append(res["state"])
-                current_weights.append(self.labeled_counts[cid])
+                current_weights.append(self.weights[cid])
 
             self.loss.append(total_loss / num_join)
             sum_weights = sum(current_weights)
@@ -121,11 +118,9 @@ class Server(BaseServer):
             print(f"Round finished in {time.time() - t0:.2f} seconds")
 
     def save(self):
-        metrics = {
-            "acc": self.acc,
-            "acc_source": self.acc_source,
-            "acc_target": self.acc_target,
-            "loss": self.loss,
-        }
+        metrics = {"acc": self.acc, "loss": self.loss}
+        if self.is_sfd:
+            metrics["acc_source"] = self.acc_source
+            metrics["acc_target"] = self.acc_target
         params = {"global": self.model.state_dict()}
         self.deal_save(metrics, params)

@@ -65,11 +65,11 @@ def train(p: Params):
     avg_loss = total_loss / num_batches
     body_state = {
         k: model.extractor.state_dict()[k].cpu().detach().clone()
-        for k in model.extractor.state_dict().keys()
+        for k in model.extractor.state_dict()
     }
     head_state = {
         k: model.classifier.state_dict()[k].cpu().detach().clone()
-        for k in model.classifier.state_dict().keys()
+        for k in model.classifier.state_dict()
     }
     return {"loss": avg_loss, "body": body_state, "head": head_state}
 

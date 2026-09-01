@@ -103,7 +103,7 @@ def train_phase1(p: ParamsPhase1):
     # 4. 计算 Delta = theta_t - theta_updated
     theta_mid = model.state_dict()
     delta_theta = {
-        k: (theta_t[k].to(device) - theta_mid[k]).cpu() for k in theta_t.keys()
+        k: (theta_t[k].to(device) - theta_mid[k]).cpu() for k in theta_t
     }
 
     return {
@@ -132,8 +132,8 @@ def train_phase2(p: ParamsPhase2):
     w = F.softmax(alpha, dim=0)
 
     # 4. 虚拟聚合：theta_agg = theta^t - sum(w_j * delta_j)
-    theta_agg = {k: p.theta_t[k].to(device).clone() for k in p.theta_t.keys()}
-    for k in theta_agg.keys():
+    theta_agg = {k: p.theta_t[k].to(device).clone() for k in p.theta_t}
+    for k in theta_agg:
         # 堆叠所有邻居的增量
         layer_deltas = torch.stack([d[k].to(device) for d in p.neighbor_deltas])
         # w: [num_neighbors] -> reshape for broadcasting
@@ -341,7 +341,7 @@ class Server(BaseServer):
         weights = [1.0 / self.num_clients] * self.num_clients
         aggregated_state = {}
 
-        for key in states[0].keys():
+        for key in states[0]:
             aggregated_state[key] = torch.zeros_like(states[0][key]).to(self.device)
             for state, weight in zip(states, weights):
                 aggregated_state[key] += state[key].to(self.device) * weight

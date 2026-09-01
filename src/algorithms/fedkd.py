@@ -305,14 +305,14 @@ class Server(BaseServer):
         ref_params = client_params_list[0]
 
         # 从首个客户端开始初始化
-        for name in ref_params.keys():
+        for name in ref_params:
             param_0 = reconstruct_param(ref_params[name], self.device)
             aggregated_state_dict[name] = param_0 * weights[0]
 
         # 累加剩余的客户端数据
         for i in range(1, len(client_params_list)):
             client_params = client_params_list[i]
-            for name in client_params.keys():
+            for name in client_params:
                 param = reconstruct_param(client_params[name], self.device)
                 aggregated_state_dict[name] += param * weights[i]
 

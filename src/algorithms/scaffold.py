@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
-import torch.optim as optim
+from torch import optim
 
 from .utils import (
     BaseParams,
@@ -22,8 +22,8 @@ def get_path(args):
 
 class SCAFFOLDOptimizer(optim.Optimizer):
     def __init__(self, params, lr, weight_decay):
-        defaults = dict(lr=lr, weight_decay=weight_decay)
-        super(SCAFFOLDOptimizer, self).__init__(params, defaults)
+        defaults = {"lr": lr, "weight_decay": weight_decay}
+        super().__init__(params, defaults)
 
     def step(self, c_global, c_local):
         for group in self.param_groups:

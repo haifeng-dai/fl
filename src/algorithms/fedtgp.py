@@ -3,8 +3,8 @@ import time
 from dataclasses import asdict, dataclass
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 from torch.utils.data import DataLoader
 
 from .utils import (
@@ -46,9 +46,7 @@ class TGP(nn.Module):
         参数:
             class_ids: 类别索引的张量 (Tensor) 或列表 (List)
         """
-        if isinstance(class_ids, list):
-            class_ids = torch.tensor(class_ids, device=self.device)
-        elif not isinstance(class_ids, torch.Tensor):
+        if isinstance(class_ids, list) or not isinstance(class_ids, torch.Tensor):
             class_ids = torch.tensor(class_ids, device=self.device)
 
         class_ids = class_ids.to(self.device)

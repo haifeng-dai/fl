@@ -8,9 +8,9 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
-    fmt_num,
     evaluate_model,
     flattened_matrix_aggregate,
+    fmt_num,
     generate_adjacency_matrix,
     get_model,
     kl_loss,

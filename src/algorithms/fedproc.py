@@ -110,7 +110,7 @@ class Server(BaseServer):
             selected_states = []
             all_local_protos = []
             all_local_counts = []
-            for _, res in results.items():
+            for res in results.values():
                 total_loss += res["loss"]
                 selected_states.append(res["state"])
                 all_local_protos.append(res["protos"])

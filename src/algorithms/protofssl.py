@@ -96,7 +96,12 @@ def train(p: Params):
     # 1. 初始化模型（仅使用 extractor 作为特征提取器 f_θ，不使用 classifier）
     model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
     model.load_state_dict(p.model_state)
-    optimizer = torch.optim.SGD(model.parameters(), lr=p.lr)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=p.lr,
+        momentum=p.momentum,
+        weight_decay=p.weight_decay,
+    )
 
     # 2. 构造按类索引：有标签样本索引（按类分组）与无标签样本索引
     y = p.train_set.y
@@ -144,20 +149,22 @@ def train(p: Params):
             num_batches += 1
 
         # 无监督项（Eq.8 第二项）：无标签子集分批 → 伪标签 → 本地原型距离概率 → CE
-        u_idx = unlabeled_idx[torch.randperm(len(unlabeled_idx))[:unlabeled_query_size]]
+        u_idx = unlabeled_idx[
+            torch.randperm(len(unlabeled_idx))[: p.unlabeled_query_size]
+        ]
         u_loader = DataLoader(
-            TensorDataset(train_set.x[u_idx]),
-            batch_size=batch_size,
+            TensorDataset(p.train_set.x[u_idx]),
+            batch_size=p.batch_size,
             shuffle=True,
         )
         for (xu_b,) in u_loader:
             f_u = model.extractor(xu_b.to(device))  # [B_u, D]
-            p_bar_u = pseudolabel(f_u, helper_protos, sharpen_T)  # [B_u, K] soft
+            p_bar_u = pseudolabel(f_u, p.helper_protos, p.sharpen_T)  # [B_u, K] soft
             if p_bar_u is None:
                 # 首轮 H_r 为空（无辅助客户端原型），无监督项跳过
                 continue
             # 本地原型距离概率 → CE(soft 伪标签)（dist_contrastive_loss = Eq.(6)+CE）
-            loss_unsup = lambda_ * dist_contrastive_loss(f_u, C_local, p_bar_u)
+            loss_unsup = p.lambda_ * dist_contrastive_loss(f_u, C_local, p_bar_u)
             optimizer.zero_grad()
             loss_unsup.backward()
             optimizer.step()
@@ -170,9 +177,9 @@ def train(p: Params):
     #    counts = 每类有标签样本数，由 extract_prototypes 的 bincount 直接给出
     final_protos, final_counts = extract_prototypes(
         model,
-        DataLoader(Subset(full_ds, labeled_idx), batch_size=batch_size),
-        num_class,
-        feature_dim,
+        DataLoader(Subset(full_ds, labeled_idx), batch_size=p.batch_size),
+        p.num_class,
+        p.feature_dim,
         device,
         return_counts=True,
     )

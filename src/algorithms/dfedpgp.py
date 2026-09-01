@@ -144,8 +144,8 @@ def train(p: Params):
     # 5. 提取并返回更新后的 body 和 head
     new_full_state = model.state_dict()
 
-    shared_keys = [k for k in new_full_state.keys() if k.startswith("extractor.")]
-    head_keys = [k for k in new_full_state.keys() if k.startswith("classifier.")]
+    shared_keys = [k for k in new_full_state if k.startswith("extractor.")]
+    head_keys = [k for k in new_full_state if k.startswith("classifier.")]
 
     return {
         "loss": total_loss / num_batches,  # avg_loss
@@ -174,8 +174,8 @@ class Server(BaseServer):
 
         # 验证模型架构：必须有 extractor 和 classifier
         init_state = self.model.state_dict()
-        self.shared_keys = [k for k in init_state.keys() if k.startswith("extractor.")]
-        self.head_keys = [k for k in init_state.keys() if k.startswith("classifier.")]
+        self.shared_keys = [k for k in init_state if k.startswith("extractor.")]
+        self.head_keys = [k for k in init_state if k.startswith("classifier.")]
 
         # 1. 拓扑初始化与混合矩阵预计算
         self.adj_matrix = generate_adjacency_matrix(args)

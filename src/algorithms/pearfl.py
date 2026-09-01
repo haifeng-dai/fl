@@ -140,7 +140,7 @@ class Server(BaseServer):
         self.A = generate_adjacency_matrix(args).to(self.device).float()
 
         # 2. 生成双随机矩阵 W（全 GPU 运算）
-        self.W = self._sinkhorn_knopp(self.A)
+        self.W = self.sinkhorn_knopp(self.A)
 
         # 3. 初始化全局原型池（每个节点在每个类别上的本地原型）
         self.local_protos_pool = torch.zeros(
@@ -155,7 +155,7 @@ class Server(BaseServer):
         # 4. 初始化个性化共识原型（每个节点拥有一个 [num_classes, feature_dim] 的个性化原型）
         self.personalized_protos = torch.zeros_like(self.local_protos_pool)
 
-    def _sinkhorn_knopp(self, A, max_iter=100, tol=1e-6):
+    def sinkhorn_knopp(self, A, max_iter=100, tol=1e-6):
         """
         Sinkhorn-Knopp 算法：将带自环的对称邻接矩阵转化为双随机矩阵 W。
         满足 W @ 1 = 1, 1^T @ W = 1^T, 且 W_ij >= 0。
@@ -295,7 +295,7 @@ class Server(BaseServer):
         aggregated_state = {}
         total_weight = sum(weights)
 
-        for key in states[0].keys():
+        for key in states[0]:
             aggregated_state[key] = torch.zeros_like(states[0][key])
             for state, weight in zip(states, weights):
                 aggregated_state[key] += state[key] * (weight / total_weight)

@@ -5,8 +5,8 @@ import time
 from dataclasses import asdict, dataclass
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader, TensorDataset
 

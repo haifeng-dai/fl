@@ -112,9 +112,9 @@ class Server(BaseServer):
         self.triggered_ids_log = []
         self.changes_log = []
 
-        self._build_param_info()
+        self.build_param_info()
 
-    def _build_param_info(self):
+    def build_param_info(self):
         sd = self.model.state_dict()
         self.param_keys = list(sd.keys())
         self.param_shapes = [sd[k].shape for k in self.param_keys]
@@ -126,7 +126,7 @@ class Server(BaseServer):
             offset += sz
         self.total_params = offset
 
-    def _flatten_states(self, states_list):
+    def flatten_states(self, states_list):
         N = len(states_list)
         flat = torch.zeros(N, self.total_params, dtype=torch.float32)
         for i in range(N):
@@ -136,7 +136,7 @@ class Server(BaseServer):
                 flat[i, start:end] = states_list[i][k].cpu().view(-1)
         return flat
 
-    def _unflatten_to_states(self, flat):
+    def unflatten_to_states(self, flat):
         states = []
         for i in range(flat.shape[0]):
             sd = {}
@@ -167,11 +167,11 @@ class Server(BaseServer):
             for i in triggered_ids:
                 P[i] = self.mh_weights[i].to(self.device)
 
-            W_flat = self._flatten_states(
+            W_flat = self.flatten_states(
                 [self.clients_state[i] for i in range(self.num_clients)]
             )
             W_new_flat = P @ W_flat
-            new_states = self._unflatten_to_states(W_new_flat)
+            new_states = self.unflatten_to_states(W_new_flat)
 
             for i in triggered_ids:
                 self.clients_state[i] = new_states[i]

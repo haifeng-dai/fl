@@ -3,8 +3,8 @@ import time
 from dataclasses import asdict, dataclass
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from .utils import (
     BaseParams,

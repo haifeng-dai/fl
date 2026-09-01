@@ -14,6 +14,18 @@ def kl_loss(logits_s, logits_t, tau=1.0):
     return F.kl_div(log_p_s, p_t, reduction="batchmean") * (tau**2)
 
 
+def masked_kl_loss(logits, targets, mask=None):
+    """计算逐样本 KL 散度，并可按样本掩码后求 batch 平均。"""
+    losses = F.kl_div(
+        F.log_softmax(logits, dim=1),
+        targets,
+        reduction="none",
+    ).sum(dim=1)
+    if mask is not None:
+        losses = losses * mask
+    return losses.mean()
+
+
 def cos_similarity(features, prototypes, labels, tau=0.1):
     """
     向量化优化的余弦对比损失 (Cosine Contrastive Loss)。

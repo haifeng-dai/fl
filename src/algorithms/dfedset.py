@@ -155,7 +155,7 @@ class Server(BaseServer):
 
         # 预计算 extractor 参数 flatten 映射（矩阵聚合用）
         self.extractor_keys = [
-            k for k in self.clients_state[0].keys() if k.startswith("extractor.")
+            k for k in self.clients_state[0] if k.startswith("extractor.")
         ]
         self.extractor_param_info = []
         total = 0

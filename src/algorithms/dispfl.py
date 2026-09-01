@@ -178,10 +178,10 @@ class Server(BaseServer):
         initial_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
 
         # 计算每一层的 ERK 稀疏度
-        sparsities = self._calculate_erk_sparsities(initial_state, self.dense_ratio)
+        sparsities = self.calculate_erk_sparsities(initial_state, self.dense_ratio)
 
         self.client_masks = {
-            cid: self._init_masks(initial_state, sparsities)
+            cid: self.init_masks(initial_state, sparsities)
             for cid in range(args.num_clients)
         }
 
@@ -196,7 +196,7 @@ class Server(BaseServer):
             for i in range(self.num_clients)
         }
 
-    def _calculate_erk_sparsities(self, states, density):
+    def calculate_erk_sparsities(self, states, density):
         """
         计算 DisPFL 原始 ERK 稀疏度分布
         公式: P_l = sum(shape) / prod(shape)
@@ -241,7 +241,7 @@ class Server(BaseServer):
 
         # 最终计算各层稀疏度 (1 - 密度)
         sparsities = {}
-        for k in states.keys():
+        for k in states:
             if k in raw_probabilities:
                 prob = 1.0 if k in dense_layers else raw_probabilities[k] * epsilon
                 sparsities[k] = 1.0 - prob
@@ -249,7 +249,7 @@ class Server(BaseServer):
                 sparsities[k] = 0.0
         return sparsities
 
-    def _init_masks(self, states, sparsities):
+    def init_masks(self, states, sparsities):
         """根据分层稀疏度初始化掩码（randperm 精确选取）"""
         masks = {}
         for k, v in states.items():
@@ -336,7 +336,7 @@ class Server(BaseServer):
             round_masks = self.client_masks
         new_client_states = {i: {} for i in range(self.num_clients)}
 
-        for k in self.clients_state[0].keys():
+        for k in self.clients_state[0]:
             # 堆叠所有客户端的该层参数 [N, ...]
             layer_stacked = torch.stack(
                 [
@@ -380,7 +380,7 @@ class Server(BaseServer):
         weights = self.weights
         aggregated_state = {}
 
-        for key in states[0].keys():
+        for key in states[0]:
             aggregated_state[key] = torch.zeros_like(states[0][key])
             for state, weight in zip(states, weights):
                 aggregated_state[key] += state[key] * weight

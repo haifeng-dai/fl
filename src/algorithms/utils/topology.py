@@ -51,10 +51,12 @@ def generate_adjacency_matrix(args):
     return A
 
 
-def compute_mh_weights(adj_matrix, device: torch.device = torch.device("cpu")):
+def compute_mh_weights(adj_matrix, device: torch.device | None = None):
     """
     计算 Metropolis-Hastings (MH) 混合权重矩阵 (向量化版本)。
     """
+    if device is None:
+        device = torch.device("cpu")
     n = adj_matrix.shape[0]
     adj = adj_matrix.to(device).float()
 

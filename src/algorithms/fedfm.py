@@ -124,7 +124,7 @@ class Server(BaseServer):
             # 收集训练结果并聚合全局模型
             total_loss = 0.0
             selected_states = []
-            for _, res in results_train.items():
+            for res in results_train.values():
                 total_loss += res["loss"]
                 selected_states.append(res["state"])
             self.loss.append(total_loss / num_join)
@@ -154,7 +154,7 @@ class Server(BaseServer):
             # 收集本地锚点并按样本数量加权聚合为全局锚点
             all_local_anchors = []
             all_local_counts = []
-            for _, res in results_extract.items():
+            for res in results_extract.values():
                 all_local_anchors.append(res["protos"])
                 all_local_counts.append(res["counts"])
             self.aggregate_anchors(all_local_anchors, all_local_counts)
