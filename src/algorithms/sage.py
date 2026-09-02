@@ -216,6 +216,7 @@ class Server(BaseServer):
                 f"Accuracy: {self.acc[-1]:.2f}% | Loss: {self.loss[-1]:.4f} | "
                 f"Pseudo coverage: {self.pseudo_coverage[-1]:.2f}%"
             )
+            print(f"Round finished in {time.time() - started:.2f} seconds")
 
     def save(self):
         metrics = {

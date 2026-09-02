@@ -128,10 +128,13 @@ fedmatch:
     h_interval: 10
     num_helpers: 2
     lambda_s: 10.0
-    lambda_iccs: 0.01
+    lambda_i: 0.01
+    lambda_a: 0.01
     lambda_l2: 10.0
     lambda_l1: 0.00001
     l1_thres: 0.00005
+    delta_thres: 0.00005
+    psi_factor: 0.2
 
 dfedset:
     lambda_sa:
