@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     evaluate_model,
     flattened_matrix_aggregate,
     fmt_num,
@@ -111,12 +112,8 @@ def train(p: Params):
 
     avg_loss_l = total_loss_l / num_batches
     avg_loss_p = total_loss_p / num_batches
-    local_state = {
-        k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()
-    }
-    proxy_state = {
-        k: v.cpu().detach().clone() for k, v in proxy_model.state_dict().items()
-    }
+    local_state = clone_cpu_state(local_model.state_dict())
+    proxy_state = clone_cpu_state(proxy_model.state_dict())
     return {
         "loss": avg_loss_l,
         "loss_proxy": avg_loss_p,

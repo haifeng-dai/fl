@@ -13,6 +13,7 @@ from src import TrainingFailureError
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     compute_mh_weights,
     evaluate,
     extract_prototypes,
@@ -106,7 +107,7 @@ def train(p: Params):
     S = confidence * local_protos
     W = confidence
 
-    new_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    new_state = clone_cpu_state(model.state_dict())
 
     return {
         "loss": total_loss / max(1, num_batches),

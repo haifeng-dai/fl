@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     get_model,
 )
 
@@ -28,9 +29,7 @@ def train(p: BaseParams):
     y_all = p.train_set.y
 
     if len(x_all) == 0:
-        model_state = {
-            k: v.cpu().detach().clone() for k, v in model.state_dict().items()
-        }
+        model_state = clone_cpu_state(model.state_dict())
         return {"loss": 0.0, "state": model_state}
 
     optimizer = torch.optim.SGD(
@@ -62,7 +61,7 @@ def train(p: BaseParams):
             num_batches += 1
 
     avg_loss = total_loss / max(1, num_batches)
-    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    model_state = clone_cpu_state(model.state_dict())
     return {"loss": avg_loss, "state": model_state}
 
 

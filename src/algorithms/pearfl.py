@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     extract_prototypes,
     flattened_matrix_aggregate,
     fmt_num,
@@ -112,9 +113,7 @@ def train(p: Params):
 
     return {
         "loss": total_loss / num_batches,  # avg_loss
-        "state": {
-            k: v.cpu().detach().clone() for k, v in model.state_dict().items()
-        },  # model_state
+        "state": clone_cpu_state(model.state_dict()),  # model_state
         "protos": local_protos,  # local_protos [num_classes, feature_dim]
         "counts": local_counts,  # local_counts [num_classes]
     }

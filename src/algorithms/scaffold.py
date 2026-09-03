@@ -9,6 +9,7 @@ from torch import optim
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     fmt_num,
     get_model,
     param_aggregate,
@@ -116,7 +117,7 @@ def train(p: Params):
     # 返回值：损失，模型状态，控制变量差值，新的本地控制变量
     return {
         "loss": avg_loss,
-        "state": {k: v.cpu().detach().clone() for k, v in current_state.items()},
+        "state": clone_cpu_state(current_state),
         "delta_c": c_delta_dict,
         "local_c": c_local_new_dict,
     }

@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     extract_prototypes,
     fmt_num,
     get_model,
@@ -175,7 +176,7 @@ def train(p: Params):
         model, loader, p.num_class, p.feature_dim, device, return_counts=False
     )
 
-    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    model_state = clone_cpu_state(model.state_dict())
     return {
         "loss": avg_loss_ce,
         "loss_proto": avg_loss_proto,

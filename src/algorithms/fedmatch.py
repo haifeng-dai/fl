@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     fmt_num,
     get_model,
     kl_loss,
@@ -50,11 +51,6 @@ class Params(BaseParams):
     lambda_l1: float
     l1_thres: float
     delta_thres: float
-
-
-def clone_cpu_state(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """返回完全在 CPU、无梯度且独立存储的 state_dict 副本。"""
-    return {k: v.cpu().detach().clone() for k, v in state.items()}
 
 
 def init_psi_state(
@@ -229,7 +225,7 @@ class DecomposedModel(nn.Module):
             if name not in theta_buffers:
                 raise KeyError(f"Real buffer '{name}' missing in theta named_buffers")
             s_state[name] = theta_buffers[name]
-        return {k: v.cpu().detach().clone() for k, v in s_state.items()}
+        return clone_cpu_state(s_state)
 
     def psi_state_dict(self) -> dict[str, torch.Tensor]:
         """导出仅包含 parameters 的 psi 状态字典。"""

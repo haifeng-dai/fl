@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     evaluate_model,
     fmt_num,
     get_model,
@@ -104,12 +105,8 @@ def train(p: Params):
 
     avg_loss_g = total_loss_g / num_batches
     avg_loss_l = total_loss_l / num_batches
-    global_state = {
-        k: v.cpu().detach().clone() for k, v in global_model.state_dict().items()
-    }
-    local_state = {
-        k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()
-    }
+    global_state = clone_cpu_state(global_model.state_dict())
+    local_state = clone_cpu_state(local_model.state_dict())
     return {
         "loss": avg_loss_l,
         "loss_global": avg_loss_g,

@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     dist_contrastive_loss,
     fmt_num,
     get_model,
@@ -181,8 +182,8 @@ def train(p: Params):
 
         avg_loss_p = total_loss_p / num_batches_p
 
-    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    pln_state = {k: v.cpu().detach().clone() for k, v in pln.state_dict().items()}
+    model_state = clone_cpu_state(model.state_dict())
+    pln_state = clone_cpu_state(pln.state_dict())
     return {
         "loss": avg_loss_m,
         "loss_proto": avg_loss_p,

@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     get_model,
 )
 
@@ -54,7 +55,7 @@ def train(p: BaseParams):
     avg_loss = total_loss / max(1, num_batches)
 
     # 4. 整理返回结果（将模型状态移至 CPU 以节省 GPU 显存容量消耗）
-    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    model_state = clone_cpu_state(model.state_dict())
     return {"loss": avg_loss, "state": model_state}
 
 

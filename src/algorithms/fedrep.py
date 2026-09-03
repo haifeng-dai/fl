@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     fmt_num,
     get_model,
     param_aggregate,
@@ -78,13 +79,8 @@ def train(p: Params):
 
     return {
         "loss": total_loss / num_batches,  # avg_loss
-        "body": {
-            k: v.cpu().detach().clone() for k, v in model.extractor.state_dict().items()
-        },  # body_state
-        "head": {
-            k: v.cpu().detach().clone()
-            for k, v in model.classifier.state_dict().items()
-        },  # head_state
+        "body": clone_cpu_state(model.extractor.state_dict()),  # body_state
+        "head": clone_cpu_state(model.classifier.state_dict()),  # head_state
     }
 
 

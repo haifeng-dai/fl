@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from .utils import BaseParams, BaseServer, get_model
+from .utils import BaseParams, BaseServer, clone_cpu_state, get_model
 from .utils.augment import sage_strong_augment, sage_weak_augment
 from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
 
@@ -149,9 +149,7 @@ def train(p: Params):
             pseudo_confidence_sum += diagnostics["pseudo_confidence_sum"]
             num_batches += 1
 
-    state = {
-        key: value.cpu().detach().clone() for key, value in student.state_dict().items()
-    }
+    state = clone_cpu_state(student.state_dict())
     return {
         "state": state,
         "loss": total_loss / max(1, num_batches),
@@ -203,10 +201,7 @@ class Server(BaseServer):
         for round_id in range(self.rounds):
             started = time.time()
             selected = sorted(torch.randperm(self.num_clients)[:num_join].tolist())
-            teacher_state = {
-                key: value.cpu().detach().clone()
-                for key, value in self.model.state_dict().items()
-            }
+            teacher_state = clone_cpu_state(self.model.state_dict())
             parameters = [
                 Params(
                     **asdict(base),

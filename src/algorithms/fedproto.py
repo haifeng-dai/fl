@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     extract_prototypes,
     fmt_num,
     get_model,
@@ -77,7 +78,7 @@ def train(p: Params):
 
     return {
         "loss": total_loss / num_batches,
-        "state": {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},
+        "state": clone_cpu_state(model.state_dict()),
         "protos": local_protos,
         "counts": local_counts,
     }

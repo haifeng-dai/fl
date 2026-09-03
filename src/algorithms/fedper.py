@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     get_model,
     param_aggregate,
 )
@@ -56,12 +57,8 @@ def train(p: Params):
 
     avg_loss = total_loss / num_batches
     # 将拆分后的特征提取器和分类头状态返回，以实现高效通信
-    new_body = {
-        k: v.cpu().detach().clone() for k, v in model.extractor.state_dict().items()
-    }
-    new_head = {
-        k: v.cpu().detach().clone() for k, v in model.classifier.state_dict().items()
-    }
+    new_body = clone_cpu_state(model.extractor.state_dict())
+    new_head = clone_cpu_state(model.classifier.state_dict())
     return {"loss": avg_loss, "body": new_body, "head": new_head}
 
 

@@ -6,7 +6,14 @@ from dataclasses import asdict, dataclass
 import torch
 import torch.nn.functional as F
 
-from .utils import BaseParams, BaseServer, fmt_num, get_model, masked_kl_loss
+from .utils import (
+    BaseParams,
+    BaseServer,
+    clone_cpu_state,
+    fmt_num,
+    get_model,
+    masked_kl_loss,
+)
 from .utils.augment import sage_strong_augment, sage_weak_augment
 from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
 
@@ -119,10 +126,7 @@ def train(p: Params):
             steps += 1
 
     return {
-        "state": {
-            key: value.cpu().detach().clone()
-            for key, value in model_l.state_dict().items()
-        },
+        "state": clone_cpu_state(model_l.state_dict()),
         "loss": loss_sum / max(1, steps),
         "loss_x_sum": loss_x_sum,
         "loss_x_count": loss_x_count,

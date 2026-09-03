@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     dist_contrastive_loss,
     evaluate_model,
     fmt_num,
@@ -226,7 +227,7 @@ def train(p: Params):
             total_loss += loss.item()
             num_batches += 1
 
-    state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    state = clone_cpu_state(model.state_dict())
     return {
         "loss": total_loss / num_batches,
         "state": state,

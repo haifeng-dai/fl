@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, Subset
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     fmt_num,
     generate_adjacency_matrix,
     get_model,
@@ -163,9 +164,7 @@ def train_phase2(p: ParamsPhase2):
 
     # 6. 整理返回结果（严格遵守伪代码：返回 alpha 更新前的聚合模型）
     return {
-        "state": {
-            k: v.cpu().detach().clone() for k, v in theta_agg.items()
-        },  # 对应伪代码 Line 16 的 theta_i^{t+1}
+        "state": clone_cpu_state(theta_agg),  # 对应伪代码 Line 16 的 theta_i^{t+1}
         "alpha": alpha.cpu().detach().clone(),  # 更新后的 alpha 用于下一轮
         "weights": w.cpu()
         .detach()

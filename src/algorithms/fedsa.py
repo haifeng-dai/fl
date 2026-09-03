@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     dist_contrastive_loss,
     extract_prototypes,
     fmt_num,
@@ -122,7 +123,7 @@ def train(p: Params):
         model, loader, p.num_class, p.feature_dim, device, return_counts=True
     )
 
-    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    model_state = clone_cpu_state(model.state_dict())
     return {
         "loss": total_loss / num_batches,
         "state": model_state,

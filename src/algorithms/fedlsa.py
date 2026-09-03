@@ -9,6 +9,7 @@ from torch import nn
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     cos_similarity,
     fmt_num,
     get_model,
@@ -155,7 +156,7 @@ def train(p: Params):
             num_batches += 1
 
     avg_loss = total_loss / num_batches
-    model_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
+    model_state = clone_cpu_state(model.state_dict())
     return {"loss": avg_loss, "state": model_state}
 
 
@@ -171,9 +172,7 @@ class Server(BaseServer):
         self.tau = args.tau
 
         # 核心：必须同步更新所有客户端的状态字典，以匹配新的 FedLSAModel 结构 (backbone/head)
-        init_state = {
-            k: v.cpu().detach().clone() for k, v in self.model.state_dict().items()
-        }
+        init_state = clone_cpu_state(self.model.state_dict())
         self.clients_state = [init_state for _ in range(self.num_clients)]
 
         # 1. 初始化随机向量 R (可学习)

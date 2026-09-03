@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, Subset
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     fmt_num,
     get_model,
 )
@@ -247,9 +248,7 @@ def train(p: Params):
     avg_loss = total_loss / num_batches
 
     # 返回结果（移动至 CPU 并克隆以彻底释放句柄）
-    model_state = {
-        k: v.cpu().detach().clone() for k, v in local_model.state_dict().items()
-    }
+    model_state = clone_cpu_state(local_model.state_dict())
     weights_cpu = None
     if ala.weights is not None:
         weights_cpu = [w.cpu().detach().clone() for w in ala.weights]

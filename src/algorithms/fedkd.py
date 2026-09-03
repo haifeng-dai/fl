@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     fmt_num,
     get_model,
     kl_loss,
@@ -227,8 +228,8 @@ def train(p: Params):
         compressed_params_g_new[name] = decompose_param(param, p.energy_threshold)
 
     # 准备返回状态数据
-    local_state = {k: v.cpu().detach().clone() for k, v in model.state_dict().items()}
-    wh_state = {k: v.cpu().detach().clone() for k, v in W_h.state_dict().items()}
+    local_state = clone_cpu_state(model.state_dict())
+    wh_state = clone_cpu_state(W_h.state_dict())
 
     return {
         "loss": avg_loss,

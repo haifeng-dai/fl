@@ -17,6 +17,7 @@ from .topology import compute_mh_weights, generate_adjacency_matrix, sinkhorn_kn
 __all__ = [
     "BaseParams",
     "BaseServer",
+    "clone_cpu_state",
     "compare_model_parameters",
     "compute_mh_weights",
     "cos_similarity",
@@ -39,6 +40,14 @@ __all__ = [
     "strong_augment",
     "weak_augment",
 ]
+
+
+def clone_cpu_state(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """返回完全在 CPU、无梯度且独立存储的 state_dict 副本。
+
+    用于客户端训练结束后的模型状态导出，防止 Ray 对象存储出现悬空引用。
+    """
+    return {k: v.cpu().detach().clone() for k, v in state.items()}
 
 
 def fmt_num(x):

@@ -6,7 +6,8 @@ import ray
 import torch
 from torch.utils.data import Dataset, Subset
 
-from ...models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
+from src.models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
+
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
 from .load_data import load_data

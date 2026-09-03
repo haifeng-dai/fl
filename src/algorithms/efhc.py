@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     compute_mh_weights,
     fmt_num,
     generate_adjacency_matrix,
@@ -77,7 +78,7 @@ def train(p: Params):
         n_params += diff.numel()
     change = math.sqrt(diff_sq / n_params)
 
-    new_state = {k: v.cpu().detach().clone() for k, v in new_state.items()}
+    new_state = clone_cpu_state(new_state)
     return {"loss": avg_loss, "state": new_state, "change": change}
 
 
@@ -175,9 +176,7 @@ class Server(BaseServer):
 
             for i in triggered_ids:
                 self.clients_state[i] = new_states[i]
-                self.hat_states[i] = {
-                    k: v.cpu().detach().clone() for k, v in new_states[i].items()
-                }
+                self.hat_states[i] = clone_cpu_state(new_states[i])
 
         n_triggered = len(triggered_ids)
         self.triggered_log.append(n_triggered)

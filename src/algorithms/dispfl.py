@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     fmt_num,
     generate_adjacency_matrix,
     get_model,
@@ -146,9 +147,7 @@ def train(p: Params):
 
     return {
         "loss": total_loss / num_batches,  # avg_loss
-        "state": {
-            k: v.cpu().detach().clone() for k, v in model.state_dict().items()
-        },  # model_state
+        "state": clone_cpu_state(model.state_dict()),  # model_state
         "masks": new_masks,  # updated_masks
         "acc": correct / total if total > 0 else 0.0,  # accuracy
     }

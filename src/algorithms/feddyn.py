@@ -9,6 +9,7 @@ from torch.nn.utils import parameters_to_vector, vector_to_parameters
 from .utils import (
     BaseParams,
     BaseServer,
+    clone_cpu_state,
     fmt_num,
     get_model,
 )
@@ -84,7 +85,7 @@ def train(p: Params):
 
     return {
         "loss": total_loss / num_batches,
-        "state": {k: v.cpu().detach().clone() for k, v in model.state_dict().items()},
+        "state": clone_cpu_state(model.state_dict()),
     }
 
 
