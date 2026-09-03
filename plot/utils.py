@@ -1,6 +1,5 @@
 import numbers
 import os
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from types import SimpleNamespace
 
@@ -59,7 +58,7 @@ class ResultLoader:
     def __init__(self, base_dir="results"):
         self.base_dir = base_dir
 
-    def _average_recursive(self, data_list):
+    def average_recursive(self, data_list):
         if not data_list:
             return None
         first = data_list[0]
@@ -68,7 +67,7 @@ class ResultLoader:
         if isinstance(first, list):
             min_len = min(len(d) for d in data_list)
             return [
-                self._average_recursive([data[i] for data in data_list])
+                self.average_recursive([data[i] for data in data_list])
                 for i in range(min_len)
             ]
         elif isinstance(first, dict):
@@ -81,11 +80,11 @@ class ResultLoader:
                     d[key] for d in data_list if isinstance(d, dict) and key in d
                 ]
                 if sub_list:
-                    res[key] = self._average_recursive(sub_list)
+                    res[key] = self.average_recursive(sub_list)
             return res
         return first
 
-    def _build_naming_args(self, algo, kwargs):
+    def build_naming_args(self, algo, kwargs):
         values = dict(kwargs)
         values["algo"] = algo
         values.setdefault("model", "cnn")
@@ -117,13 +116,13 @@ class ResultLoader:
         args.common_name = build_common_name(args)
         return args
 
-    def _resolve_folder_path(self, args, ablate_name):
+    def resolve_folder_path(self, args, ablate_name):
         folder_path = os.path.join(self.base_dir, build_result_folder(args))
         if ablate_name:
             folder_path = os.path.join(folder_path, ablate_name)
         return folder_path
 
-    def _resolve_file_name(self, args):
+    def resolve_file_name(self, args):
         try:
             _, get_path = src.load_algorithm(args.algo)
             args.log_path = ""
@@ -136,20 +135,28 @@ class ResultLoader:
             raise ValueError(f"算法 {args.algo} 未生成有效结果文件名")
         return file_name
 
-    def _discover_run_files(self, folder_path, file_name, specific_run=None):
-        if not os.path.isdir(folder_path):
-            return []
-        pattern = re.compile(rf"^{re.escape(file_name)}_(\d+)\.pt$")
-        matches = []
-        for entry in os.listdir(folder_path):
-            match = pattern.fullmatch(entry)
-            if match:
-                run = int(match.group(1))
-                if specific_run is None or run == specific_run:
-                    matches.append((run, os.path.join(folder_path, entry)))
-        return sorted(matches)
+    def resolve_result_path(self, algo, dataset, partition, num_clients, ablate_name=None, **kwargs):
+        """解析某算法结果的目录与文件名前缀（复用算法自身的 get_path 命名逻辑）。"""
+        args = self.build_naming_args(
+            algo,
+            {
+                **kwargs,
+                "dataset": dataset,
+                "partition": partition,
+                "num_clients": num_clients,
+            },
+        )
+        folder_path = self.resolve_folder_path(args, ablate_name)
+        file_name = self.resolve_file_name(args)
+        return folder_path, file_name
 
-    def _load_metrics_file(self, file_path, keys=None):
+    def run_file_path(self, folder_path, file_name, run):
+        """第 run 次 run 的结果文件完整路径。"""
+        return os.path.join(folder_path, f"{file_name}_{run}.pt")
+
+    def load_metrics_file(self, file_path, keys=None):
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"结果文件不存在: {file_path}")
         try:
             data = torch.load(file_path, map_location="cpu", weights_only=True)
         except Exception as exc:
@@ -164,41 +171,19 @@ class ResultLoader:
         dataset,
         partition,
         num_clients,
-        specific_run=None,
+        runs,
         ablate_name=None,
         keys=None,
         **kwargs,
     ):
-        args = self._build_naming_args(
-            algo,
-            {
-                **kwargs,
-                "dataset": dataset,
-                "partition": partition,
-                "num_clients": num_clients,
-            },
+        """严格直读第 0..runs-1 次 run 的结果文件；任一缺失立即抛 FileNotFoundError。"""
+        folder_path, file_name = self.resolve_result_path(
+            algo, dataset, partition, num_clients, ablate_name, **kwargs
         )
-        folder_path = self._resolve_folder_path(args, ablate_name)
-        try:
-            file_name = self._resolve_file_name(args)
-        except ValueError as exc:
-            print(f"  [错误] {exc}")
-            return []
-        files = self._discover_run_files(folder_path, file_name, specific_run)
-        if not files:
-            candidates = []
-            if os.path.isdir(folder_path):
-                candidates = sorted(
-                    entry
-                    for entry in os.listdir(folder_path)
-                    if entry.endswith(".pt") and not entry.endswith("_params.pt")
-                )
-            print(
-                f"  [提示] 未找到结果：目录={folder_path}，期望前缀={file_name}，"
-                f"同目录候选={candidates}"
-            )
-            return []
-        return [self._load_metrics_file(path, keys) for _, path in files]
+        return [
+            self.load_metrics_file(self.run_file_path(folder_path, file_name, run), keys)
+            for run in range(runs)
+        ]
 
     def load(
         self,
@@ -207,28 +192,34 @@ class ResultLoader:
         partition,
         num_clients,
         specific_run=None,
+        runs=None,
         ablate_name=None,
         keys=None,
         **kwargs,
     ):
-        loaded_data = self.load_runs(
-            algo,
-            dataset,
-            partition,
-            num_clients,
-            specific_run,
-            ablate_name,
-            keys,
-            **kwargs,
+        """读取结果：specific_run=k 读单次；runs=N 读第 0..N-1 次并求均值。
+
+        两者必须显式二选一，文件缺失或损坏直接抛错，不做任何静默兜底。
+        """
+        if (specific_run is None) == (runs is None):
+            raise ValueError(
+                "必须显式指定 specific_run=k（单次 run）或 runs=N（0..N-1 求均值）之一"
+            )
+        folder_path, file_name = self.resolve_result_path(
+            algo, dataset, partition, num_clients, ablate_name, **kwargs
         )
-        if not loaded_data:
-            return None
-        if len(loaded_data) == 1:
-            return loaded_data[0]
-        keys_to_average = set().union(*(data.keys() for data in loaded_data))
+        if specific_run is not None:
+            return self.load_metrics_file(
+                self.run_file_path(folder_path, file_name, specific_run), keys
+            )
+        data_list = [
+            self.load_metrics_file(self.run_file_path(folder_path, file_name, run), keys)
+            for run in range(runs)
+        ]
+        keys_to_average = set().union(*(data.keys() for data in data_list))
         return {
-            key: self._average_recursive(
-                [data[key] for data in loaded_data if key in data]
+            key: self.average_recursive(
+                [data[key] for data in data_list if key in data]
             )
             for key in keys_to_average
         }
@@ -240,7 +231,7 @@ class ResultLoader:
             raise ValueError("load_file 只接受 .pt 指标文件")
         if not os.path.isfile(metrics_path):
             raise FileNotFoundError(metrics_path)
-        return self._load_metrics_file(metrics_path, keys)
+        return self.load_metrics_file(metrics_path, keys)
 
 
 def plot_results(
@@ -315,6 +306,7 @@ def plot_results(
     plt.ylabel(ylabel)
     plt.legend(loc="lower right", fontsize=14)
     plt.grid(True, alpha=0.3)
+    plt.xlim(0, x_lim)
     plt.tight_layout()
 
     save_name = (title or "comparison").lower().replace(" ", "_").replace(
@@ -333,7 +325,6 @@ def plot_results(
             f"{entry['Algorithm']:<20} | {entry['Max']:>15.4f} | {entry['Last10']:>15.4f}"
         )
     print("-" * 65)
-    plt.xlim(0, x_lim)
 
     plt.show()
 
@@ -484,7 +475,7 @@ def plot_results_split(
     plt.show()
 
 
-def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
+def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss", x_lim=None):
     plt.figure(figsize=(12, 7))
     for label, data in results_dict.items():
         if data is None:
@@ -536,6 +527,8 @@ def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
     plt.legend(loc="lower right", fontsize=14)
     plt.grid(True, alpha=0.3)
     plt.yscale("log")
+    if x_lim is not None:
+        plt.xlim(0, x_lim)
     plt.tight_layout()
 
     save_name = (title or "loss_comparison").lower().replace(" ", "_").replace(
@@ -543,6 +536,103 @@ def plot_loss(results_dict, title=None, xlabel="Rounds", ylabel="Loss"):
     ).replace(")", "") + ".png"
     plt.savefig(os.path.join("figures", save_name), dpi=300)
     print(f"Figure saved to figures/{save_name}")
+    plt.show()
+
+
+def plot_sfd_results(results_dict, x_lim, title=None, show_proto=True):
+    """
+    SFD 场景三面板对比图：Overall / Source (Labeled) / Target (Unlabeled)。
+
+    show_proto=True 时：Overall 面板叠加 acc_proto 虚线，Target 面板叠加
+    source_proto_on_target 虚线。某算法缺少对应 key 时该线不画。
+    三子图 xlim 在 savefig 之前设置，保证落盘图片与屏幕显示一致。
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(24, 7))
+    ax_overall, ax_source, ax_target = axes
+    panels = [
+        (ax_overall, "Overall", "acc"),
+        (ax_source, "Source (Labeled)", "acc_source"),
+        (ax_target, "Target (Unlabeled)", "acc_target"),
+    ]
+    summary = []
+
+    for label, data in results_dict.items():
+        if data is None:
+            continue
+        display_label = beautify_label(label)
+        row = {"Algorithm": display_label}
+        for ax, panel_name, key in panels:
+            series = data.get(key)
+            if series is None:
+                continue
+            y = series[0:x_lim]
+            if len(y) == 0:
+                continue
+            (line,) = ax.plot(y, label=display_label)
+            row[panel_name] = (
+                max(y),
+                float(np.mean(y[-10:])) if len(y) >= 10 else float(np.mean(y)),
+            )
+            # Target 面板叠加源原型在目标域上的表现
+            if ax is ax_target and show_proto and data.get("source_proto_on_target"):
+                py = data["source_proto_on_target"][0:x_lim]
+                ax.plot(
+                    py,
+                    linestyle="--",
+                    alpha=0.8,
+                    color=line.get_color(),
+                    label=f"{display_label} SrcProto",
+                )
+        # Overall 面板叠加全局原型准确率
+        if show_proto and data.get("acc_proto"):
+            py = data["acc_proto"][0:x_lim]
+            ax_overall.plot(
+                py,
+                linestyle="--",
+                alpha=0.8,
+                label=f"{display_label} Proto",
+            )
+        summary.append(row)
+
+    for ax, panel_name, _ in panels:
+        ax.set_title(panel_name, fontsize=13, fontweight="bold")
+        ax.set_xlabel("Rounds")
+        ax.set_ylabel("Accuracy (%)")
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, x_lim)
+        ax.legend(loc="lower right", fontsize=11)
+
+    fig.suptitle(title or "SFD Comparison", fontsize=15)
+    plt.tight_layout()
+
+    save_base = (
+        (title or "sfd_comparison")
+        .lower()
+        .replace(" ", "_")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("->", "to")
+        .replace("__", "_")
+    )
+    save_name = f"sfd_{save_base}.png"
+    plt.savefig(os.path.join("figures", save_name), dpi=300)
+    print(f"Figure saved to figures/{save_name}")
+
+    print("Summary of SFD Accuracy:")
+    header = f"{'Algorithm':<22} | {'O-Max':>8} | {'O-Last10':>8} | {'S-Max':>8} | {'S-Last10':>8} | {'T-Max':>8} | {'T-Last10':>8}"
+    print("-" * len(header))
+    print(header)
+    print("-" * len(header))
+    for row in summary:
+        cells = [f"{row['Algorithm']:<22}"]
+        for panel in ("Overall", "Source (Labeled)", "Target (Unlabeled)"):
+            if panel in row:
+                cells.append(f"{row[panel][0]:>8.4f} | {row[panel][1]:>8.4f}")
+            else:
+                cells.append(f"{'-':>8} | {'-':>8}")
+        print(" | ".join(cells))
+    print("-" * len(header))
+
     plt.show()
 
 
@@ -556,46 +646,45 @@ def load_plot(
 ):
     """
     加载并绘制对比图，根据数据格式自动识别是单线还是 Model/Proto 分离。
+    加载失败（文件缺失/命名参数缺失）直接抛错，不做静默跳过。
     """
     results = {}
     for label in selected_group:
         if label not in experiments:
             continue
         algo_name, kwargs = experiments[label]
-        data = loader.load(algo_name, **{**common_args, **kwargs}, specific_run=0)
-        if data:
-            results[label] = data
+        results[label] = loader.load(
+            algo_name, **{**common_args, **kwargs}, specific_run=0
+        )
 
-    if results:
-        if not do_plot:
-            print_summary_table(results, x_lim, metric="acc")
-            return
+    if not results:
+        raise ValueError("没有任何实验被加载：selected_group 与 experiments 均为空")
 
-        # 尝试检查第一个结果的 'acc' 类型来决定绘图函数
-        first_res = next(iter(results.values()))
-        if isinstance(first_res.get("acc"), dict):
-            plot_results_split(
-                results,
-                x_lim,
-                metric="acc",
-                title=f"Test Accuracy on {common_args['dataset']} ({common_args['partition']})",
-            )
-        else:
-            plot_results(
-                results,
-                x_lim,
-                metric="acc",
-                title=f"Test Accuracy on {common_args['dataset']} ({common_args['partition']})",
-            )
+    if not do_plot:
+        print_summary_table(results, x_lim, metric="acc")
+        return
+
+    # 尝试检查第一个结果的 'acc' 类型来决定绘图函数
+    first_res = next(iter(results.values()))
+    if isinstance(first_res.get("acc"), dict):
+        plot_results_split(
+            results,
+            x_lim,
+            metric="acc",
+            title=f"Test Accuracy on {common_args['dataset']} ({common_args['partition']})",
+        )
     else:
-        print(
-            "\n[Error] No results loaded. Check the warnings above for path/parameter mismatches."
+        plot_results(
+            results,
+            x_lim,
+            metric="acc",
+            title=f"Test Accuracy on {common_args['dataset']} ({common_args['partition']})",
         )
 
 
-def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=1000):
+def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=1000, *, runs):
     """
-    加载并统计多轮实验的均值和标准差。
+    加载并统计多轮实验的均值和标准差。runs 必填：直读第 0..runs-1 次结果。
     """
     print("Summary of ALL RUNS (Mean ± Std):")
     header = f"{'Algorithm':<25} | {'Max Acc':>20} | {'Last 10 Avg':>20}"
@@ -609,7 +698,7 @@ def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=1
         algo_name, kwargs = experiments[label]
         merged_args = {**common_args, **kwargs}
 
-        run_results = loader.load_runs(algo_name, **merged_args)
+        run_results = loader.load_runs(algo_name, runs=runs, **merged_args)
 
         if not run_results:
             continue
@@ -661,9 +750,10 @@ def load_plot_all_runs(selected_group, experiments, common_args, loader, x_lim=1
                     )
 
 
-def print_stats(selected_group, experiments, common_args, loader, x_lim=1000):
+def print_stats(selected_group, experiments, common_args, loader, x_lim=1000, *, runs):
     """
     加载并打印多轮实验的均值汇总（Model 和 Proto 分列显示）。
+    runs 必填：直读第 0..runs-1 次结果，缺失即抛错。
     """
     print("Summary of Performance (Mean over runs):")
     # 表头：Algorithm | Model Max | Model Last | Proto Max | Proto Last
@@ -678,7 +768,7 @@ def print_stats(selected_group, experiments, common_args, loader, x_lim=1000):
         algo_name, kwargs = experiments[label]
         merged_args = {**common_args, **kwargs}
 
-        run_results = loader.load_runs(algo_name, **merged_args)
+        run_results = loader.load_runs(algo_name, runs=runs, **merged_args)
 
         if not run_results:
             continue
@@ -745,15 +835,15 @@ def print_stats(selected_group, experiments, common_args, loader, x_lim=1000):
         )
 
 
-def _freeze_cache_value(value):
+def freeze_cache_value(value):
     if isinstance(value, dict):
         return tuple(
-            sorted((key, _freeze_cache_value(item)) for key, item in value.items())
+            sorted((key, freeze_cache_value(item)) for key, item in value.items())
         )
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze_cache_value(item) for item in value)
+        return tuple(freeze_cache_value(item) for item in value)
     if isinstance(value, set):
-        return tuple(sorted(_freeze_cache_value(item) for item in value))
+        return tuple(sorted(freeze_cache_value(item) for item in value))
     return value
 
 
@@ -779,7 +869,7 @@ def batch_cached_load(loader, algo, specs, data_cache=None, keys=None, max_worke
     missing_specs = []
 
     for i, kw in enumerate(specs):
-        kt = _freeze_cache_value(kw)
+        kt = freeze_cache_value(kw)
         kk = tuple(keys) if keys else None
         ck = (algo, kk, kt)
         cache_keys.append(ck)
@@ -792,12 +882,12 @@ def batch_cached_load(loader, algo, specs, data_cache=None, keys=None, max_worke
     if not missing_specs:
         return cached
 
-    def _load_one(kw):
+    def load_one(kw):
         return loader.load(algo, keys=keys, **kw)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         fut_map = {
-            pool.submit(_load_one, kw): i for i, kw in zip(missing_idx, missing_specs)
+            pool.submit(load_one, kw): i for i, kw in zip(missing_idx, missing_specs)
         }
         for fut in as_completed(fut_map):
             i = fut_map[fut]
