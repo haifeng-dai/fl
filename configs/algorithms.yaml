@@ -113,6 +113,27 @@ proxyfl_ssl:
     gpt_threshold: 100.0
     ema_beta: 0.99
 
+# 可靠原型驱动的联邦半监督学习（诊断版默认参数）
+fedproto_ssl:
+    proto_temperature: 0.1
+    candidate_threshold: 0.5
+    exclude_threshold: 0.1
+    lambda_ambiguous: 1.0
+    lambda_negative: 0.5
+    # 冒烟日志显示早期高置信伪标签准确率很低，先保守降低伪标签对局部原型的贡献。
+    pseudo_proto_weight: 0.1
+    proto_support_scale: 10.0
+    proto_stability_temperature: 0.1
+    # 2 轮预热 + 3 轮渐进开启，3 轮快速测试即可触发一次原型指导。
+    proto_warmup_rounds: 2
+    proto_ramp_rounds: 3
+    server_epochs: 30
+    server_lr: 0.01
+    server_separation_weight: 0.1
+    server_margin: 0.2
+    server_max_momentum: 0.5
+    server_proto_support_scale: 5.0
+
 efhc:
     event_r: 250
     bandwidth_mean: 5000
