@@ -59,9 +59,18 @@ def train(p: Params):
     pseudo_selected = 0
     pseudo_total = 0
     pseudo_confidence_sum = 0.0
+    g_selected = 0
+    l_selected = 0
+    global_correct = 0
+    local_correct = 0
+    g_selected_correct = 0
+    l_selected_correct = 0
+    final_selected_correct = 0
+    conflict_g_wins = 0
+    conflict_l_wins = 0
     steps = 0
     for _ in range(p.epochs):
-        for labeled, (x_u, _) in iterate_ssl_batches(loaders):
+        for labeled, (x_u, y_u) in iterate_ssl_batches(loaders):
             # SAGE 仅支持 sample/double/sfd 混合模式，每客户端必有有标签样本
             assert labeled is not None
             x_l, y_l = labeled
@@ -69,6 +78,7 @@ def train(p: Params):
             # ── 数据增强：有标签弱增强，无标签弱/强增强 ──
             x_l = sage_weak_augment(x_l, p.dataset).to(device)
             y_l = y_l.to(device)
+            y_u = y_u.to(device)
             x_u_w = sage_weak_augment(x_u, p.dataset).to(device)
             x_u_s = sage_strong_augment(x_u, p.dataset).to(device)
 
@@ -105,11 +115,35 @@ def train(p: Params):
 
             # ── 无监督损失：强增强预测与伪标签目标的 KL 散度 ──
             unsupervised_loss = masked_kl_loss(logits_u_s, targets, valid_mask)
-            pseudo_selected += int(valid_mask.sum().item())
+            cur_valid = int(valid_mask.sum().item())
+            pseudo_selected += cur_valid
             pseudo_total += int(valid_mask.numel())
             pseudo_confidence_sum += (
                 (torch.maximum(confidence_l, confidence_g) * valid_mask).sum().item()
             )
+
+            # ── 伪标签质量与命中率监控 ──
+            b_mask_g = mask_g.bool()
+            b_mask_l = mask_l.bool()
+            b_valid = valid_mask.bool()
+            g_selected += int(b_mask_g.sum().item())
+            l_selected += int(b_mask_l.sum().item())
+
+            g_match = targets_g == y_u
+            l_match = targets_l == y_u
+            global_correct += int(g_match.sum().item())
+            local_correct += int(l_match.sum().item())
+
+            g_selected_correct += int((g_match & b_mask_g).sum().item())
+            l_selected_correct += int((l_match & b_mask_l).sum().item())
+
+            final_targets = targets.argmax(dim=-1)
+            final_selected_correct += int(((final_targets == y_u) & b_valid).sum().item())
+
+            # 冲突判定：两者均通过阈值但预测类别不同，谁判断更正确
+            conflict_mask = b_mask_g & b_mask_l & (targets_g != targets_l)
+            conflict_g_wins += int((g_match & conflict_mask).sum().item())
+            conflict_l_wins += int((l_match & conflict_mask).sum().item())
 
             # ── 总损失：有监督 + λu × 无监督 ──
             loss = supervised_loss + p.lambda_u * unsupervised_loss
@@ -135,6 +169,15 @@ def train(p: Params):
         "pseudo_selected": pseudo_selected,
         "pseudo_total": pseudo_total,
         "pseudo_confidence_sum": pseudo_confidence_sum,
+        "g_selected": g_selected,
+        "l_selected": l_selected,
+        "global_correct": global_correct,
+        "local_correct": local_correct,
+        "g_selected_correct": g_selected_correct,
+        "l_selected_correct": l_selected_correct,
+        "final_selected_correct": final_selected_correct,
+        "conflict_g_wins": conflict_g_wins,
+        "conflict_l_wins": conflict_l_wins,
     }
 
 
@@ -154,6 +197,14 @@ class Server(BaseServer):
         self.pseudo_confidence = []
         self.pseudo_selected = []
         self.pseudo_total = []
+        self.u_usage_ratio = []
+        self.g_select_ratio = []
+        self.l_select_ratio = []
+        self.global_pseudo_acc = []
+        self.local_pseudo_acc = []
+        self.g_selected_acc = []
+        self.l_selected_acc = []
+        self.final_pseudo_acc = []
         self.round_timing = []
 
         for dataset in self.train_sets.values():
@@ -190,6 +241,15 @@ class Server(BaseServer):
             pseudo_selected = 0
             pseudo_total = 0
             pseudo_confidence_sum = 0.0
+            g_selected = 0
+            l_selected = 0
+            global_correct = 0
+            local_correct = 0
+            g_selected_correct = 0
+            l_selected_correct = 0
+            final_selected_correct = 0
+            conflict_g_wins = 0
+            conflict_l_wins = 0
             for cid, res in results.items():
                 selected_states.append(res["state"])
                 current_weights.append(self.weights[cid])
@@ -201,24 +261,59 @@ class Server(BaseServer):
                 pseudo_selected += res["pseudo_selected"]
                 pseudo_total += res["pseudo_total"]
                 pseudo_confidence_sum += res["pseudo_confidence_sum"]
+                g_selected += res["g_selected"]
+                l_selected += res["l_selected"]
+                global_correct += res["global_correct"]
+                local_correct += res["local_correct"]
+                g_selected_correct += res["g_selected_correct"]
+                l_selected_correct += res["l_selected_correct"]
+                final_selected_correct += res["final_selected_correct"]
+                conflict_g_wins += res["conflict_g_wins"]
+                conflict_l_wins += res["conflict_l_wins"]
             sum_weights = sum(current_weights)
             norm_weights = [w / sum_weights for w in current_weights]
             self.aggregate(selected_states, weights=norm_weights)
+
+            tot_u_safe = max(1, pseudo_total)
+            u_usage_ratio = pseudo_selected / tot_u_safe
+            g_select_ratio = g_selected / tot_u_safe
+            l_select_ratio = l_selected / tot_u_safe
+            global_pseudo_acc = global_correct / tot_u_safe
+            local_pseudo_acc = local_correct / tot_u_safe
+            g_selected_acc = g_selected_correct / max(1, g_selected)
+            l_selected_acc = l_selected_correct / max(1, l_selected)
+            final_pseudo_acc = final_selected_correct / max(1, pseudo_selected)
 
             self.loss_x.append(x_loss_sum / x_count)
             self.loss_u.append(u_loss_sum / u_count)
             self.loss.append(total_loss / num_join)
             self.pseudo_selected.append(pseudo_selected)
             self.pseudo_total.append(pseudo_total)
-            self.pseudo_coverage.append(100.0 * pseudo_selected / max(1, pseudo_total))
+            self.pseudo_coverage.append(100.0 * u_usage_ratio)
             self.pseudo_confidence.append(
                 pseudo_confidence_sum / max(1, pseudo_selected)
             )
+            self.u_usage_ratio.append(u_usage_ratio)
+            self.g_select_ratio.append(g_select_ratio)
+            self.l_select_ratio.append(l_select_ratio)
+            self.global_pseudo_acc.append(global_pseudo_acc)
+            self.local_pseudo_acc.append(local_pseudo_acc)
+            self.g_selected_acc.append(g_selected_acc)
+            self.l_selected_acc.append(l_selected_acc)
+            self.final_pseudo_acc.append(final_pseudo_acc)
+
             self.evaluate()
             self.round_timing.append(time.time() - started)
             print(
                 f"Accuracy: {self.acc[-1]:.2f}% | Loss: {self.loss[-1]:.4f} | "
-                f"Pseudo coverage: {self.pseudo_coverage[-1]:.2f}%"
+                f"U-Usage: {u_usage_ratio * 100:.2f}% (G_sel={g_select_ratio * 100:.2f}%, L_sel={l_select_ratio * 100:.2f}%)"
+            )
+            print(
+                f"Selected Acc: Final={final_pseudo_acc * 100:.2f}%, G_sel_acc={g_selected_acc * 100:.2f}%, L_sel_acc={l_selected_acc * 100:.2f}% | "
+                f"Conflict (G/L wins): {conflict_g_wins}/{conflict_l_wins}"
+            )
+            print(
+                f"Direct Pseudo Acc: Global={global_pseudo_acc * 100:.2f}%, Local={local_pseudo_acc * 100:.2f}%"
             )
             print(f"Round finished in {time.time() - started:.2f} seconds")
 
@@ -232,6 +327,14 @@ class Server(BaseServer):
             "pseudo_confidence": self.pseudo_confidence,
             "pseudo_selected": self.pseudo_selected,
             "pseudo_total": self.pseudo_total,
+            "u_usage_ratio": self.u_usage_ratio,
+            "g_select_ratio": self.g_select_ratio,
+            "l_select_ratio": self.l_select_ratio,
+            "global_pseudo_acc": self.global_pseudo_acc,
+            "local_pseudo_acc": self.local_pseudo_acc,
+            "g_selected_acc": self.g_selected_acc,
+            "l_selected_acc": self.l_selected_acc,
+            "final_pseudo_acc": self.final_pseudo_acc,
             "round_time": self.round_timing,
         }
         params = {"global": self.model.state_dict()}

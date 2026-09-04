@@ -1,15 +1,6 @@
 __pycache__/
-.venv/
-.ruff_cache/
 datasets/
-test/
 results/
 logs/
-figures/
-scratch/
-docs/
-tests/
 
-.geminiignore
-AGENTS.md
 uv.lock

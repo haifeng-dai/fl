@@ -184,9 +184,9 @@ class Server(BaseServer):
     def save(self):
         metrics = {
             "acc": self.acc,
-            "acc_g": self.acc_g,
+            "acc_global": self.acc_g,
             "loss": self.loss,
-            "loss_g": self.loss_g,
+            "loss_global": self.loss_g,
         }
         params = {"global": self.model.state_dict(), "client": self.clients_state}
         self.deal_save(metrics, params)

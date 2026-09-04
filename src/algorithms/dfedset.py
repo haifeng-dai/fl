@@ -458,7 +458,7 @@ class Server(BaseServer):
     def save(self):
         metrics = {
             "acc": self.acc,
-            "acc_p": self.acc_proto,
+            "acc_proto": self.acc_proto,
             "loss": self.loss,
             "gsd": self.gsd_log,
             "num_triggered": self.num_triggered_log,

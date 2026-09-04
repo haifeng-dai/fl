@@ -60,11 +60,16 @@ def train(p: Params):
         weight_decay=p.weight_decay,
     )
     class_counts = torch.zeros(p.num_class, device=device)
-    pseudo_total = 0
-    pseudo_correct = 0
-    pseudo_valid = 0
     total_loss = 0.0
     num_batches = 0
+    u_total = 0
+    u_active_count = 0
+    hc_count = 0
+    hc_correct = 0
+    lc_count = 0
+    lc_hit = 0
+    global_correct = 0
+    local_correct = 0
 
     model.train()
     for local_epoch in range(p.epochs):
@@ -221,9 +226,22 @@ def train(p: Params):
                 class_counts += F.one_hot(y_l, p.num_class).float().sum(dim=0)
                 valid = hc_mask.bool()
                 class_counts += F.one_hot(y_hat[valid], p.num_class).float().sum(dim=0)
-                pseudo_total += len(y_hat)
-                pseudo_correct += (y_hat == y_u).sum().item()
-                pseudo_valid += valid.sum().item()
+
+                u_batch_size = len(y_u)
+                u_total += u_batch_size
+                u_active_count += len(active_idx)
+                cur_hc = valid.sum().item()
+                hc_count += cur_hc
+                hc_correct += ((y_hat == y_u) & valid).sum().item()
+                cur_lc = u_batch_size - cur_hc
+                lc_count += cur_lc
+                # 检查真实标签 y_u 是否在犹豫候选集 xi_lc 中
+                y_u_indices = torch.arange(u_batch_size, device=device)
+                in_lc = xi_lc[y_u_indices, y_u] & (~valid)
+                lc_hit += in_lc.sum().item()
+                global_correct += (y_hat == y_u).sum().item()
+                y_local = y_tilde.argmax(dim=-1)
+                local_correct += (y_local == y_u).sum().item()
             total_loss += loss.item()
             num_batches += 1
 
@@ -233,9 +251,14 @@ def train(p: Params):
         "state": state,
         "num_samples": len(p.train_set.y),
         "class_counts": class_counts.cpu().detach().clone(),
-        "pseudo_total": pseudo_total,
-        "pseudo_correct": pseudo_correct,
-        "pseudo_valid": pseudo_valid,
+        "u_total": u_total,
+        "u_active_count": u_active_count,
+        "hc_count": hc_count,
+        "hc_correct": hc_correct,
+        "lc_count": lc_count,
+        "lc_hit": lc_hit,
+        "global_correct": global_correct,
+        "local_correct": local_correct,
     }
 
 
@@ -262,6 +285,12 @@ class Server(BaseServer):
         self.pseudo_acc = []
         self.valid_ratio = []
         self.num_valid = []
+        self.hc_acc = []
+        self.hc_ratio = []
+        self.lc_hit_ratio = []
+        self.active_ratio = []
+        self.global_pseudo_acc = []
+        self.local_pseudo_acc = []
         self.fedavg_acc = []
         self.fedavg_pred_dist = []
         self.gpt_pred_dist = []
@@ -375,17 +404,27 @@ class Server(BaseServer):
             sample_counts = []
             class_counts = []
             total_loss = 0.0
-            total_pseudo = 0
-            correct_pseudo = 0
-            valid_pseudo = 0
+            total_u = 0
+            total_active = 0
+            total_hc = 0
+            total_hc_correct = 0
+            total_lc = 0
+            total_lc_hit = 0
+            total_global_correct = 0
+            total_local_correct = 0
             for res in results.values():
                 states.append(res["state"])
                 sample_counts.append(res["num_samples"])
                 class_counts.append(res["class_counts"])
                 total_loss += res["loss"]
-                total_pseudo += res["pseudo_total"]
-                correct_pseudo += res["pseudo_correct"]
-                valid_pseudo += res["pseudo_valid"]
+                total_u += res["u_total"]
+                total_active += res["u_active_count"]
+                total_hc += res["hc_count"]
+                total_hc_correct += res["hc_correct"]
+                total_lc += res["lc_count"]
+                total_lc_hit += res["lc_hit"]
+                total_global_correct += res["global_correct"]
+                total_local_correct += res["local_correct"]
             total_samples = sum(sample_counts)
             weights = [count / total_samples for count in sample_counts]
             self.model.load_state_dict(param_aggregate(states, weights))
@@ -403,15 +442,37 @@ class Server(BaseServer):
 
             self.loss.append(total_loss / num_join)
             self.evaluate()
-            pseudo_acc = correct_pseudo / total_pseudo
-            valid_ratio = valid_pseudo / total_pseudo
-            self.pseudo_acc.append(pseudo_acc)
-            self.valid_ratio.append(valid_ratio)
-            self.num_valid.append(valid_pseudo)
+
+            u_tot_safe = max(1, total_u)
+            hc_ratio = total_hc / u_tot_safe
+            hc_acc = total_hc_correct / max(1, total_hc)
+            lc_hit_ratio = total_lc_hit / max(1, total_lc)
+            active_ratio = total_active / u_tot_safe
+            global_pseudo_acc = total_global_correct / u_tot_safe
+            local_pseudo_acc = total_local_correct / u_tot_safe
+
+            # 保持旧字段兼容
+            self.pseudo_acc.append(global_pseudo_acc)
+            self.valid_ratio.append(hc_ratio)
+            self.num_valid.append(total_hc)
+
+            self.hc_ratio.append(hc_ratio)
+            self.hc_acc.append(hc_acc)
+            self.lc_hit_ratio.append(lc_hit_ratio)
+            self.active_ratio.append(active_ratio)
+            self.global_pseudo_acc.append(global_pseudo_acc)
+            self.local_pseudo_acc.append(local_pseudo_acc)
+
             print(
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
-            print(f"Pseudo Acc: {pseudo_acc:.4f}, Valid Ratio: {valid_ratio:.4f}")
+            print(
+                f"U-Usage: HC Ratio={hc_ratio * 100:.2f}%, Active Ratio={active_ratio * 100:.2f}% | "
+                f"HC Acc: {hc_acc * 100:.2f}%, LC Hit Ratio: {lc_hit_ratio * 100:.2f}%"
+            )
+            print(
+                f"Direct Pseudo Acc: Global={global_pseudo_acc * 100:.2f}%, Local={local_pseudo_acc * 100:.2f}%"
+            )
             print(
                 f"FedAvg Acc: {fedavg_acc:.2f}%, GPT Loss: {gpt_loss:.4f}, GPT Min Class Dist: {min_class_distance:.4f}"
             )
@@ -427,6 +488,12 @@ class Server(BaseServer):
                 "pseudo_acc": self.pseudo_acc,
                 "valid_ratio": self.valid_ratio,
                 "num_valid": self.num_valid,
+                "hc_ratio": self.hc_ratio,
+                "hc_acc": self.hc_acc,
+                "lc_hit_ratio": self.lc_hit_ratio,
+                "active_ratio": self.active_ratio,
+                "global_pseudo_acc": self.global_pseudo_acc,
+                "local_pseudo_acc": self.local_pseudo_acc,
                 "fedavg_acc": self.fedavg_acc,
                 "fedavg_pred_dist": self.fedavg_pred_dist,
                 "gpt_pred_dist": self.gpt_pred_dist,
