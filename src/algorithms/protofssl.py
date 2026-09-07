@@ -300,7 +300,7 @@ class Server(BaseServer):
         if self.is_sfd:
             metrics["acc_source"] = self.acc_source
             metrics["acc_target"] = self.acc_target
-            metrics["acc_source_p"] = self.acc_source_p
-            metrics["acc_target_p"] = self.acc_target_p
+            metrics["acc_source_proto"] = self.acc_source_p
+            metrics["acc_target_proto"] = self.acc_target_p
         params = {"global": self.model.state_dict(), "proto": self.global_protos}
         self.deal_save(metrics, params)

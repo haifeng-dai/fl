@@ -44,6 +44,9 @@ fedrep:
 fedproto:
     mu: 0.1
 
+fedproto_g:
+    mu: 0.1
+
 fedala:
     eta: 1.0
     rand_percent: 20
@@ -52,6 +55,12 @@ fedala:
     num_pre_loss: 10
 
 fedtgp:
+    lamda_: 10.0
+    server_epochs: 10
+    server_lr: 0.01
+    margin_threshold: 1.0
+
+fedtgp_g:
     lamda_: 10.0
     server_epochs: 10
     server_lr: 0.01
@@ -113,26 +122,24 @@ proxyfl_ssl:
     gpt_threshold: 100.0
     ema_beta: 0.99
 
-# 可靠原型驱动的联邦半监督学习（诊断版默认参数）
-fedproto_ssl:
+# 联邦半监督学习测试算法（fedtest）
+fedtest:
+    lambda_s: 1.0
+    lambda_p: 0.0
+    lambda_u: 0.0
+    tau: 0.1
+    proto_low_confidence: 0.4
     proto_temperature: 0.1
-    candidate_threshold: 0.5
-    exclude_threshold: 0.1
-    lambda_ambiguous: 1.0
-    lambda_negative: 0.5
-    # 冒烟日志显示早期高置信伪标签准确率很低，先保守降低伪标签对局部原型的贡献。
+    proto_gate_confidence: 0.6
+    proto_gate_margin: 0.2
     pseudo_proto_weight: 0.1
     proto_support_scale: 10.0
     proto_stability_temperature: 0.1
-    # 2 轮预热 + 3 轮渐进开启，3 轮快速测试即可触发一次原型指导。
-    proto_warmup_rounds: 2
-    proto_ramp_rounds: 3
-    server_epochs: 30
-    server_lr: 0.01
-    server_separation_weight: 0.1
-    server_margin: 0.2
-    server_max_momentum: 0.5
-    server_proto_support_scale: 5.0
+    proto_radius_quantile: 0.95
+    proto_anchor_weight: 1.0
+    proto_sep_weight: 1.0
+    proto_opt_lr: 0.001
+    proto_opt_steps: 50
 
 efhc:
     event_r: 250

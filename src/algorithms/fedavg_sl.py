@@ -11,6 +11,7 @@ from .utils import (
     clone_cpu_state,
     get_model,
 )
+from .utils.augment import sage_weak_augment
 
 
 def get_path(args):
@@ -51,6 +52,7 @@ def train(p: BaseParams):
         for x_batch, y_batch in loader:
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
+            x_batch = sage_weak_augment(x_batch, p.dataset)
             logits = model(x_batch)
             loss = F.cross_entropy(logits, y_batch)
             optimizer.zero_grad()
@@ -70,6 +72,7 @@ class Server(BaseServer):
         if args.ssl not in ("sample", "double", "sfd"):
             raise ValueError("fedavg_sl 要求 ssl 为 sample、double 或 sfd。")
         super().__init__(args, is_ssl=True, pfl=False)
+        self.round_time = []
 
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
@@ -101,6 +104,7 @@ class Server(BaseServer):
 
             self.aggregate(selected_states, weights=norm_weights)
             self.evaluate()
+            self.round_time.append(time.time() - t0)
 
             if self.is_sfd:
                 print(
@@ -114,10 +118,14 @@ class Server(BaseServer):
                 print(
                     f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
                 )
-            print(f"Round finished in {time.time() - t0:.2f} seconds")
+            print(f"Round finished in {self.round_time[-1]:.2f} seconds")
 
     def save(self):
-        metrics = {"acc": self.acc, "loss": self.loss}
+        metrics = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "round_time": self.round_time,
+        }
         if self.is_sfd:
             metrics["acc_source"] = self.acc_source
             metrics["acc_target"] = self.acc_target

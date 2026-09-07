@@ -223,7 +223,8 @@ class Server(BaseServer):
                 f"\n--- FedAvg-LPL Round {round_id + 1}/{self.rounds} ---"
                 f"\nGlobal Accuracy: {self.acc[-1]:.2f}%, "
                 f"Avg Loss: {self.loss[-1]:.4f}, "
-                f"Pseudo Coverage: {self.pseudo_coverage[-1]:.2f}%"
+                f"Pseudo Coverage: {self.pseudo_coverage[-1]:.2f}%, "
+                f"Round Time: {self.round_time[-1]:.2f}s"
             )
 
     def save(self):
