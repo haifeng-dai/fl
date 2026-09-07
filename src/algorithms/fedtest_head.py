@@ -37,18 +37,10 @@ class Params(BaseParams):
     global_valid: torch.Tensor
     global_radii: torch.Tensor
     radius_valid: torch.Tensor
-    proto_q_thresholds: torch.Tensor
-    proto_q_valid: torch.Tensor
     lambda_p: float
     lambda_s: float
     lambda_u: float
     tau: float
-
-
-@dataclass
-class ProtoGateParams(BaseParams):
-    global_protos: torch.Tensor
-    global_valid: torch.Tensor
 
 
 @dataclass
@@ -137,52 +129,6 @@ def estimate_prototypes_worker(p: BaseParams):
     return {
         "protos": prototypes,
         "class_count": class_count,
-    }
-
-
-@torch.no_grad()
-def estimate_proto_gate_worker(p: ProtoGateParams):
-    """客户端使用当前全局模型与判别目标原型，在有标签数据上按预测类别统计 q 与预测正误。"""
-    device = torch.device(p.client_gpu)
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
-    model.load_state_dict(p.model_state)
-    model.eval()
-
-    prototypes = p.global_protos.to(device)
-    valid = p.global_valid.to(device).bool()
-
-    labeled_indices = torch.where(p.train_set.is_labeled.bool())[0].tolist()
-    loader = DataLoader(
-        Subset(p.train_set, labeled_indices),
-        batch_size=p.batch_size,
-        shuffle=False,
-    )
-
-    q_by_class = [[] for _ in range(p.num_class)]
-    correct_by_class = [[] for _ in range(p.num_class)]
-
-    if int(valid.sum().item()) >= 2:
-        for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
-            features = model.extractor(x)
-            pred, _, _, q = prototype_top2_distance(features, prototypes, valid)
-            correct = pred.eq(y)
-
-            for c in range(p.num_class):
-                mask_c = pred == c
-                if bool(mask_c.any()):
-                    q_by_class[c].append(q[mask_c].cpu())
-                    correct_by_class[c].append(correct[mask_c].cpu())
-
-    return {
-        "q_by_class": [
-            torch.cat(q_list) if q_list else torch.empty(0)
-            for q_list in q_by_class
-        ],
-        "correct_by_class": [
-            torch.cat(corr_list) if corr_list else torch.empty(0, dtype=torch.bool)
-            for corr_list in correct_by_class
-        ],
     }
 
 
@@ -299,7 +245,7 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
     model_l = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
     model_l.load_state_dict(p.model_state)
-    has_unlabeled_loss = p.lambda_u > 0.0
+    has_unlabeled_loss = (p.lambda_u > 0.0) or (p.lambda_p > 0.0)
     if has_unlabeled_loss:
         model_g = get_model(
             p.model_name, p.dataset, p.num_class, p.feature_dim
@@ -318,38 +264,30 @@ def train(p: Params):
     )
     if loaders.labeled_loader is None:
         raise ValueError("fedtest 客户端缺少有标签样本")
-
-    labeled_mask = p.train_set.is_labeled.bool()
-    labeled_present = (
-        torch.bincount(
-            p.train_set.y[labeled_mask],
-            minlength=p.num_class,
-        ) > 0
-    ).to(device)
-
+    use_contrastive = bool((p.global_valid & p.radius_valid).any())
     global_protos = p.global_protos.to(device)
     global_valid = p.global_valid.to(device).bool()
-    proto_q_thresholds = p.proto_q_thresholds.to(device)
-    proto_q_valid = p.proto_q_valid.to(device).bool()
-
+    candidate_valid = global_valid & p.radius_valid.to(device).bool()
+    global_radii = p.global_radii.to(device)
     optimizer = torch.optim.SGD(
         model_l.parameters(), lr=p.lr, momentum=p.momentum, weight_decay=p.weight_decay
     )
     loss_sum, sample_count = 0.0, 0
     calibrate_loss_sum, calibrate_loss_count = 0.0, 0
     loss_u_sum, loss_u_count = 0.0, 0
+    loss_contrast_sum, loss_contrast_count = 0.0, 0
     total_loss_sum, total_loss_count = 0.0, 0
-
-    proto_diag = {
-        "proto_unlabeled_total": 0,
-        "proto_missing_total": 0,
-        "proto_selected_count": 0,
-        "proto_selected_correct": 0,
-        "proto_selected_missing_count": 0,
-        "proto_selected_missing_correct": 0,
-        "proto_q_sum_selected": 0.0,
+    candidate_stats = {
+        "candidate_total": 0,
+        "candidate_empty": 0,
+        "candidate_single": 0,
+        "candidate_multi": 0,
+        "candidate_size_sum": 0,
+        "candidate_recall": 0,
+        "singleton_correct": 0,
+        "singleton_used_count": 0,
+        "singleton_pseudo_label_correct": 0,
     }
-
     model_l.train()
     for _ in range(p.epochs):
         for labeled_batch, unlabeled_batch in iterate_ssl_batches(loaders):
@@ -378,60 +316,78 @@ def train(p: Params):
             loss = loss + p.lambda_s * loss_cal
 
             loss_u = loss_x * 0.0
-            selected_u = torch.zeros(x_u_raw.size(0), dtype=torch.bool, device=device)
-            pseudo_labels = torch.zeros(x_u_raw.size(0), dtype=torch.long, device=device)
-            proto_q_values = torch.zeros(x_u_raw.size(0), device=device)
-
-            if has_unlabeled_loss and int(global_valid.sum()) >= 2:
+            loss_contrast = loss_x * 0.0
+            singleton_mask = torch.zeros(
+                x_u_raw.size(0), dtype=torch.bool, device=device
+            )
+            pseudo_labels = torch.zeros(
+                x_u_raw.size(0), dtype=torch.long, device=device
+            )
+            candidate_mask = torch.zeros(
+                (x_u_raw.size(0), p.num_class), dtype=torch.bool, device=device
+            )
+            candidate_size = torch.zeros(
+                x_u_raw.size(0), dtype=torch.long, device=device
+            )
+            if has_unlabeled_loss and use_contrastive:
+                # 候选集合及反距离权重严格来自冻结 teacher 的原始输入。
                 with torch.no_grad():
-                    teacher_features = model_g.extractor(x_u_raw)
-                    pseudo_labels, _, _, proto_q_values = prototype_top2_distance(
-                        teacher_features,
-                        global_protos,
-                        global_valid,
-                    )
-                    selected_u = (
-                        proto_q_valid[pseudo_labels]
-                        & (proto_q_values <= proto_q_thresholds[pseudo_labels])
+                    candidate_features = model_g.extractor(x_u_raw)
+                    candidate_mask, candidate_size, candidate_distance = (
+                        build_candidate_mask(
+                            candidate_features,
+                            global_protos,
+                            global_radii,
+                            candidate_valid,
+                        )
                     )
 
+                # 所有无标签反向传播项均使用强增强的 student 特征。
                 x_u_strong = sage_strong_augment(x_u_raw, p.dataset)
                 features_u = model_l.extractor(x_u_strong)
-                logits_u = model_l.classifier(features_u)
-
-                loss_per_sample = F.cross_entropy(
-                    logits_u,
-                    pseudo_labels,
-                    reduction="none",
+                loss_u, singleton_mask, pseudo_labels = singleton_pseudo_label_loss(
+                    features_u,
+                    model_l.classifier,
+                    candidate_mask,
+                    candidate_size,
+                    p.lambda_u,
                 )
-                loss_u = (loss_per_sample * selected_u.float()).mean()
-                loss = loss + p.lambda_u * loss_u
+                loss_contrast = candidate_prototype_contrastive_loss(
+                    features_u,
+                    global_protos,
+                    global_valid,
+                    candidate_mask,
+                    candidate_distance,
+                    p.tau,
+                )
+                loss = loss + p.lambda_u * loss_u + p.lambda_p * loss_contrast
 
-            unlabeled_count = x_u_raw.size(0)
-            loss_u_sum += loss_u.item() * unlabeled_count
-            loss_u_count += unlabeled_count
-
+            singleton_count = int(singleton_mask.sum())
+            contrast_count = int(candidate_mask.any(dim=1).sum())
+            loss_u_sum += loss_u.item() * singleton_count
+            loss_u_count += singleton_count
+            loss_contrast_sum += loss_contrast.item() * contrast_count
+            loss_contrast_count += contrast_count
             # 真实 y_u 仅在所有训练损失构造完成后的诊断分支中读取。
             with torch.no_grad():
                 y_u = unlabeled_batch[1].to(device)
-                missing_u = ~labeled_present[y_u]
-                selected_missing = selected_u & missing_u
-
-                proto_diag["proto_unlabeled_total"] += y_u.numel()
-                proto_diag["proto_missing_total"] += int(missing_u.sum())
-                proto_diag["proto_selected_count"] += int(selected_u.sum())
-                proto_diag["proto_selected_correct"] += int(
-                    (selected_u & pseudo_labels.eq(y_u)).sum()
+                candidate_stats["candidate_total"] += y_u.numel()
+                candidate_stats["candidate_empty"] += int(candidate_size.eq(0).sum())
+                candidate_stats["candidate_single"] += int(candidate_size.eq(1).sum())
+                candidate_stats["candidate_multi"] += int(candidate_size.gt(1).sum())
+                candidate_stats["candidate_size_sum"] += int(candidate_size.sum())
+                rows = torch.arange(y_u.size(0), device=device)
+                candidate_stats["candidate_recall"] += int(
+                    candidate_mask[rows, y_u].sum()
                 )
-                proto_diag["proto_selected_missing_count"] += int(selected_missing.sum())
-                proto_diag["proto_selected_missing_correct"] += int(
-                    (selected_missing & pseudo_labels.eq(y_u)).sum()
+                singleton_pseudo_label_correct = int(
+                    (singleton_mask & pseudo_labels.eq(y_u)).sum()
                 )
-                if selected_u.any():
-                    proto_diag["proto_q_sum_selected"] += float(
-                        proto_q_values[selected_u].sum().item()
-                    )
-
+                candidate_stats["singleton_correct"] += singleton_pseudo_label_correct
+                candidate_stats["singleton_used_count"] += singleton_count
+                candidate_stats["singleton_pseudo_label_correct"] += (
+                    singleton_pseudo_label_correct
+                )
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -462,11 +418,13 @@ def train(p: Params):
         "loss_calibrate_count": calibrate_loss_count,
         "loss_u_sum": loss_u_sum,
         "loss_u_count": loss_u_count,
+        "loss_contrast_sum": loss_contrast_sum,
+        "loss_contrast_count": loss_contrast_count,
         "loss_total_sum": total_loss_sum,
         "loss_total_count": total_loss_count,
         "protos": local_protos,
         "class_count": class_count,
-        **proto_diag,
+        **candidate_stats,
     }
 
 
@@ -485,17 +443,14 @@ class Server(BaseServer):
         self.proto_sep_weight = args.proto_sep_weight
         self.proto_opt_lr = args.proto_opt_lr
         self.proto_opt_steps = args.proto_opt_steps
-        self.proto_q_target_precision = args.proto_q_target_precision
-        self.proto_q_min_samples = args.proto_q_min_samples
-        self.proto_q_max_threshold = args.proto_q_max_threshold
+        self.proto_head_lr = args.proto_head_lr
+        self.proto_head_steps = args.proto_head_steps
         self.mean_protos = torch.zeros(self.num_class, self.feature_dim)
         self.mean_valid = torch.zeros(self.num_class, dtype=torch.bool)
         self.global_protos = torch.zeros(self.num_class, self.feature_dim)
         self.global_valid = torch.zeros(self.num_class, dtype=torch.bool)
         self.global_radii = torch.zeros(self.num_class)
         self.radius_valid = torch.zeros(self.num_class, dtype=torch.bool)
-        self.proto_q_thresholds = torch.zeros(self.num_class)
-        self.proto_q_valid = torch.zeros(self.num_class, dtype=torch.bool)
         self.lambda_p = args.lambda_p
         self.lambda_s = args.lambda_s
         self.lambda_u = args.lambda_u
@@ -503,6 +458,7 @@ class Server(BaseServer):
         self.tau = args.tau
         self.proto_radius_quantile = args.proto_radius_quantile
         self.loss_proto = []
+        self.loss_contrast = []
         self.acc_proto_mean = []
         metric_names = (
             "loss_x",
@@ -519,14 +475,14 @@ class Server(BaseServer):
             "missing_proto_acc",
             "missing_sample_count",
             "class_support",
-            "proto_q_thresholds_by_round",
-            "proto_q_valid_by_round",
-            "proto_selected_coverage",
-            "proto_selected_accuracy",
-            "proto_selected_count",
-            "proto_selected_mean_q",
-            "proto_selected_missing_count",
-            "proto_selected_missing_accuracy",
+            "candidate_empty_ratio",
+            "candidate_single_ratio",
+            "candidate_multi_ratio",
+            "candidate_avg_size",
+            "candidate_set_recall",
+            "singleton_accuracy",
+            "singleton_used_count",
+            "singleton_pseudo_label_accuracy",
             "prototype_drift_by_class",
             "prototype_drift_count_by_class",
             "drift_radius_ratio_by_class",
@@ -547,6 +503,8 @@ class Server(BaseServer):
             "support_overlap_ratio_max",
             "support_overlap_pair_count",
             "support_pair_count",
+            "candidate_avg_false_size",
+            "candidate_false_assignment_ratio",
             "relative_true_distance_mean",
             "relative_wrong_distance_mean",
             "relative_ratio_mean",
@@ -564,6 +522,10 @@ class Server(BaseServer):
             "target_nearest_inter_distance_mean",
             "proto_inter_distance_gain",
             "proto_tracking_mse",
+            "proto_head_loss_before",
+            "proto_head_loss_after",
+            "proto_head_acc_before",
+            "proto_head_acc_after",
             "proto_q_correct_mean",
             "proto_q_wrong_mean",
             "proto_q_correct_quantiles",
@@ -840,49 +802,67 @@ class Server(BaseServer):
         optimized[valid_indices] = target_valid.detach()
         return optimized.cpu()
 
-    def _build_proto_q_thresholds(self, gate_results, selected):
-        thresholds = torch.zeros(self.num_class)
-        valid = torch.zeros(self.num_class, dtype=torch.bool)
+    def _calibrate_global_classifier(self):
+        valid_idx = torch.where(self.global_valid)[0]
+        if len(valid_idx) < 2:
+            return {
+                "loss_before": 0.0,
+                "loss_after": 0.0,
+                "acc_before": 0.0,
+                "acc_after": 0.0,
+            }
 
-        for c in range(self.num_class):
-            q_list = [
-                gate_results[cid]["q_by_class"][c]
-                for cid in selected
-                if gate_results[cid]["q_by_class"][c].numel() > 0
-            ]
-            corr_list = [
-                gate_results[cid]["correct_by_class"][c]
-                for cid in selected
-                if gate_results[cid]["correct_by_class"][c].numel() > 0
-            ]
-            if not q_list:
-                continue
+        proto_features = self.global_protos[valid_idx].detach().to(self.device)
+        proto_labels = valid_idx.to(self.device)
 
-            q_all = torch.cat(q_list)
-            corr_all = torch.cat(corr_list)
+        self.model.to(self.device)
+        self.model.eval()
 
-            order = torch.argsort(q_all)
-            q_sorted = q_all[order]
-            corr_sorted = corr_all[order]
+        for parameter in self.model.classifier.parameters():
+            parameter.requires_grad_(True)
+        for parameter in self.model.extractor.parameters():
+            parameter.requires_grad_(False)
 
-            cum_correct = corr_sorted.float().cumsum(0)
-            count = torch.arange(1, len(corr_sorted) + 1, dtype=torch.float32)
-            precision = cum_correct / count
+        optimizer = torch.optim.SGD(
+            self.model.classifier.parameters(),
+            lr=self.proto_head_lr,
+            momentum=0.0,
+            weight_decay=0.0,
+        )
 
-            eligible = (
-                (precision >= self.proto_q_target_precision)
-                & (count >= self.proto_q_min_samples)
-                & (q_sorted <= self.proto_q_max_threshold)
+        with torch.no_grad():
+            logits_before = self.model.classifier(proto_features)
+            loss_before = F.cross_entropy(logits_before, proto_labels)
+            pred_before = logits_before.argmax(dim=1)
+            acc_before = float(
+                pred_before.eq(proto_labels).float().mean().item() * 100.0
             )
 
-            indices = torch.where(eligible)[0]
-            if indices.numel() > 0:
-                k = int(indices[-1].item())
-                thresholds[c] = float(q_sorted[k].item())
-                valid[c] = True
+        for _ in range(self.proto_head_steps):
+            optimizer.zero_grad()
+            logits = self.model.classifier(proto_features)
+            loss_head = F.cross_entropy(logits, proto_labels)
+            loss_head.backward()
+            optimizer.step()
 
-        self.proto_q_thresholds = thresholds
-        self.proto_q_valid = valid
+        with torch.no_grad():
+            logits_after = self.model.classifier(proto_features)
+            loss_after = F.cross_entropy(logits_after, proto_labels)
+            pred_after = logits_after.argmax(dim=1)
+            acc_after = float(
+                pred_after.eq(proto_labels).float().mean().item() * 100.0
+            )
+
+        for parameter in self.model.extractor.parameters():
+            parameter.requires_grad_(True)
+        self.model.cpu()
+
+        return {
+            "loss_before": float(loss_before.item()),
+            "loss_after": float(loss_after.item()),
+            "acc_before": acc_before,
+            "acc_after": acc_after,
+        }
 
     @torch.no_grad()
     def _record_relative_proto_geometry(self, selected):
@@ -991,7 +971,27 @@ class Server(BaseServer):
     @torch.no_grad()
     def _diagnose_client(self, dataset, labeled_present):
         loader = DataLoader(dataset, batch_size=128, shuffle=False)
-        stats = self._empty_stats()
+        stats = {
+            key: 0
+            for key in (
+                "total",
+                "classifier_correct",
+                "prototype_correct",
+                "seen_total",
+                "seen_cls",
+                "seen_proto",
+                "missing_total",
+                "missing_cls",
+                "missing_proto",
+            )
+        }
+        stats.update(
+            {
+                "proto_q_all": [],
+                "proto_q_pred_correct": [],
+                "proto_q_missing_mask": [],
+            }
+        )
         self.model.to(self.device).eval()
         prototypes = self.global_protos.to(self.device)
         valid = self.global_valid.to(self.device).bool()
@@ -1006,7 +1006,7 @@ class Server(BaseServer):
             logits = self.model.classifier(feature)
             classifier_pred = logits.argmax(dim=1)
             if n_valid >= 2:
-                proto_pred, _, _, proto_q = prototype_top2_distance(
+                proto_pred, d1, d2, proto_q = prototype_top2_distance(
                     feature,
                     prototypes,
                     valid,
@@ -1087,8 +1087,6 @@ class Server(BaseServer):
                         global_valid=self.global_valid.clone(),
                         global_radii=self.global_radii.clone(),
                         radius_valid=self.radius_valid.clone(),
-                        proto_q_thresholds=self.proto_q_thresholds.clone(),
-                        proto_q_valid=self.proto_q_valid.clone(),
                         lambda_p=self.lambda_p,
                         lambda_s=self.lambda_s,
                         lambda_u=self.lambda_u,
@@ -1160,27 +1158,14 @@ class Server(BaseServer):
             self.previous_target_protos = self.global_protos.clone()
             self.previous_target_valid = self.global_valid.clone()
 
-            # 4. 客户端运行 estimate_proto_gate_worker 统计当前有标签数据在目标原型下的 q 与 correct
-            gate_params = [
-                ProtoGateParams(
-                    **asdict(base),
-                    global_protos=self.global_protos.clone(),
-                    global_valid=self.global_valid.clone(),
-                )
-                for base in self.build_base_params(selected)
-            ]
-            gate_results = self.run_clients(
-                estimate_proto_gate_worker,
-                gate_params,
-            )
-            self._build_proto_q_thresholds(
-                gate_results,
-                selected,
-            )
-            self.proto_q_thresholds_by_round.append(self.proto_q_thresholds.tolist())
-            self.proto_q_valid_by_round.append(self.proto_q_valid.tolist())
+            # 服务端使用 global_protos 监督全局分类头
+            head_stats = self._calibrate_global_classifier()
+            self.proto_head_loss_before.append(head_stats["loss_before"])
+            self.proto_head_loss_after.append(head_stats["loss_after"])
+            self.proto_head_acc_before.append(head_stats["acc_before"])
+            self.proto_head_acc_after.append(head_stats["acc_after"])
 
-            # 5. 客户端使用 G_t.extractor
+            # 4. 客户端使用未被分类头校准改变的 G_t.extractor
             #    和优化后的全局目标原型计算半径
             radii_params = [
                 RadiiParams(
@@ -1193,7 +1178,7 @@ class Server(BaseServer):
             ]
             radii_results = self.run_clients(estimate_radii_worker, radii_params)
 
-            # 6. 服务端用有效客户端半径的 Q_0.90 分位数进行聚合
+            # 5. 服务端用有效客户端半径的 Q_0.90 分位数进行聚合
             self._aggregate_global_radii(radii_results, selected)
             self._record_radius_diagnostics(radii_results, selected)
             self._record_prototype_drift(
@@ -1234,58 +1219,14 @@ class Server(BaseServer):
             loss_u_sum = sum(results[cid]["loss_u_sum"] for cid in selected)
             loss_u_count = sum(results[cid]["loss_u_count"] for cid in selected)
             unsupervised_loss = loss_u_sum / max(1, loss_u_count)
-
-            # 统计客户端本轮训练中 q 门控的实际执行效果
-            proto_train_unlabeled = sum(
-                results[cid]["proto_unlabeled_total"] for cid in selected
+            loss_contrast_sum = sum(
+                results[cid]["loss_contrast_sum"] for cid in selected
             )
-            proto_train_missing = sum(
-                results[cid]["proto_missing_total"] for cid in selected
+            loss_contrast_count = sum(
+                results[cid]["loss_contrast_count"] for cid in selected
             )
-            proto_train_selected = sum(
-                results[cid]["proto_selected_count"] for cid in selected
-            )
-            proto_train_correct = sum(
-                results[cid]["proto_selected_correct"] for cid in selected
-            )
-            proto_train_missing_selected = sum(
-                results[cid]["proto_selected_missing_count"] for cid in selected
-            )
-            proto_train_missing_correct = sum(
-                results[cid]["proto_selected_missing_correct"] for cid in selected
-            )
-            proto_train_q_sum = sum(
-                results[cid]["proto_q_sum_selected"] for cid in selected
-            )
-
-            train_cov = (
-                100.0 * proto_train_selected / max(1, proto_train_unlabeled)
-            )
-            train_acc = (
-                100.0 * proto_train_correct / max(1, proto_train_selected)
-                if proto_train_selected > 0
-                else 0.0
-            )
-            train_mean_q = (
-                proto_train_q_sum / max(1, proto_train_selected)
-                if proto_train_selected > 0
-                else 0.0
-            )
-            train_missing_acc = (
-                100.0
-                * proto_train_missing_correct
-                / max(1, proto_train_missing_selected)
-                if proto_train_missing_selected > 0
-                else 0.0
-            )
-
-            self.proto_selected_coverage.append(train_cov)
-            self.proto_selected_accuracy.append(train_acc)
-            self.proto_selected_count.append(proto_train_selected)
-            self.proto_selected_mean_q.append(train_mean_q)
-            self.proto_selected_missing_count.append(proto_train_missing_selected)
-            self.proto_selected_missing_accuracy.append(train_missing_acc)
-
+            contrastive_loss = loss_contrast_sum / max(1, loss_contrast_count)
+            self._record_candidate_diagnostics(results, selected)
             self._record_and_print(
                 stats,
                 support,
@@ -1297,9 +1238,10 @@ class Server(BaseServer):
                 supervised_loss,
                 calibrate_loss,
                 unsupervised_loss,
+                contrastive_loss,
                 time.time() - started,
             )
-            self._print_candidate_diagnostics()
+            self._print_candidate_diagnostics(contrastive_loss)
 
     @staticmethod
     def _empty_stats():
@@ -1347,6 +1289,7 @@ class Server(BaseServer):
         supervised_loss,
         calibrate_loss,
         unsupervised_loss,
+        contrastive_loss,
         elapsed,
     ):
         p = self._percent
@@ -1357,6 +1300,7 @@ class Server(BaseServer):
         self.loss_x.append(supervised_loss)
         self.loss_calibrate.append(calibrate_loss)
         self.loss_u.append(unsupervised_loss)
+        self.loss_contrast.append(contrastive_loss)
         self.loss.append(round_loss)
 
         self.unlabeled_classifier_acc.append(
@@ -1390,28 +1334,26 @@ class Server(BaseServer):
             )
         else:
             q_all = torch.cat(stats["proto_q_all"])
-            pred_correct = torch.cat(stats["proto_q_pred_correct"])
-            missing_mask = torch.cat(stats["proto_q_missing_mask"])
+            pred_correct = torch.cat(stats["proto_q_pred_correct"]).bool()
+            missing_mask = torch.cat(stats["proto_q_missing_mask"]).bool()
 
             q_correct = q_all[pred_correct]
             q_wrong = q_all[~pred_correct]
 
-            self.proto_q_correct_mean.append(
-                float(q_correct.mean().item()) if q_correct.numel() > 0 else 0.0
-            )
-            self.proto_q_wrong_mean.append(
-                float(q_wrong.mean().item()) if q_wrong.numel() > 0 else 0.0
-            )
+            correct_mean = float(q_correct.mean().item()) if q_correct.numel() else 0.0
+            wrong_mean = float(q_wrong.mean().item()) if q_wrong.numel() else 0.0
+            self.proto_q_correct_mean.append(correct_mean)
+            self.proto_q_wrong_mean.append(wrong_mean)
 
-            q_probs = torch.tensor([0.25, 0.50, 0.75, 0.90])
+            quantile_points = torch.tensor([0.25, 0.50, 0.75, 0.90])
             correct_q_list = (
-                torch.quantile(q_correct, q_probs).tolist()
-                if q_correct.numel() > 0
+                torch.quantile(q_correct, quantile_points).tolist()
+                if q_correct.numel()
                 else [0.0] * 4
             )
             wrong_q_list = (
-                torch.quantile(q_wrong, q_probs).tolist()
-                if q_wrong.numel() > 0
+                torch.quantile(q_wrong, quantile_points).tolist()
+                if q_wrong.numel()
                 else [0.0] * 4
             )
             self.proto_q_correct_quantiles.append(correct_q_list)
@@ -1454,7 +1396,7 @@ class Server(BaseServer):
 
         print(
             "准确率（本轮服务器更新完成后）：\n"
-            f"FedAvg 后全局模型分类准确率={model_acc:.2f}%\n"
+            f"服务器校准后全局模型分类准确率={model_acc:.2f}%\n"
             f"统计全局原型分类准确率={mean_proto_acc:.2f}%\n"
             f"判别目标全局原型分类准确率={proto_acc:.2f}%"
         )
@@ -1466,17 +1408,6 @@ class Server(BaseServer):
             f"原型预测准确率={self.seen_proto_acc[-1]:.2f}% (n={stats['seen_total']})\n"
             f"缺失类别：分类器准确率={self.missing_classifier_acc[-1]:.2f}%，"
             f"原型预测准确率={self.missing_proto_acc[-1]:.2f}% (n={stats['missing_total']})"
-        )
-
-        # 客户端实际训练执行的 q 门控统计
-        print(
-            "客户端训练 q 门控执行统计（本轮训练）：\n"
-            f"实际参与 Lu 样本数={self.proto_selected_count[-1]} "
-            f"(覆盖率={self.proto_selected_coverage[-1]:.2f}%)\n"
-            f"实际伪标签准确率={self.proto_selected_accuracy[-1]:.2f}%\n"
-            f"选中样本平均 q={self.proto_selected_mean_q[-1]:.4f}\n"
-            f"缺失类别：选中样本数={self.proto_selected_missing_count[-1]}，"
-            f"缺失类别伪标签准确率={self.proto_selected_missing_accuracy[-1]:.2f}%"
         )
 
         if has_q_data:
@@ -1512,27 +1443,24 @@ class Server(BaseServer):
                 + "\n".join(missing_cov_lines)
             )
 
-        # 打印服务器刚估计出的类别自适应门控阈值（供下一轮客户端使用）
-        gate_strs = []
-        valid_taus = []
-        for c in range(self.num_class):
-            if bool(self.proto_q_valid[c]):
-                tau_val = float(self.proto_q_thresholds[c].item())
-                gate_strs.append(f"c{c}: tau={tau_val:.4f}, valid=True")
-                valid_taus.append(tau_val)
-            else:
-                gate_strs.append(f"c{c}: tau=--, valid=False")
-        avg_tau = sum(valid_taus) / max(1, len(valid_taus)) if valid_taus else 0.0
-        print(
-            "目标原型 q 门控阈值（供下一轮客户端训练使用）：\n"
-            + "\n".join(gate_strs)
-            + f"\n有效门控类别数={len(valid_taus)}/{self.num_class}，平均有效 q 阈值={avg_tau:.4f}"
-        )
-
         print(f"各客户端有标签类别样本数（按类别）：{self.class_support[-1]}")
         print(f"本轮耗时：{elapsed:.2f} 秒")
 
-    def _print_candidate_diagnostics(self):
+    def _print_candidate_diagnostics(self, contrastive_loss):
+        if self.lambda_p > 0.0 or self.lambda_u > 0.0:
+            print(
+                "候选集合诊断（比例/召回率为百分比；平均候选类别数单位为类/样本）：\n"
+                f"空候选比例={self.candidate_empty_ratio[-1]:.2%}\n"
+                f"单候选比例={self.candidate_single_ratio[-1]:.2%}\n"
+                f"多候选比例={self.candidate_multi_ratio[-1]:.2%}\n"
+                f"平均候选类别数={self.candidate_avg_size[-1]:.4f}\n"
+                f"平均错误候选类别数={self.candidate_avg_false_size[-1]:.4f}\n"
+                f"候选成员错误比例={self.candidate_false_assignment_ratio[-1]:.2%}\n"
+                f"候选集合召回率（分母=全部无标签样本）={self.candidate_set_recall[-1]:.2%}\n"
+                f"实际用于单例 CE 的样本数={self.singleton_used_count[-1]}\n"
+                "单例伪标签准确率（真实标签仅用于诊断，分母=实际用于 CE 的单例样本）="
+                f"{self.singleton_pseudo_label_accuracy[-1]:.2%}"
+            )
         print(
             "本地类别半径统计（半径由有效客户端按类别取分位数）：\n"
             f"有效全局半径均值={self.radius_mean[-1]:.6f} (有效类别数={self.radius_valid_count[-1]})"
@@ -1573,6 +1501,13 @@ class Server(BaseServer):
             f"目标原型相对统计原型偏移最大值={self.proto_target_shift_max[-1]:.6f}\n"
             f"上一轮目标原型→本轮统计原型跟随 MSE={self.proto_tracking_mse[-1]:.6f}"
         )
+        print(
+            "目标原型→分类头监督统计：\n"
+            f"校准前目标原型 CE={self.proto_head_loss_before[-1]:.6f}\n"
+            f"校准后目标原型 CE={self.proto_head_loss_after[-1]:.6f}\n"
+            f"校准前目标原型分类准确率={self.proto_head_acc_before[-1]:.2f}%\n"
+            f"校准后目标原型分类准确率={self.proto_head_acc_after[-1]:.2f}%"
+        )
         q_q = self.relative_ratio_quantiles[-1]
         detail_rel_strs = [
             f"c{c}: true_nearest={self.relative_true_nearest_ratio_by_class[-1][c]:.2%}"
@@ -1589,12 +1524,49 @@ class Server(BaseServer):
             f"真实类别为最近原型的样本比例={self.relative_true_nearest_ratio[-1]:.2%}\n"
             f"各类别真实为最近原型比例：{' | '.join(detail_rel_strs)}"
         )
-        print(
-            "损失统计：\n"
-            f"监督分类 CE={self.loss_x[-1]:.6f}\n"
-            f"监督原型校准 MSE={self.loss_calibrate[-1]:.6f}\n"
-            f"无标签门控 CE（按全部无标签样本归一化）={self.loss_u[-1]:.6f}\n"
-            f"总训练损失={self.loss[-1]:.6f}"
+        if self.lambda_p > 0.0 or self.lambda_u > 0.0:
+            print(
+                "损失统计（均为实际参与该项损失的样本均值）：\n"
+                f"监督分类 CE={self.loss_x[-1]:.6f}\n"
+                f"监督原型校准 MSE={self.loss_calibrate[-1]:.6f}\n"
+                f"单例伪标签 CE={self.loss_u[-1]:.6f}\n"
+                f"候选集合对比损失（分母=候选集合非空样本）={contrastive_loss:.6f}\n"
+                f"总训练损失={self.loss[-1]:.6f}"
+            )
+        else:
+            print(
+                "损失统计（均为实际参与该项损失的样本均值）：\n"
+                f"监督分类 CE={self.loss_x[-1]:.6f}\n"
+                f"监督原型校准 MSE={self.loss_calibrate[-1]:.6f}\n"
+                f"总训练损失={self.loss[-1]:.6f}"
+            )
+
+    def _record_candidate_diagnostics(self, results, selected):
+        total = sum(results[cid]["candidate_total"] for cid in selected)
+        empty = sum(results[cid]["candidate_empty"] for cid in selected)
+        single = sum(results[cid]["candidate_single"] for cid in selected)
+        multi = sum(results[cid]["candidate_multi"] for cid in selected)
+        size_sum = sum(results[cid]["candidate_size_sum"] for cid in selected)
+        recall = sum(results[cid]["candidate_recall"] for cid in selected)
+        singleton_correct = sum(results[cid]["singleton_correct"] for cid in selected)
+        singleton_used = sum(results[cid]["singleton_used_count"] for cid in selected)
+        singleton_pseudo_label_correct = sum(
+            results[cid]["singleton_pseudo_label_correct"] for cid in selected
+        )
+        false_candidate_count = max(0, size_sum - recall)
+        self.candidate_empty_ratio.append(empty / max(1, total))
+        self.candidate_single_ratio.append(single / max(1, total))
+        self.candidate_multi_ratio.append(multi / max(1, total))
+        self.candidate_avg_size.append(size_sum / max(1, total))
+        self.candidate_set_recall.append(recall / max(1, total))
+        self.candidate_avg_false_size.append(false_candidate_count / max(1, total))
+        self.candidate_false_assignment_ratio.append(
+            false_candidate_count / max(1, size_sum)
+        )
+        self.singleton_accuracy.append(singleton_correct / max(1, single))
+        self.singleton_used_count.append(singleton_used)
+        self.singleton_pseudo_label_accuracy.append(
+            singleton_pseudo_label_correct / max(1, singleton_used)
         )
 
     def save(self):
@@ -1609,9 +1581,8 @@ class Server(BaseServer):
             "loss_x",
             "loss_calibrate",
             "loss_u",
-            "loss_proto",
+            "loss_contrast",
             "round_time",
-            "acc_proto_mean",
             "unlabeled_classifier_acc",
             "unlabeled_proto_acc",
             "seen_classifier_acc",
@@ -1620,14 +1591,14 @@ class Server(BaseServer):
             "missing_proto_acc",
             "missing_sample_count",
             "class_support",
-            "proto_q_thresholds_by_round",
-            "proto_q_valid_by_round",
-            "proto_selected_coverage",
-            "proto_selected_accuracy",
-            "proto_selected_count",
-            "proto_selected_mean_q",
-            "proto_selected_missing_count",
-            "proto_selected_missing_accuracy",
+            "candidate_empty_ratio",
+            "candidate_single_ratio",
+            "candidate_multi_ratio",
+            "candidate_avg_size",
+            "candidate_set_recall",
+            "singleton_accuracy",
+            "singleton_used_count",
+            "singleton_pseudo_label_accuracy",
             "prototype_drift_by_class",
             "prototype_drift_count_by_class",
             "drift_radius_ratio_by_class",
@@ -1648,6 +1619,8 @@ class Server(BaseServer):
             "support_overlap_ratio_max",
             "support_overlap_pair_count",
             "support_pair_count",
+            "candidate_avg_false_size",
+            "candidate_false_assignment_ratio",
             "relative_true_distance_mean",
             "relative_wrong_distance_mean",
             "relative_ratio_mean",
@@ -1665,6 +1638,10 @@ class Server(BaseServer):
             "target_nearest_inter_distance_mean",
             "proto_inter_distance_gain",
             "proto_tracking_mse",
+            "proto_head_loss_before",
+            "proto_head_loss_after",
+            "proto_head_acc_before",
+            "proto_head_acc_after",
             "proto_q_correct_mean",
             "proto_q_wrong_mean",
             "proto_q_correct_quantiles",
@@ -1684,8 +1661,6 @@ class Server(BaseServer):
                 "aux": {
                     "global_radii": self.global_radii,
                     "radius_valid": self.radius_valid,
-                    "proto_q_thresholds": self.proto_q_thresholds,
-                    "proto_q_valid": self.proto_q_valid,
                 },
             },
         )

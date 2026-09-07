@@ -126,7 +126,7 @@ proxyfl_ssl:
 fedtest:
     lambda_s: 1.0
     lambda_p: 0.0
-    lambda_u: 0.0
+    lambda_u: 1.0
     tau: 0.1
     proto_low_confidence: 0.4
     proto_temperature: 0.1
@@ -140,6 +140,9 @@ fedtest:
     proto_sep_weight: 1.0
     proto_opt_lr: 0.001
     proto_opt_steps: 50
+    proto_q_target_precision: 0.70
+    proto_q_min_samples: 20
+    proto_q_max_threshold: 0.60
 
 efhc:
     event_r: 250
