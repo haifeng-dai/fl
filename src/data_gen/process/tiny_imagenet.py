@@ -48,8 +48,7 @@ def process(output_dir="./datasets/raw"):
 
     transform = transforms.Compose(
         [
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.PILToTensor(),
         ]
     )
 
@@ -84,8 +83,13 @@ def process(output_dir="./datasets/raw"):
     print("-> Converting to Tensors...")
     all_x = torch.stack(all_x)
     all_y = torch.tensor(all_y, dtype=torch.long)
+    assert all_x.dtype == torch.uint8, f"Expected uint8, got {all_x.dtype}"
 
-    processed_data = {"x": all_x, "y": all_y, "num_classes": 200}
+    processed_data = {
+        "x": all_x,
+        "y": all_y,
+        "num_classes": 200,
+    }
 
     # 保存
     save_path = os.path.join(output_dir, "tiny_imagenet_raw.pt")

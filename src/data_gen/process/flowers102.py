@@ -13,13 +13,11 @@ def process(output_dir="./datasets/raw"):
         os.makedirs(output_dir)
 
     # 定义数据转换
-    # Flowers102 图片尺寸不一，必须 Resize
-    # 使用 ImageNet 的均值和标准差
+    # Flowers102 图片尺寸不一，必须 Resize，保留 uint8
     transform = transforms.Compose(
         [
             transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.PILToTensor(),
         ]
     )
 
@@ -46,9 +44,14 @@ def process(output_dir="./datasets/raw"):
     # 合并所有数据
     all_x = torch.cat(all_x_list, dim=0)
     all_y = torch.cat(all_y_list, dim=0)
+    assert all_x.dtype == torch.uint8, f"Expected uint8, got {all_x.dtype}"
 
     # 封装处理后的数据
-    processed_data = {"x": all_x, "y": all_y, "num_classes": 102}
+    processed_data = {
+        "x": all_x,
+        "y": all_y,
+        "num_classes": 102,
+    }
 
     # 保存
     save_path = os.path.join(output_dir, "flowers102_raw.pt")

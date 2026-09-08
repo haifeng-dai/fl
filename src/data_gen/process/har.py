@@ -142,10 +142,13 @@ def process(save_dir):
 
     # Save Raw
     raw_save_path = os.path.join(save_dir, "har_raw.pt")
+    x_raw_tensor = torch.tensor(X_raw, dtype=torch.float32)
+    y_raw_tensor = torch.tensor(y_raw, dtype=torch.long)
     torch.save(
         {
-            "x": torch.tensor(X_raw, dtype=torch.float32),
-            "y": torch.tensor(y_raw, dtype=torch.long),
+            "x": x_raw_tensor,
+            "y": y_raw_tensor,
+            "num_classes": len(torch.unique(y_raw_tensor)),
         },
         raw_save_path,
     )
@@ -159,10 +162,13 @@ def process(save_dir):
 
     # Save Features
     feat_save_path = os.path.join(save_dir, "har_feat_raw.pt")
+    x_feat_tensor = torch.tensor(X_feat, dtype=torch.float32)
+    y_feat_tensor = torch.tensor(y_feat, dtype=torch.long)
     torch.save(
         {
-            "x": torch.tensor(X_feat, dtype=torch.float32),
-            "y": torch.tensor(y_feat, dtype=torch.long),
+            "x": x_feat_tensor,
+            "y": y_feat_tensor,
+            "num_classes": len(torch.unique(y_feat_tensor)),
         },
         feat_save_path,
     )

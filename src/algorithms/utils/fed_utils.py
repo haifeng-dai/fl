@@ -10,6 +10,7 @@ from src.models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 
 from .aggregate import param_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
+from .input import normalize_dataset
 from .load_data import load_data
 
 
@@ -67,7 +68,9 @@ def evaluate(
     acc = evaluate_model(model, test_set, device)
     p_acc = 0.0
     if prototype is not None:
-        p_acc = evaluate_prototype(model, prototype.to(device), test_set, device)
+        p_acc = evaluate_prototype(
+            model, prototype.to(device), test_set, device
+        )
     return {"acc": acc, "p_acc": p_acc}
 
 
@@ -129,6 +132,17 @@ class BaseServer:
             train_counts,
             self.num_class,
         ) = load_data(args, self.pfl)
+
+        if not self.is_ssl:
+            for ds in self.train_sets.values():
+                normalize_dataset(ds, self.dataset)
+
+        if self.pfl:
+            for ds in self.test_set.values():
+                normalize_dataset(ds, self.dataset)
+        else:
+            normalize_dataset(self.test_set, self.dataset)
+
         self.train_set_refs = [ray.put(ds) for ds in self.train_sets.values()]
 
         total_samples = sum(train_counts.values())
@@ -244,19 +258,30 @@ class BaseServer:
             tgt_eval = Subset(self.test_set, tgt_idx)
             acc_tgt = evaluate_model(self.model, tgt_eval, self.device)
             self.acc_target.append(acc_tgt)
-            acc_all = evaluate_model(self.model, self.test_set, self.device)
+            acc_all = evaluate_model(
+                self.model, self.test_set, self.device
+            )
             self.acc.append(acc_all)
             if protos is not None:
                 p_acc = evaluate_prototype(
-                    self.model, protos.to(self.device), src_eval, self.device
+                    self.model,
+                    protos.to(self.device),
+                    src_eval,
+                    self.device,
                 )
                 self.acc_source_p.append(p_acc)
                 p_acc = evaluate_prototype(
-                    self.model, protos.to(self.device), tgt_eval, self.device
+                    self.model,
+                    protos.to(self.device),
+                    tgt_eval,
+                    self.device,
                 )
                 self.acc_target_p.append(p_acc)
                 p_acc = evaluate_prototype(
-                    self.model, protos.to(self.device), self.test_set, self.device
+                    self.model,
+                    protos.to(self.device),
+                    self.test_set,
+                    self.device,
                 )
                 self.acc_proto.append(p_acc)
             return
@@ -266,7 +291,10 @@ class BaseServer:
             self.acc.append(acc)
             if protos is not None:
                 p_acc = evaluate_prototype(
-                    self.model, protos.to(self.device), self.test_set, self.device
+                    self.model,
+                    protos.to(self.device),
+                    self.test_set,
+                    self.device,
                 )
                 self.acc_proto.append(p_acc)
             return

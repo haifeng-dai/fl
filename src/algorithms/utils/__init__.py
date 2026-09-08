@@ -1,10 +1,15 @@
-import numpy
 import torch
 
 from .aggregate import flattened_matrix_aggregate, param_aggregate, proto_aggregate
 from .augment import strong_augment, weak_augment
 from .evaluate import evaluate_model, evaluate_prototype
 from .fed_utils import BaseParams, BaseServer, evaluate, get_model
+from .input import (
+    DATASET_SPECS,
+    normalize_dataset,
+    normalize_image_tensor,
+    prepare_input_batch,
+)
 from .loss import (
     cos_similarity,
     dist_contrastive_loss,
@@ -15,6 +20,7 @@ from .loss import (
 from .topology import compute_mh_weights, generate_adjacency_matrix, sinkhorn_knopp
 
 __all__ = [
+    "DATASET_SPECS",
     "BaseParams",
     "BaseServer",
     "clone_cpu_state",
@@ -32,9 +38,11 @@ __all__ = [
     "get_model",
     "kl_loss",
     "masked_kl_loss",
-    "mixup",
+    "normalize_dataset",
+    "normalize_image_tensor",
     "orthogonality_loss",
     "param_aggregate",
+    "prepare_input_batch",
     "proto_aggregate",
     "sinkhorn_knopp",
     "strong_augment",
@@ -93,30 +101,3 @@ def extract_prototypes(
     if return_counts:
         return protos_cpu, proto_count.cpu().detach().clone()
     return protos_cpu
-
-
-def mixup(x1, y1, x2, y2, alpha=1.0, psi_t=1.0):
-    """
-    对两个输入样本执行 mixup 数据增强。
-    psi_t: 进度系数，控制目标域数据占比的上限
-
-    从 Beta(alpha, alpha) 分布中采样混合系数 lam，
-    对 (x1, y1) 和 (x2, y2) 进行线性插值。
-
-    返回:
-        mixed_x: 混合后的特征
-        mixed_y1, mixed_y2: 混合前的标签（供损失函数分别加权）
-        lam: 混合系数
-    """
-    lam = numpy.random.beta(alpha, alpha)
-    if psi_t is not None:
-        lam = lam * psi_t
-        lam = min(lam, 1.0)  # 确保不越界
-
-    device = x1.device
-    lam = torch.tensor(lam, device=device)
-
-    mixed_x = lam * x1 + (1 - lam) * x2
-    mixed_y = lam * y1 + (1 - lam) * y2
-
-    return mixed_x, mixed_y

@@ -22,14 +22,11 @@ def process(output_dir="./datasets/raw"):
     )
     print(f"-> GTSRB cached at: {download_path}")
 
-    # 定义数据转换 (GTSRB 通常 Resize 为 32x32)
+    # 定义数据转换 (GTSRB 通常 Resize 为 32x32，保留 uint8)
     transform = transforms.Compose(
         [
             transforms.Resize((32, 32)),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.3337, 0.3064, 0.3171], std=[0.2672, 0.2564, 0.2629]
-            ),
+            transforms.PILToTensor(),
         ]
     )
 
@@ -99,11 +96,15 @@ def process(output_dir="./datasets/raw"):
     all_y_tensor = torch.cat(
         [y if y.dim() == 1 else y.unsqueeze(0) for y in all_y], dim=0
     )
-    all_x_tensor = torch.cat([x if x.dim() == 4 else x.unsqueeze(0) for x in all_x], dim=0)
-    all_y_tensor = torch.cat([y if y.dim() == 1 else y.unsqueeze(0) for y in all_y], dim=0)
+
+    assert all_x_tensor.dtype == torch.uint8, f"Expected uint8, got {all_x_tensor.dtype}"
 
     # 封装处理后的数据 (GTSRB 有 43 类)
-    processed_data = {"x": all_x_tensor, "y": all_y_tensor, "num_classes": 43}
+    processed_data = {
+        "x": all_x_tensor,
+        "y": all_y_tensor,
+        "num_classes": 43,
+    }
 
     # 保存
     save_path = os.path.join(output_dir, "gtsrb_raw.pt")

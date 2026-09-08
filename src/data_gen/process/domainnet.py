@@ -58,10 +58,7 @@ def process(output_dir="./datasets/raw"):
                     transforms.Resize(224),
                     transforms.CenterCrop(224),
                     transforms.Grayscale(num_output_channels=3),
-                    transforms.ToTensor(),
-                    transforms.Normalize(
-                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                    ),
+                    transforms.PILToTensor(),
                 ]
             )
         else:
@@ -69,10 +66,7 @@ def process(output_dir="./datasets/raw"):
                 [
                     transforms.Resize(224),
                     transforms.CenterCrop(224),
-                    transforms.ToTensor(),
-                    transforms.Normalize(
-                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                    ),
+                    transforms.PILToTensor(),
                 ]
             )
 
@@ -99,9 +93,13 @@ def process(output_dir="./datasets/raw"):
         if os.path.exists(domain_zip):
             os.remove(domain_zip)
 
+    out_x = torch.cat(all_x, dim=0)
+    out_y = torch.cat(all_y, dim=0)
+    assert out_x.dtype == torch.uint8, f"Expected uint8, got {out_x.dtype}"
+
     processed_data = {
-        "x": torch.cat(all_x, dim=0),
-        "y": torch.cat(all_y, dim=0),
+        "x": out_x,
+        "y": out_y,
         "num_classes": len(global_class_map) if global_class_map else NUM_CLASSES,
         "domains": all_domains,
         "domain_names": DOMAINNET_DOMAINS,

@@ -256,7 +256,9 @@ def check_conservation(client_indices, global_by_class, split_name):
         )
 
 
-def save_mixed_ssl_data(output_dir, clients, client_test_indices, X, Y, num_classes):
+def save_mixed_ssl_data(
+    output_dir, clients, client_test_indices, X, Y, num_classes
+):
     """保存每个客户端文件：train（L ∪ U + is_labeled）+ 互斥均分的 test。"""
     os.makedirs(output_dir, exist_ok=True)
     for i, (train, test_idx) in enumerate(zip(clients, client_test_indices)):
@@ -330,10 +332,9 @@ def prepare_mixed_ssl_data(args, dataset_name, raw_data):
     check_conservation(client_unlabeled, unlabeled_by_class, "U")
 
     clients = assemble_client_train(client_labeled, client_unlabeled, X, Y)
-    # 基础 Test 池（按类）复用通用按类划分均分到各客户端：每类 iid 切块后拼接，
-    # 互斥且并集恰好等于完整 Test 池。IID 分支不读取 rng，此处传入仅为满足
-    # distribute_by_class 统一签名，并非用它决定 Test 分配。
-    test_rng = np.random.default_rng(args.seed)
+
+    # 全局 Test 池在客户端间互斥均分（采用 IID 分配方式打散）
+    test_rng = derive_rng(args.seed, 0, 2)
     client_test_by_class = distribute_by_class(
         test_by_class, args.num_clients, "iid", test_rng
     )
@@ -342,7 +343,9 @@ def prepare_mixed_ssl_data(args, dataset_name, raw_data):
         for parts in client_test_by_class
     ]
     check_conservation(client_test_indices, test_by_class, "Test")
-    save_mixed_ssl_data(output_dir, clients, client_test_indices, X, Y, num_classes)
+    save_mixed_ssl_data(
+        output_dir, clients, client_test_indices, X, Y, num_classes
+    )
 
     print(
         f"-> 成功为 {args.num_clients} 个客户端准备了 "

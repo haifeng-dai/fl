@@ -6,8 +6,14 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from .utils import BaseParams, BaseServer, clone_cpu_state, get_model
-from .utils.augment import sage_strong_augment, sage_weak_augment
+from .utils import (
+    BaseParams,
+    BaseServer,
+    clone_cpu_state,
+    get_model,
+    prepare_input_batch,
+)
+from .utils.augment import strong_augment, weak_augment
 from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
 
 
@@ -115,9 +121,9 @@ def train(p: Params):
             x_u, _ = unlabeled_batch
             x_l, y_l = x_l.to(device), y_l.to(device)
             x_u = x_u.to(device)
-            x_l = sage_weak_augment(x_l, p.dataset)
-            x_u_w = sage_weak_augment(x_u, p.dataset)
-            x_u_s = sage_strong_augment(x_u, p.dataset)
+            x_l = weak_augment(x_l, p.dataset)
+            x_u_w = weak_augment(x_u, p.dataset)
+            x_u_s = strong_augment(x_u, p.dataset)
 
             labeled_batch_size = x_l.size(0)
             student_logits = student(torch.cat((x_l, x_u_s)))
@@ -190,6 +196,7 @@ class Server(BaseServer):
             for data, target, *_ in loader:
                 data = data.to(self.device)
                 target = target.to(self.device)
+                data = prepare_input_batch(data, self.dataset)
                 logits = self.model(data)
                 loss_sum += F.cross_entropy(logits, target, reduction="sum").item()
                 sample_count += target.size(0)

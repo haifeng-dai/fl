@@ -186,7 +186,9 @@ def prepare_sfd_data(args, dataset_name, raw_data):
         "test": {"domains": test_domains},
     }
 
-    save_client_data(output_dir, X, Y, cli_tr, cli_te, num_classes, extra_fields)
+    save_client_data(
+        output_dir, X, Y, cli_tr, cli_te, num_classes, extra_fields
+    )
 
     print(
         f"-> 成功为 {num_clients} 个客户端准备了 {dataset_name} (SFD partition @ {output_dir})。"

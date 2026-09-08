@@ -37,11 +37,7 @@ def process(output_dir="./datasets/raw"):
 
     transform = transforms.Compose(
         [
-            transforms.ToTensor(),
-            transforms.Normalize(
-                (0.47889522, 0.47227842, 0.43047404),
-                (0.24205776, 0.23828046, 0.25874835),
-            ),
+            transforms.PILToTensor(),
         ]
     )
 
@@ -51,15 +47,20 @@ def process(output_dir="./datasets/raw"):
         split_dataset = datasets.ImageFolder(
             root=os.path.join(base_dir, split), transform=transform
         )
-        loader = DataLoader(split_dataset, batch_size=len(split_dataset))
-        x, y = next(iter(loader))
-        all_x.append(x)
-        all_y.append(y)
+        loader = DataLoader(split_dataset, batch_size=4096, shuffle=False)
+        for x, y in loader:
+            all_x.append(x)
+            all_y.append(y)
 
     all_x = torch.cat(all_x, dim=0)
     all_y = torch.cat(all_y, dim=0)
+    assert all_x.dtype == torch.uint8, f"Expected uint8, got {all_x.dtype}"
 
-    processed_data = {"x": all_x, "y": all_y, "num_classes": 10}
+    processed_data = {
+        "x": all_x,
+        "y": all_y,
+        "num_classes": 10,
+    }
 
     save_path = os.path.join(output_dir, "cinic10_raw.pt")
     torch.save(processed_data, save_path)

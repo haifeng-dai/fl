@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, TensorDataset
 
 from .utils import (
     BaseParams,
@@ -13,9 +13,10 @@ from .utils import (
     extract_prototypes,
     fmt_num,
     get_model,
+    prepare_input_batch,
     proto_aggregate,
 )
-from .utils.augment import sage_strong_augment, sage_weak_augment
+from .utils.augment import strong_augment, weak_augment
 from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
 
 
@@ -70,12 +71,12 @@ def estimate_prototypes_worker(p: BaseParams):
     model.load_state_dict(p.model_state)
     model.eval()
 
-    labeled_indices = torch.where(
-        p.train_set.is_labeled.bool()
-    )[0].tolist()
+    labeled_indices = torch.where(p.train_set.is_labeled.bool())[0].tolist()
 
+    labeled_x = prepare_input_batch(p.train_set.x[labeled_indices], p.dataset)
+    labeled_y = p.train_set.y[labeled_indices]
     loader = DataLoader(
-        Subset(p.train_set, labeled_indices),
+        TensorDataset(labeled_x, labeled_y),
         batch_size=p.batch_size,
         shuffle=False,
     )
@@ -118,6 +119,7 @@ def estimate_radii_worker(p: RadiiParams):
 
     for x, y, *_ in loader:
         x, y = x.to(device), y.to(device)
+        x = prepare_input_batch(x, p.dataset)
 
         features = model.extractor(x)
         distance = mse_distance(features, prototypes)
@@ -210,9 +212,9 @@ def train(p: Params):
     model_l.load_state_dict(p.model_state)
     has_unlabeled_loss = (p.lambda_u > 0.0) or (p.lambda_p > 0.0)
     if has_unlabeled_loss:
-        model_g = get_model(
-            p.model_name, p.dataset, p.num_class, p.feature_dim
-        ).to(device)
+        model_g = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+            device
+        )
         model_g.load_state_dict(p.model_state)
         model_g.eval()
         for parameter in model_g.parameters():
@@ -261,7 +263,7 @@ def train(p: Params):
             x_u_raw = x_u_raw.to(device)
 
             # 仅反向传播的有标签分支使用弱增强。
-            x_l_weak = sage_weak_augment(x_l_raw, p.dataset)
+            x_l_weak = weak_augment(x_l_raw, p.dataset)
             features_l = model_l.extractor(x_l_weak)
             loss_x = F.cross_entropy(model_l.classifier(features_l), y_l)
             loss = loss_x
@@ -295,7 +297,9 @@ def train(p: Params):
             if has_unlabeled_loss and use_contrastive:
                 # 候选集合及反距离权重严格来自冻结 teacher 的原始输入。
                 with torch.no_grad():
-                    candidate_features = model_g.extractor(x_u_raw)
+                    candidate_features = model_g.extractor(
+                        prepare_input_batch(x_u_raw, p.dataset)
+                    )
                     candidate_mask, candidate_size, candidate_distance = (
                         build_candidate_mask(
                             candidate_features,
@@ -306,7 +310,7 @@ def train(p: Params):
                     )
 
                 # 所有无标签反向传播项均使用强增强的 student 特征。
-                x_u_strong = sage_strong_augment(x_u_raw, p.dataset)
+                x_u_strong = strong_augment(x_u_raw, p.dataset)
                 features_u = model_l.extractor(x_u_strong)
                 loss_u, singleton_mask, pseudo_labels = singleton_pseudo_label_loss(
                     features_u,
@@ -359,9 +363,11 @@ def train(p: Params):
             total_loss_sum += loss.item() * y_l.size(0)
             total_loss_count += y_l.size(0)
 
-    labeled_indices = torch.where(p.train_set.is_labeled.bool())[0].tolist()
+    labeled_indices = torch.where(p.train_set.is_labeled.bool())[0]
+    labeled_x = prepare_input_batch(p.train_set.x[labeled_indices], p.dataset)
+    labeled_y = p.train_set.y[labeled_indices]
     labeled_loader = DataLoader(
-        Subset(p.train_set, labeled_indices),
+        TensorDataset(labeled_x, labeled_y),
         batch_size=p.batch_size,
     )
     local_protos, class_count = extract_prototypes(
@@ -491,16 +497,6 @@ class Server(BaseServer):
     def _percent(value, total):
         return 100.0 * value / max(1, total)
 
-    def _build_global_prototypes(self, results, selected):
-        local_protos = [results[cid]["protos"] for cid in selected]
-        local_counts = [results[cid]["class_count"] for cid in selected]
-        mean_protos = proto_aggregate(local_protos, local_counts)
-        total_count = torch.stack(local_counts).sum(dim=0)
-        mean_valid = total_count > 0
-        mean_protos[~mean_valid] = 0.0
-        self.mean_protos, self.mean_valid = mean_protos, mean_valid
-        return mean_protos, mean_valid, total_count, local_protos, local_counts
-
     def _aggregate_global_radii(self, results, selected):
         radii = torch.stack([results[cid]["radii"] for cid in selected])
         counts = torch.stack([results[cid]["radius_count"] for cid in selected])
@@ -623,8 +619,12 @@ class Server(BaseServer):
         self.nearest_inter_distance_by_class.append(nearest_inter)
         self.nearest_midpoint_distance_by_class.append(nearest_mid)
         self.radius_midpoint_ratio_by_class.append(mid_ratio)
-        self.nearest_inter_distance_mean.append(sum(inter_list) / max(1, len(inter_list)))
-        self.radius_midpoint_ratio_mean.append(sum(ratio_list) / max(1, len(ratio_list)))
+        self.nearest_inter_distance_mean.append(
+            sum(inter_list) / max(1, len(inter_list))
+        )
+        self.radius_midpoint_ratio_mean.append(
+            sum(ratio_list) / max(1, len(ratio_list))
+        )
         self.radius_midpoint_ratio_max.append(max(ratio_list) if ratio_list else 0.0)
         self.radius_midpoint_exceed_count.append(exceed_count)
 
@@ -687,18 +687,12 @@ class Server(BaseServer):
                 torch.ones_like(raw_dist, dtype=torch.bool), diagonal=1
             )
             pair_dist = raw_dist[pair_mask]
-            proto_scale = (
-                pair_dist.median().detach().clamp_min(1e-12)
-            )
+            proto_scale = pair_dist.median().detach().clamp_min(1e-12)
             diag_mask = torch.eye(n_valid, dtype=torch.bool, device=self.device)
             raw_dist_masked = raw_dist.masked_fill(diag_mask, float("inf"))
-            raw_nearest_inter = float(
-                raw_dist_masked.min(dim=1).values.mean().item()
-            )
+            raw_nearest_inter = float(raw_dist_masked.min(dim=1).values.mean().item())
 
         optimizer = torch.optim.Adam([target_valid], lr=self.proto_opt_lr)
-        last_anchor_loss = 0.0
-        last_sep_loss = 0.0
 
         for _ in range(self.proto_opt_steps):
             optimizer.zero_grad()
@@ -716,16 +710,15 @@ class Server(BaseServer):
             proto_loss.backward()
             optimizer.step()
 
-            last_anchor_loss = float(anchor_loss.item())
-            last_sep_loss = float(sep_loss.item())
-
         with torch.no_grad():
             final_anchor_dist = (target_valid - raw_valid).square().mean(dim=1)
             final_anchor_loss = float((final_anchor_dist / proto_scale).mean().item())
 
             target_dist = mse_distance(target_valid, target_valid)
             target_pair_dist = target_dist[pair_mask]
-            final_sep_loss = float(torch.exp(-target_pair_dist / proto_scale).mean().item())
+            final_sep_loss = float(
+                torch.exp(-target_pair_dist / proto_scale).mean().item()
+            )
 
             target_dist_masked = target_dist.masked_fill(diag_mask, float("inf"))
             target_nearest_inter = float(
@@ -734,9 +727,7 @@ class Server(BaseServer):
             shift_by_class = (target_valid - raw_valid).square().mean(dim=1)
             shift_mean = float(shift_by_class.mean().item())
             shift_max = float(shift_by_class.max().item())
-            inter_gain = (
-                target_nearest_inter / max(1e-12, raw_nearest_inter)
-            )
+            inter_gain = target_nearest_inter / max(1e-12, raw_nearest_inter)
 
         self.proto_opt_scale.append(float(proto_scale.item()))
         self.proto_opt_anchor_loss.append(final_anchor_loss)
@@ -788,7 +779,7 @@ class Server(BaseServer):
                 usable = valid[y]
                 if not bool(usable.any()):
                     continue
-                x_u = x[usable]
+                x_u = prepare_input_batch(x[usable], self.dataset)
                 y_u = y[usable]
 
                 feature = self.model.extractor(x_u)
@@ -824,9 +815,7 @@ class Server(BaseServer):
         all_q = torch.cat(all_q)
         all_y = torch.cat(all_y)
 
-        probs = torch.tensor(
-            [0.10, 0.25, 0.50, 0.75, 0.90, 0.95], dtype=torch.float32
-        )
+        probs = torch.tensor([0.10, 0.25, 0.50, 0.75, 0.90, 0.95], dtype=torch.float32)
         q_quantiles = torch.quantile(all_q, probs).tolist()
 
         self.relative_true_distance_mean.append(float(all_true_dist.mean().item()))
@@ -847,9 +836,7 @@ class Server(BaseServer):
             count_by_class[c] = c_count
             if c_count > 0:
                 q_by_class[c] = float(all_q[c_mask].mean().item())
-                nearest_by_class[c] = float(
-                    (all_q[c_mask] < 1.0).float().mean().item()
-                )
+                nearest_by_class[c] = float((all_q[c_mask] < 1.0).float().mean().item())
 
         self.relative_ratio_by_class.append(q_by_class)
         self.relative_true_nearest_ratio_by_class.append(nearest_by_class)
@@ -881,6 +868,7 @@ class Server(BaseServer):
             if not bool(mask.any()):
                 continue
             x, y = x[mask].to(self.device), y[mask].to(self.device)
+            x = prepare_input_batch(x, self.dataset)
             feature = self.model.extractor(x)
             logits = self.model.classifier(feature)
             classifier_pred = logits.argmax(dim=1)
@@ -888,7 +876,11 @@ class Server(BaseServer):
             distance[:, ~valid] = float("inf")
             proto_pred = distance.argmin(dim=1)
             classifier_ok = classifier_pred == y
-            proto_ok = proto_pred == y if bool(valid.any()) else torch.zeros_like(classifier_ok)
+            proto_ok = (
+                proto_pred == y
+                if bool(valid.any())
+                else torch.zeros_like(classifier_ok)
+            )
             missing, seen = ~present[y], present[y]
             stats["total"] += y.numel()
             stats["classifier_correct"] += int(classifier_ok.sum())
@@ -975,13 +967,9 @@ class Server(BaseServer):
             )
 
             # 3. 聚合得到真正处于 G_t 特征空间中的全局原型
-            global_model_protos = [
-                proto_results[cid]["protos"]
-                for cid in selected
-            ]
+            global_model_protos = [proto_results[cid]["protos"] for cid in selected]
             global_model_counts = [
-                proto_results[cid]["class_count"]
-                for cid in selected
+                proto_results[cid]["class_count"] for cid in selected
             ]
 
             mean_protos = proto_aggregate(
@@ -1000,11 +988,17 @@ class Server(BaseServer):
             support = total_count
 
             # 计算上一轮目标原型 -> 本轮统计原型的跟随度 tracking MSE
-            if self.previous_target_protos is not None:
+            if (
+                self.previous_target_protos is not None
+                and self.previous_target_valid is not None
+            ):
                 track_valid = self.raw_global_valid & self.previous_target_valid
                 if track_valid.any():
                     track_dist = (
-                        (self.raw_global_protos[track_valid] - self.previous_target_protos[track_valid])
+                        (
+                            self.raw_global_protos[track_valid]
+                            - self.previous_target_protos[track_valid]
+                        )
                         .square()
                         .mean(dim=1)
                     )

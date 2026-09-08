@@ -14,7 +14,7 @@ from .utils import (
     get_model,
     masked_kl_loss,
 )
-from .utils.augment import sage_strong_augment, sage_weak_augment
+from .utils.augment import strong_augment, weak_augment
 from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
 
 SAGE_KAPPA = math.log(2.0) / 0.05
@@ -76,11 +76,13 @@ def train(p: Params):
             x_l, y_l = labeled
 
             # ── 数据增强：有标签弱增强，无标签弱/强增强 ──
-            x_l = sage_weak_augment(x_l, p.dataset).to(device)
+            x_l = x_l.to(device)
+            x_u = x_u.to(device)
+            x_l = weak_augment(x_l, p.dataset)
             y_l = y_l.to(device)
             y_u = y_u.to(device)
-            x_u_w = sage_weak_augment(x_u, p.dataset).to(device)
-            x_u_s = sage_strong_augment(x_u, p.dataset).to(device)
+            x_u_w = weak_augment(x_u, p.dataset)
+            x_u_s = strong_augment(x_u, p.dataset)
 
             # ── 单次前向：拼接 [有标签 | 无标签弱 | 无标签强] ──
             inputs = torch.cat((x_l, x_u_w, x_u_s))
@@ -138,7 +140,9 @@ def train(p: Params):
             l_selected_correct += int((l_match & b_mask_l).sum().item())
 
             final_targets = targets.argmax(dim=-1)
-            final_selected_correct += int(((final_targets == y_u) & b_valid).sum().item())
+            final_selected_correct += int(
+                ((final_targets == y_u) & b_valid).sum().item()
+            )
 
             # 冲突判定：两者均通过阈值但预测类别不同，谁判断更正确
             conflict_mask = b_mask_g & b_mask_l & (targets_g != targets_l)

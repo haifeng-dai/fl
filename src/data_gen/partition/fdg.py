@@ -109,7 +109,9 @@ def prepare_fdg_data(args, dataset_name, raw_data):
     cli_te = ensure_nonempty_client_indices(cli_te, rng, "test")
 
     # FDG 客户端不保存 domains（train/test 仅含 x/y）
-    save_client_data(output_dir, X_full, Y_full, cli_tr, cli_te, num_classes)
+    save_client_data(
+        output_dir, X_full, Y_full, cli_tr, cli_te, num_classes
+    )
 
     print(
         f"-> 成功为 {num_clients} 个客户端准备了 {dataset_name} (FDG partition @ {output_dir})。"

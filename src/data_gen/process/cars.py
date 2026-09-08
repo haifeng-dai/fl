@@ -29,8 +29,7 @@ def process(output_dir="./datasets/raw"):
     transform = transforms.Compose(
         [
             transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.PILToTensor(),
         ]
     )
 
@@ -61,10 +60,15 @@ def process(output_dir="./datasets/raw"):
     print("-> Converting to tensors...")
     all_x_tensor = torch.cat(all_x, dim=0)
     all_y_tensor = torch.cat(all_y, dim=0)
+    assert all_x_tensor.dtype == torch.uint8, f"Expected uint8, got {all_x_tensor.dtype}"
 
     # 封装处理后的数据 (Stanford Cars 196 类)
     num_classes = len(torch.unique(all_y_tensor))
-    processed_data = {"x": all_x_tensor, "y": all_y_tensor, "num_classes": num_classes}
+    processed_data = {
+        "x": all_x_tensor,
+        "y": all_y_tensor,
+        "num_classes": num_classes,
+    }
 
     # 保存
     save_path = os.path.join(output_dir, "cars_raw.pt")

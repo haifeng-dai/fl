@@ -84,19 +84,15 @@ def prepare_label_data(args, dataset_name, raw_data):
     X, Y = raw_data["x"], raw_data["y"]
     rng = np.random.default_rng(args.seed)
 
-    tr_idx_by_cls, te_idx_by_cls, num_classes = split_indices_by_class(
-        Y, args.test_ratio, rng
-    )
-
-    if args.n_class == 0:
-        args.n_class = resolve_n_class(args, num_classes)
-        print(
-            f"-> Adaptive n_class: dataset has {num_classes} classes, "
-            f"{num_clients} clients, setting n_class={args.n_class}"
-        )
-
     output_dir = get_output_dir(args, dataset_name)
     print(f"-> Partitioning data ({os.path.basename(output_dir)})...")
+
+    # 1. 切分类别索引
+    (
+        tr_idx_by_cls,
+        te_idx_by_cls,
+        num_classes,
+    ) = split_indices_by_class(Y, args.test_ratio, rng)
 
     # 训练 / 测试各自按类分组后，共用同一份异质分布实现
     train_client = distribute_by_class(

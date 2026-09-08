@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
@@ -7,36 +8,25 @@ from torchvision import datasets, transforms
 CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR10_STD = (0.2023, 0.1994, 0.2010)
 
-# 定义 4 种不同的"增广策略"作为合成领域
+# 定义 4 种不同的"增广策略"作为合成领域（输出 PIL Image）
 DOMAIN_TRANSFORMS = {
-    "clean": transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
-        ]
-    ),
+    "clean": transforms.Compose([]),
     "color_jitter": transforms.Compose(
         [
             transforms.ColorJitter(
                 brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1
             ),
-            transforms.ToTensor(),
-            transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
         ]
     ),
     "blur_noise": transforms.Compose(
         [
             transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
-            transforms.ToTensor(),
-            transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
         ]
     ),
     "rotate_cutout": transforms.Compose(
         [
             transforms.RandomRotation(degrees=30),
             transforms.RandomResizedCrop(32, scale=(0.8, 1.0)),
-            transforms.ToTensor(),
-            transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
         ]
     ),
 }
@@ -96,7 +86,9 @@ def process(output_dir="./datasets/raw"):
             img = transforms.ToPILImage()(img.permute(2, 0, 1))
             if self.transform:
                 img = self.transform(img)
-            return img, self.targets[idx]
+            # 转为 uint8 Tensor (C, H, W)
+            img_t = torch.from_numpy(np.array(img)).permute(2, 0, 1)
+            return img_t, self.targets[idx]
 
     domain_names = list(DOMAIN_TRANSFORMS.keys())
     all_x, all_y, all_domains = [], [], []
@@ -111,9 +103,13 @@ def process(output_dir="./datasets/raw"):
         all_domains.extend(doms)
         print(f"  Generated domain '{dname}': {len(x)} samples")
 
+    out_x = torch.cat(all_x, dim=0)
+    out_y = torch.cat(all_y, dim=0)
+    assert out_x.dtype == torch.uint8, f"Expected uint8, got {out_x.dtype}"
+
     processed_data = {
-        "x": torch.cat(all_x, dim=0),
-        "y": torch.cat(all_y, dim=0),
+        "x": out_x,
+        "y": out_y,
         "num_classes": 10,
         "domains": all_domains,
         "domain_names": domain_names,

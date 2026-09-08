@@ -16,8 +16,9 @@ from .utils import (
     get_model,
     masked_kl_loss,
     param_aggregate,
+    prepare_input_batch,
 )
-from .utils.augment import sage_strong_augment, sage_weak_augment
+from .utils.augment import strong_augment, weak_augment
 from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
 
 
@@ -78,9 +79,9 @@ def train(p: Params):
             x_l, y_l = labeled_batch
             x_l, y_l = x_l.to(device), y_l.to(device)
             x_u, y_u = x_u.to(device), y_u.to(device)
-            x_l = sage_weak_augment(x_l, p.dataset)
-            x_u_w = sage_weak_augment(x_u, p.dataset)
-            x_u_s = sage_strong_augment(x_u, p.dataset)
+            x_l = weak_augment(x_l, p.dataset)
+            x_u_w = weak_augment(x_u, p.dataset)
+            x_u_s = strong_augment(x_u, p.dataset)
 
             inputs = torch.cat((x_l, x_u_w, x_u_s))
             z = model.extractor(inputs)
@@ -314,7 +315,8 @@ class Server(BaseServer):
         self.model.eval()
         with torch.no_grad():
             for x, y, *_ in loader:
-                logits = self.model(x.to(self.device))
+                x_norm = prepare_input_batch(x.to(self.device), self.dataset)
+                logits = self.model(x_norm)
                 prediction = logits.argmax(dim=1)
                 target = y.to(self.device)
                 total += target.numel()

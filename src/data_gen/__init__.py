@@ -2,6 +2,7 @@ import os
 
 import torch
 
+from src.algorithms.utils.input import DATASET_SPECS
 from .partition import (
     prepare_fdg_data,
     prepare_label_data,
@@ -33,10 +34,21 @@ def prepare_data(args):
     dataset_name = args.dataset
     raw_dir = "./datasets/raw"
     raw_path = os.path.join(raw_dir, f"{dataset_name}_raw.pt")
-    if not os.path.exists(raw_path):
-        print(f"-> Raw data for {dataset_name} not found. Processing...")
-        process_dataset(dataset_name, raw_dir)
-    raw_data = torch.load(raw_path, weights_only=False)
+
+    need_process = not os.path.exists(raw_path)
+    if not need_process:
+        raw_data = torch.load(raw_path, weights_only=False)
+        # 若为图像数据集但缓存仍为历史旧版 float32，则自动触发重生成
+        spec = DATASET_SPECS.get(dataset_name)
+        if spec is not None and spec.get("kind") == "image":
+            if raw_data.get("x") is not None and raw_data["x"].dtype != torch.uint8:
+                print(f"-> 检测到 {dataset_name} 旧版数据缓存，正在重新生成 uint8 数据...")
+                need_process = True
+
+    if need_process:
+        print(f"-> Raw data for {dataset_name} not found or outdated. Processing...")
+        raw_data = process_dataset(dataset_name, raw_dir)
+
     resolve_n_class(args, raw_data["num_classes"])
 
     if args.ssl == "sfd":

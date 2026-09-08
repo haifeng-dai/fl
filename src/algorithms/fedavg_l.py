@@ -11,7 +11,7 @@ from .utils import (
     clone_cpu_state,
     get_model,
 )
-from .utils.augment import sage_weak_augment
+from .utils.augment import weak_augment
 
 
 def get_path(args):
@@ -49,7 +49,7 @@ def train(p: BaseParams):
         for x_batch, y_batch in loader:
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
-            x_batch = sage_weak_augment(x_batch, p.dataset)
+            x_batch = weak_augment(x_batch, p.dataset)
             logits = model(x_batch)
             loss = F.cross_entropy(logits, y_batch)
             optimizer.zero_grad()

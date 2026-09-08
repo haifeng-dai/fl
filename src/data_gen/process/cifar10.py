@@ -6,48 +6,32 @@ from torchvision import datasets, transforms
 
 def process(output_dir="./datasets/raw"):
     """
-    下载并处理 CIFAR10 数据集，合并训练集和测试集。
+    下载并处理 CIFAR10 数据集，合并训练集和测试集为 uint8 [0, 255]。
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # 定义数据转换：转换为张量并进行标准化
-    # CIFAR10的均值和标准差
-    transform = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ]
-    )
+    # 下载并加载 CIFAR10 训练集与测试集（无变换，保留原始 uint8）
+    train_set = datasets.CIFAR10(root=output_dir, train=True, download=True)
+    test_set = datasets.CIFAR10(root=output_dir, train=False, download=True)
 
-    # 下载并加载 CIFAR10 训练集
-    train_set = datasets.CIFAR10(
-        root=output_dir, train=True, download=True, transform=transform
-    )
-    # 下载并加载 CIFAR10 测试集
-    test_set = datasets.CIFAR10(
-        root=output_dir, train=False, download=True, transform=transform
-    )
+    # data 是 numpy 数组 (N, H, W, C)，转为 Tensor (N, C, H, W)，dtype 为 torch.uint8
+    x_train = torch.from_numpy(train_set.data).permute(0, 3, 1, 2)
+    y_train = torch.tensor(train_set.targets, dtype=torch.long)
+    x_test = torch.from_numpy(test_set.data).permute(0, 3, 1, 2)
+    y_test = torch.tensor(test_set.targets, dtype=torch.long)
 
-    def get_all_tensors(dataset):
-        """
-        从数据集中获取所有图像和标签作为单个张量。
-        """
-        loader = torch.utils.data.DataLoader(dataset, batch_size=len(dataset))
-        return next(iter(loader))
-
-    # 获取训练集和测试集的所有张量
-    x_train, y_train = get_all_tensors(train_set)
-    x_test, y_test = get_all_tensors(test_set)
-
-    # 合并训练集和测试集的图像和标签
     all_x = torch.cat([x_train, x_test], dim=0)
     all_y = torch.cat([y_train, y_test], dim=0)
 
-    # 封装处理后的数据
-    processed_data = {"x": all_x, "y": all_y, "num_classes": 10}
+    assert all_x.dtype == torch.uint8, f"Expected uint8, got {all_x.dtype}"
 
-    # 保存处理后的数据到指定目录
+    processed_data = {
+        "x": all_x,
+        "y": all_y,
+        "num_classes": 10,
+    }
+
     save_path = os.path.join(output_dir, "cifar10_raw.pt")
     torch.save(processed_data, save_path)
     print(f"-> CIFAR10 raw data saved to {save_path}")

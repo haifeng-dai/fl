@@ -11,6 +11,7 @@ from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader, TensorDataset
 
 from .utils import (
+    DATASET_SPECS,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -18,6 +19,7 @@ from .utils import (
     get_model,
     kl_loss,
     param_aggregate,
+    prepare_input_batch,
     strong_augment,
 )
 
@@ -234,7 +236,7 @@ class DecomposedModel(nn.Module):
 
 def compute_iccs_loss(
     dm: DecomposedModel,
-    x_ub: torch.Tensor,
+    x_ub_raw: torch.Tensor,
     y_logits: torch.Tensor,
     helper_net: nn.Module | None,
     helper_states: list[dict[str, torch.Tensor]],
@@ -243,26 +245,28 @@ def compute_iccs_loss(
     lambda_a: float,
     curr_round: int,
     num_class: int,
+    dataset_name: str,
 ) -> torch.Tensor:
     """计算基于置信度掩码的 inter-client consistency KL 损失与 agreement 伪标签 CE 损失。"""
     y_probs = torch.softmax(y_logits.detach(), dim=1)
     conf_mask = y_probs.max(dim=1).values >= confidence
 
     if not conf_mask.any():
-        return torch.tensor(0.0, device=x_ub.device)
+        return torch.tensor(0.0, device=x_ub_raw.device)
 
-    x_conf = x_ub[conf_mask]
+    x_conf_raw = x_ub_raw[conf_mask]
     local_conf_logits = y_logits[conf_mask]  # 承接梯度，不 detach
     y_conf_logits_det = local_conf_logits.detach()
 
     with torch.no_grad():
         helper_conf_logits = []
         if helper_net is not None:
+            x_conf_norm = prepare_input_batch(x_conf_raw, dataset_name)
             for hs in helper_states:
                 helper_net.load_state_dict(hs)
-                helper_conf_logits.append(helper_net(x_conf))
+                helper_conf_logits.append(helper_net(x_conf_norm))
 
-    loss_iccs = torch.tensor(0.0, device=x_ub.device)
+    loss_iccs = torch.tensor(0.0, device=x_ub_raw.device)
 
     # 1. Inter-client consistency: KL(helper || local) * lambda_i
     if helper_conf_logits and curr_round > 0:
@@ -279,7 +283,7 @@ def compute_iccs_loss(
                 votes += one_hot(h_logits.argmax(dim=1), num_class)
         y_pseudo = votes.argmax(dim=1)
 
-    y_hard_logits = dm.theta(strong_augment(x_conf))
+    y_hard_logits = dm.theta(strong_augment(x_conf_raw, dataset_name))
     loss_ce = lambda_a * F.cross_entropy(y_hard_logits, y_pseudo)
     loss_iccs = loss_iccs + loss_ce
 
@@ -346,16 +350,19 @@ def train(p: Params):
             x_lb, y_lb = x_lb.to(device), y_lb.to(device)
             x_ub = x_ub.to(device)
 
+            x_lb_norm = prepare_input_batch(x_lb, p.dataset)
+            x_ub_norm = prepare_input_batch(x_ub, p.dataset)
+
             # ── 监督分支（仅更新 σ）──
             optimizer_s.zero_grad()
-            loss_s = p.lambda_s * F.cross_entropy(dm.theta(x_lb), y_lb)
+            loss_s = p.lambda_s * F.cross_entropy(dm.theta(x_lb_norm), y_lb)
             loss_s.backward()
             optimizer_s.step()
             dm.sync_theta()
 
             # ── 无监督分支（仅更新 ψ）：单次 backward ──
             optimizer_u.zero_grad()
-            y_logits = dm.theta(x_ub)
+            y_logits = dm.theta(x_ub_norm)
 
             # L1(ψ) 与 L2(σ − ψ) 正则化项
             reg_l1 = sum(pp.abs().sum() for pp in dm.psi.parameters())
@@ -368,7 +375,7 @@ def train(p: Params):
             # 计算置信度掩码下的 ICCS KL 与 CE 损失
             loss_iccs = compute_iccs_loss(
                 dm=dm,
-                x_ub=x_ub,
+                x_ub_raw=x_ub,
                 y_logits=y_logits,
                 helper_net=helper_net,
                 helper_states=helper_states,
@@ -377,6 +384,7 @@ def train(p: Params):
                 lambda_a=p.lambda_a,
                 curr_round=p.curr_round,
                 num_class=p.num_class,
+                dataset_name=p.dataset,
             )
             loss_u = loss_u + loss_iccs
 
@@ -479,7 +487,7 @@ class Server(BaseServer):
         self.embedding_noise = self.build_embedding_noise()
 
     def build_embedding_noise(self) -> torch.Tensor:
-        """根据实际数据集样本形状构建确定的固定噪声。"""
+        """根据实际数据集样本形状构建确定的固定噪声，并标准化。"""
         sample_x = None
         for cid in range(self.num_clients):
             t_set = self.train_sets[cid]
@@ -494,7 +502,15 @@ class Server(BaseServer):
         gen = torch.Generator().manual_seed(42)
         shape = (1, *sample_x.shape)
         noise = (torch.randn(shape, generator=gen) * 0.5 + 0.5).clamp_(0.0, 1.0)
-        return noise.to(torch.float32)
+        noise = noise.to(torch.float32)
+
+        spec = DATASET_SPECS.get(self.dataset)
+        if spec is not None and spec["kind"] == "image":
+            mean = torch.tensor(spec["mean"], dtype=torch.float32).view(-1, 1, 1)
+            std = torch.tensor(spec["std"], dtype=torch.float32).view(-1, 1, 1)
+            noise = (noise - mean) / std
+
+        return noise
 
     def embed_client(self, cid: int) -> torch.Tensor:
         """将客户端模型映射为嵌入向量：使用该 cid 最新完整状态，在 eval 模式下前向。"""

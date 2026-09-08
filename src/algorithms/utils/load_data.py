@@ -2,7 +2,7 @@ import os
 
 import torch
 
-from src.data_gen import get_output_dir
+from src.data_gen.partition.common import get_output_dir
 
 
 class MetaDataset(torch.utils.data.Dataset):
