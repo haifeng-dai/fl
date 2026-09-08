@@ -125,6 +125,25 @@ proxyfl_ssl:
 # 联邦半监督学习测试算法（fedtest）
 fedtest:
     lambda_s: 1.0
+    lambda_u: 1.0
+    proto_anchor_weight: 1.0
+    proto_sep_weight: 1.0
+    proto_opt_lr: 0.001
+    proto_opt_steps: 50
+
+fedtest_p_r:
+    lambda_s: 1.0
+    lambda_p: 0.0
+    lambda_u: 1.0
+    tau: 0.1
+    proto_radius_quantile: 0.95
+    proto_anchor_weight: 1.0
+    proto_sep_weight: 1.0
+    proto_opt_lr: 0.001
+    proto_opt_steps: 50
+
+fedtest_p_t:
+    lambda_s: 1.0
     lambda_p: 0.0
     lambda_u: 1.0
     tau: 0.1
@@ -142,7 +161,8 @@ fedtest:
     proto_opt_steps: 50
     proto_q_target_precision: 0.70
     proto_q_min_samples: 20
-    proto_q_max_threshold: 0.60
+    proto_q_max_threshold: 0.65
+    proto_q_history_rounds: 3
 
 efhc:
     event_r: 250
