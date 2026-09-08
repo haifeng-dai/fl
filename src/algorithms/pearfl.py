@@ -188,7 +188,7 @@ class Server(BaseServer):
         """主训练流程：支持分布式原型交换和本地多 Epoch 训练"""
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- PearFL Round {r + 1}/{self.rounds} ---")
 
@@ -242,6 +242,26 @@ class Server(BaseServer):
 
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "client": self.clients_state,
+                "aux": {
+                    "personalized_protos": self.personalized_protos.cpu(),
+                    "local_protos_pool": self.local_protos_pool.cpu(),
+                    "local_counts_pool": self.local_counts_pool.cpu(),
+                    "W": self.W.cpu(),
+                },
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.personalized_protos = aux["personalized_protos"].to(self.device)
+        self.local_protos_pool = aux["local_protos_pool"].to(self.device)
+        self.local_counts_pool = aux["local_counts_pool"].to(self.device)
+        self.W = aux["W"].to(self.device)
+        return params
 
     def aggregate_prototypes(self):
         """

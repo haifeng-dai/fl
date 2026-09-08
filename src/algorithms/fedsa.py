@@ -154,7 +154,7 @@ class Server(BaseServer):
 
         print(f"FedSA Training with alpha_sa={self.alpha_sa} (EMA factor)")
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FedSA Round {r + 1}/{self.rounds} ---")
 
@@ -207,6 +207,23 @@ class Server(BaseServer):
                 f"Global Accuracy (Avg Personal): {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "global": self.model.state_dict(),
+                "client": self.clients_state,
+                "aux": {
+                    "anchors": self.anchors,
+                    "clients_anchors": self.clients_anchors,
+                },
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.anchors = aux["anchors"]
+        self.clients_anchors = aux["clients_anchors"]
+        return params
 
     def update_global_anchors(self, local_anchors_list, local_counts_list):
         """对本地原型进行加权聚合，并对语义锚点执行 EMA（指数移动平均）更新。"""

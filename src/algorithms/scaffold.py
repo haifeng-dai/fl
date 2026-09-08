@@ -142,7 +142,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- SCAFFOLD Round {r + 1}/{self.rounds} ---")
 
@@ -201,6 +201,19 @@ class Server(BaseServer):
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "global": self.model.state_dict(),
+                "aux": {"c_global": self.c_global, "c_local": self.c_local},
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.c_global = aux["c_global"]
+        self.c_local = aux["c_local"]
+        return params
 
     def save(self):
         metrics = {"acc": self.acc, "loss": self.loss}

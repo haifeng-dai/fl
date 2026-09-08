@@ -257,7 +257,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FedKD Round {r + 1}/{self.rounds} ---")
 
@@ -298,6 +298,23 @@ class Server(BaseServer):
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "global": self.model.state_dict(),
+                "client": self.clients_state,
+                "aux": {
+                    "client_wh_states": self.client_wh_states,
+                    "compressed_params": self.compressed_params,
+                },
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.client_wh_states = aux["client_wh_states"]
+        self.compressed_params = aux["compressed_params"]
+        return params
 
     def aggregate_svd(self, client_params_list, weights):
         """聚合通过 SVD 压缩的模型参数"""

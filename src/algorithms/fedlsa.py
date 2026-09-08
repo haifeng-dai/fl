@@ -195,7 +195,7 @@ class Server(BaseServer):
             f"FedLSA Training with lambda_com={self.lambda_com}, alpha_sep={self.alpha_sep}"
         )
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FedLSA Round {r + 1}/{self.rounds} ---")
 
@@ -239,6 +239,23 @@ class Server(BaseServer):
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "global": self.model.state_dict(),
+                "client": self.clients_state,
+                "aux": {
+                    "R": self.R,
+                    "anchor_mapping": self.anchor_mapping.state_dict(),
+                },
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.R = aux["R"].to(self.device).detach().requires_grad_(True)
+        self.anchor_mapping.load_state_dict(aux["anchor_mapping"])
+        return params
 
     def server_optimization(self):
         """

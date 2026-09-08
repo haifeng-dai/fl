@@ -94,7 +94,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FedProto Round {r + 1}/{self.rounds} ---")
 
@@ -141,6 +141,21 @@ class Server(BaseServer):
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Proto Accuracy: {self.acc_proto[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {
+                "acc": self.acc,
+                "acc_proto": self.acc_proto,
+                "loss": self.loss,
+            }
+            params = {
+                "client": self.clients_state,
+                "proto": self.global_protos,
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        self.global_protos = params["proto"]
+        return params
 
     def save(self):
         metrics = {"acc": self.acc, "acc_proto": self.acc_proto, "loss": self.loss}

@@ -152,7 +152,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FedTGP Round {r + 1}/{self.rounds} ---")
 
@@ -167,9 +167,11 @@ class Server(BaseServer):
                 Params(
                     **asdict(base),
                     lamda_=self.lamda_,
-                    global_protos=self.global_protos.cpu()
-                    if self.global_protos is not None
-                    else None,
+                    global_protos=(
+                        self.global_protos.cpu()
+                        if self.global_protos is not None
+                        else None
+                    ),
                 )
                 for base in base_params
             ]
@@ -210,6 +212,27 @@ class Server(BaseServer):
                 f"Loss CE: {self.loss[-1]:.4f}, Loss Proto: {self.loss_proto[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {
+                "acc": self.acc,
+                "acc_proto": self.acc_proto,
+                "loss": self.loss,
+                "loss_proto": self.loss_proto,
+            }
+            params = {
+                "global": self.model.state_dict(),
+                "client": self.clients_state,
+                "proto": self.global_protos,
+                "aux": {"tgp": self.tgp.state_dict(), "gap": self.gap.cpu()},
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        self.global_protos = params["proto"]
+        self.tgp.load_state_dict(params["aux"]["tgp"])
+        self.tgp.to(self.device)
+        self.gap = params["aux"]["gap"].to(self.device)
+        return params
 
     def calculate_gap(self, protos_per_client, counts_per_client):
         """向量化计算类别间的最小间距 (GPU 加速)"""

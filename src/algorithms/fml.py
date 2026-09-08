@@ -131,7 +131,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FML Round {r + 1}/{self.rounds} ---")
 
@@ -180,6 +180,17 @@ class Server(BaseServer):
                 f"Loss Global: {self.loss_g[-1]:.4f}, Loss Local: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {
+                "acc": self.acc,
+                "acc_g": self.acc_g,
+                "loss": self.loss,
+                "loss_g": self.loss_g,
+            }
+            params = {
+                "global": self.model.state_dict(),
+                "client": self.clients_state,
+            }
+            self.save_checkpoint(r + 1, metrics, params)
 
     def save(self):
         metrics = {

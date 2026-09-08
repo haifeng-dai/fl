@@ -96,7 +96,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FedRep Round {r + 1}/{self.rounds} ---")
             selected = torch.randperm(self.num_clients)[:num_join].tolist()
@@ -141,6 +141,17 @@ class Server(BaseServer):
                 f"Personalized Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "global": self.model.state_dict(),
+                "aux": {"client_head_states": self.client_head_states},
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        self.client_head_states = params["aux"]["client_head_states"]
+        return params
 
     def evaluate(self):
         full_states = []

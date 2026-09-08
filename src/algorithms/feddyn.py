@@ -113,7 +113,7 @@ class Server(BaseServer):
             parameters_to_vector(self.model.parameters()).detach().clone()
         )
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FedDyn Round {r + 1}/{self.rounds} ---")
 
@@ -174,6 +174,19 @@ class Server(BaseServer):
                 f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "global": self.model.state_dict(),
+                "aux": {"h": self.h, "local_grads": self.local_grads},
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.h = aux["h"]
+        self.local_grads = aux["local_grads"]
+        return params
 
     def save(self):
         metrics = {"acc": self.acc, "loss": self.loss}

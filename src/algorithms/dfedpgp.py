@@ -212,7 +212,7 @@ class Server(BaseServer):
         """主训练循环"""
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- DFedPGP Round {r + 1}/{self.rounds} ---")
 
@@ -260,6 +260,25 @@ class Server(BaseServer):
 
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "global": self.model.state_dict(),
+                "aux": {
+                    "client_body": self.client_body,
+                    "client_head": self.client_head,
+                    "client_mu": self.client_mu,
+                },
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.client_body = aux["client_body"]
+        self.client_head = aux["client_head"]
+        self.client_mu = aux["client_mu"]
+        self.update_clients_state()
+        return params
 
     def aggregate(self):
         """
@@ -305,9 +324,11 @@ class Server(BaseServer):
                 "body": self.client_body,
                 "head": self.client_head,
                 "mu": self.client_mu,
-                "topology": self.adj_matrix.cpu()
-                if isinstance(self.adj_matrix, torch.Tensor)
-                else self.adj_matrix,
+                "topology": (
+                    self.adj_matrix.cpu()
+                    if isinstance(self.adj_matrix, torch.Tensor)
+                    else self.adj_matrix
+                ),
             },
         }
         self.deal_save(metrics, params)

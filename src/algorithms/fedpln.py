@@ -220,7 +220,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FedPLN Round {r + 1}/{self.rounds} ---")
 
@@ -270,10 +270,26 @@ class Server(BaseServer):
 
             print(f"Acc: {self.acc[-1]:.4f}, PLN ACC: {self.acc_proto[-1]:.4f}")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {
+                "acc": self.acc,
+                "acc_proto": self.acc_proto,
+                "loss": self.loss,
+                "loss_p": self.loss_p,
+            }
+            params = {
+                "global": self.model.state_dict(),
+                "proto": self.pln.state_dict(),
+            }
+            self.save_checkpoint(r + 1, metrics, params)
 
     def aggregate(self, clients_params, plns_params, weights):
         super().aggregate(clients_params, weights)
         self.pln.load_state_dict(param_aggregate(plns_params, weights))
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        self.pln.load_state_dict(params["proto"])
+        return params
 
     def save(self):
         metrics = {

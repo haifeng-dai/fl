@@ -273,7 +273,7 @@ class Server(BaseServer):
         """主训练流程"""
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- DisPFL Round {r + 1}/{self.rounds} ---")
 
@@ -323,6 +323,24 @@ class Server(BaseServer):
 
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "client": self.clients_state,
+                "aux": {
+                    "client_masks": self.client_masks,
+                    "prev_masks": self.prev_masks,
+                    "topology": self.A.cpu(),
+                },
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.client_masks = aux["client_masks"]
+        self.prev_masks = aux["prev_masks"]
+        self.A = aux["topology"].to(self.device)
+        return params
 
     def aggregate(self, round_masks=None):
         """

@@ -142,7 +142,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- ProxyFL Round {r + 1}/{self.rounds} ---")
 
@@ -197,6 +197,22 @@ class Server(BaseServer):
                 f"Avg Proxy Acc: {self.acc_p[-1]:.2f}%, Avg Proxy Loss: {self.loss_p[-1]:.4f}"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {
+                "acc": self.acc,
+                "acc_p": self.acc_p,
+                "loss": self.loss,
+                "loss_p": self.loss_p,
+            }
+            params = {
+                "client": self.clients_state,
+                "aux": {"client_states_p": self.client_states_p},
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        self.client_states_p = params["aux"]["client_states_p"]
+        return params
 
     def save(self):
         metrics = {

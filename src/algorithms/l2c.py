@@ -103,9 +103,7 @@ def train_phase1(p: ParamsPhase1):
 
     # 4. 计算 Delta = theta_t - theta_updated
     theta_mid = model.state_dict()
-    delta_theta = {
-        k: (theta_t[k].to(device) - theta_mid[k]).cpu() for k in theta_t
-    }
+    delta_theta = {k: (theta_t[k].to(device) - theta_mid[k]).cpu() for k in theta_t}
 
     return {
         "loss": total_loss / num_batches,  # avg_loss
@@ -206,7 +204,7 @@ class Server(BaseServer):
         """主训练流程：执行 L2C 的两阶段协作更新"""
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for round_idx in range(self.rounds):
+        for round_idx in range(self.start_round, self.rounds):
             t0 = time.time()
             logger.info(f"--- L2C Round {round_idx + 1}/{self.rounds} ---")
 
@@ -331,6 +329,16 @@ class Server(BaseServer):
             print(
                 f"[Round {round_idx + 1}] Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%, Time spent: {time.time() - t0:.2f}s"
             )
+            metrics = {"acc": self.acc, "loss": self.loss}
+            params = {
+                "client": self.clients_state,
+                "aux": {
+                    "A": self.A,
+                    "alphas": self.alphas,
+                    "phase1_results": self.phase1_results,
+                },
+            }
+            self.save_checkpoint(round_idx + 1, metrics, params)
 
     def aggregate(self):
         """
@@ -348,14 +356,22 @@ class Server(BaseServer):
         # 注意：这里仅更新 self.model 用于可能的全局评估参考，不影响 clients_state
         self.model.load_state_dict(aggregated_state)
 
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.A = aux["A"]
+        self.alphas = aux["alphas"]
+        self.phase1_results = aux["phase1_results"]
+        return params
+
     def save(self):
         metrics = {"acc": self.acc, "loss": self.loss}
         params = {
             "client": self.clients_state,
             "aux": {
-                "topology": self.A.cpu()
-                if isinstance(self.A, torch.Tensor)
-                else self.A,
+                "topology": (
+                    self.A.cpu() if isinstance(self.A, torch.Tensor) else self.A
+                ),
                 "alphas": self.alphas,
             },
         }

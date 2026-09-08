@@ -173,7 +173,7 @@ class Server(BaseServer):
         num_join_clients = self.num_clients
         selected_clients = np.arange(self.num_clients)
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- DFedSET Round {r + 1}/{self.rounds} ---")
             # selected_clients = np.random.choice(
@@ -429,6 +429,25 @@ class Server(BaseServer):
                 f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%, Proto Acc: {self.acc_proto[-1]:.2f}%"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {
+                "acc": self.acc,
+                "acc_proto": self.acc_proto,
+                "loss": self.loss,
+                "gsd_log": self.gsd_log,
+                "num_triggered_log": self.num_triggered_log,
+                "triggered_ids_log": self.triggered_ids_log,
+            }
+            params = {
+                "client": self.clients_state,
+                "aux": {
+                    "consensus_P": self.consensus_P,
+                    "S_cache": self.S_cache,
+                    "W_cache": self.W_cache,
+                    "counts_cache": self.counts_cache,
+                    "local_gsd_ema": self.local_gsd_ema,
+                },
+            }
+            self.save_checkpoint(r + 1, metrics, params)
 
     def evaluate(self, model_states=None, protos=None):
         target_states = model_states if model_states is not None else self.clients_state
@@ -454,6 +473,16 @@ class Server(BaseServer):
         self.acc.append(sum(r["acc"] for r in results) / self.num_clients)
         if protos is not None:
             self.acc_proto.append(sum(r["p_acc"] for r in results) / self.num_clients)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.consensus_P = aux["consensus_P"]
+        self.S_cache = aux["S_cache"]
+        self.W_cache = aux["W_cache"]
+        self.counts_cache = aux["counts_cache"]
+        self.local_gsd_ema = aux["local_gsd_ema"].to(self.device)
+        return params
 
     def save(self):
         metrics = {

@@ -215,7 +215,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             print(f"\n--- FedDPC Round {r + 1}/{self.rounds} ---")
 
@@ -232,9 +232,11 @@ class Server(BaseServer):
                     lr_head=self.lr_head,
                     lr_body=self.lr_body,
                     lamda_=self.lamda_,
-                    global_protos=self.global_protos.cpu()
-                    if self.global_protos is not None
-                    else None,
+                    global_protos=(
+                        self.global_protos.cpu()
+                        if self.global_protos is not None
+                        else None
+                    ),
                     lambda_p=self.lambda_p,
                 )
                 for base in base_params
@@ -274,6 +276,32 @@ class Server(BaseServer):
                 f"PLN Loss: {self.loss_pln[-1]:.4f} (Ortho: {self.loss_pln_ortho[-1]:.4f})"
             )
             print(f"Round finished in {time.time() - t0:.2f} seconds")
+            metrics = {
+                "acc": self.acc,
+                "acc_proto": self.acc_proto,
+                "loss": self.loss,
+                "loss_proto": self.loss_proto,
+                "loss_pln": self.loss_pln,
+                "loss_pln_mse": self.loss_pln_mse,
+                "loss_pln_ortho": self.loss_pln_ortho,
+            }
+            params = {
+                "global": self.model.state_dict(),
+                "client": self.clients_state,
+                "aux": {
+                    "global_protos": self.global_protos,
+                    "pln": self.pln.state_dict(),
+                },
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.global_protos = aux["global_protos"]
+        self.pln.load_state_dict(aux["pln"])
+        self.pln.to(self.device)
+        return params
 
     def update_pln(self, uploaded_protos):
         self.pln.train()

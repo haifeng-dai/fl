@@ -53,6 +53,13 @@ def get_config():
         default=None,
         help="Communication rounds, overrides config 'rounds'",
     )
+    base_parser.add_argument(
+        "--resume",
+        dest="resume_from",
+        type=str,
+        default=None,
+        help="Resume training from a checkpoint file",
+    )
 
     # 解析命令行参数
     args = base_parser.parse_args()
@@ -94,6 +101,8 @@ def get_config():
     # 命令行显式参数默认覆盖配置文件（含测试模式的强制默认值）
     if args.rounds is not None:
         config_dict["rounds"] = args.rounds
+    if args.resume_from is not None:
+        config_dict["resume_from"] = args.resume_from
 
     # 6. 展开参数搜索 (Sweep)
     configs = expand_sweep(config_dict)
@@ -103,9 +112,8 @@ def get_config():
             raise ValueError("ssl 与 fdg 不能同时启用。")
 
     # 7. 将 CLI 独有参数注入每个配置（不经过 YAML/sweep）
-    if args.run_time is not None:
-        for cfg in configs:
-            cfg.run_time = args.run_time
+    for cfg in configs:
+        cfg.run_time = args.run_time
 
     return _apply_ablation(configs, raw_ablation)
 

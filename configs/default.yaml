@@ -64,6 +64,11 @@ join_ratio: 1.0
 seed: 42
 times: 1
 
+# Checkpoint（按完整通信轮次保存，可通过 resume_from 恢复）
+checkpoint_enabled: true
+checkpoint_interval: 50
+resume_from: null
+
 # 资源与框架 (Resources & Ray)
 gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
 # gpus: "0,1"

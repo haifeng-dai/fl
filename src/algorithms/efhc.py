@@ -186,7 +186,7 @@ class Server(BaseServer):
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
 
-        for r in range(self.rounds):
+        for r in range(self.start_round, self.rounds):
             t0 = time.time()
             lr = self.lr_schedule(r)
             print(f"\n--- EF-HC Round {r + 1}/{self.rounds} ---")
@@ -238,6 +238,28 @@ class Server(BaseServer):
             self.evaluate()
             print(f"Avg Loss: {self.loss[-1]:.4f}, Acc: {self.acc[-1]:.2f}%")
             print(f"Round finished in {time.time() - t0:.2f}s")
+            metrics = {
+                "acc": self.acc,
+                "loss": self.loss,
+                "triggered_log": self.triggered_log,
+                "triggered_ids_log": self.triggered_ids_log,
+                "changes_log": self.changes_log,
+            }
+            params = {
+                "client": self.clients_state,
+                "aux": {
+                    "hat_states": self.hat_states,
+                    "client_changes": self.client_changes,
+                },
+            }
+            self.save_checkpoint(r + 1, metrics, params)
+
+    def load_checkpoint(self, path):
+        params = super().load_checkpoint(path)
+        aux = params["aux"]
+        self.hat_states = aux["hat_states"]
+        self.client_changes = aux["client_changes"]
+        return params
 
     def save(self):
         metrics = {

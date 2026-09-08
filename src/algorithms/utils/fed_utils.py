@@ -74,6 +74,7 @@ def evaluate(
 class BaseServer:
     def __init__(self, args, pfl=False, is_ssl=False):
         self.rounds: int = args.rounds
+        self.start_round: int = 0
         self.num_clients: int = args.num_clients
         self.join_ratio: float = args.join_ratio
         self.epochs: int = args.epochs
@@ -92,6 +93,10 @@ class BaseServer:
         self.test: int = args.test
         self.pfl = pfl
         self.is_ssl = is_ssl
+        self.checkpoint_enabled: bool = args.checkpoint_enabled
+        self.checkpoint_interval: int = args.checkpoint_interval
+        self.resume_from = args.resume_from
+        self.checkpoint_dir = os.path.join(self.save_path, "checkpoints")
 
         self.acc: list[float] = []
         self.acc_proto: list[float] = []
@@ -164,6 +169,56 @@ class BaseServer:
     @property
     def is_sfd(self) -> bool:
         return self.ssl == "sfd"
+
+    def save_checkpoint(self, completed_round, metrics, params):
+        """保存单轮 checkpoint，并在成功后清理同实验旧轮次文件。"""
+        if not self.checkpoint_enabled:
+            return None
+        if completed_round % self.checkpoint_interval != 0:
+            return None
+        if self.test:
+            print("-> [Test Mode] Skip checkpoint save")
+            return None
+
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        prefix = f"{self.file_name}_{self.cur_time}_round_"
+        filename = f"{prefix}{completed_round:06d}.pt"
+        path = os.path.join(self.checkpoint_dir, filename)
+        temp_path = f"{path}.tmp.{os.getpid()}"
+        try:
+            checkpoint = {
+                "round": completed_round,
+                "metrics": metrics,
+                "params": params,
+            }
+            torch.save(checkpoint, temp_path)
+            os.replace(temp_path, path)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+        for name in os.listdir(self.checkpoint_dir):
+            if not name.startswith(prefix) or not name.endswith(".pt"):
+                continue
+            round_text = name[len(prefix) : -len(".pt")]
+            if round_text.isdigit() and name != filename:
+                os.remove(os.path.join(self.checkpoint_dir, name))
+        print(f"-> Checkpoint saved: {path}")
+        return path
+
+    def load_checkpoint(self, path):
+        """加载单轮 checkpoint 的通用状态。"""
+        data = torch.load(path, map_location="cpu", weights_only=False)
+        self.start_round = data["round"]
+        metrics = data["metrics"]
+        for name, values in metrics.items():
+            setattr(self, name, values)
+        params = data["params"]
+        if "global" in params:
+            self.model.load_state_dict(params["global"])
+        if "client" in params:
+            self.clients_state = params["client"]
+        return params
 
     def aggregate(
         self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs

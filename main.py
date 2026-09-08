@@ -30,7 +30,12 @@ def run_experiment(args, t):
             # 创建日志目录并将 stdout/stderr 导向文件
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             log_f = stack.enter_context(
-                open(log_path, "w", encoding="utf-8", buffering=1)
+                open(
+                    log_path,
+                    "a" if args.resume_from is not None else "w",
+                    encoding="utf-8",
+                    buffering=1,
+                )
             )
             stack.enter_context(redirect_stdout(log_f))
             stack.enter_context(redirect_stderr(log_f))
@@ -47,6 +52,8 @@ def run_experiment(args, t):
 
             # 4. 实例化 Server 并执行训练与保存
             server = server_cls(args=args)
+            if args.resume_from is not None:
+                server.load_checkpoint(args.resume_from)
             server.fit()
             server.save()
 
@@ -83,7 +90,7 @@ def main():
         src.get_pre_name(args)
 
         # 4. 循环执行多次实验：支持通过 -r/--run_time 指定索引子集
-        rt_str = getattr(args, "run_time", None)
+        rt_str = args.run_time
         if rt_str is not None:
             trial_indices = [int(x.strip()) for x in rt_str.split(",")]
             trial_indices = [t for t in trial_indices if 0 <= t < args.times]
