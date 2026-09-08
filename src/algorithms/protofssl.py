@@ -3,18 +3,19 @@ import time
 from dataclasses import asdict, dataclass
 
 import torch
-from torch.utils.data import DataLoader, Subset, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset
 
 from .utils import (
     BaseParams,
     BaseServer,
     clone_cpu_state,
-    dist_contrastive_loss,
     extract_prototypes,
     fmt_num,
     get_model,
+    prepare_input_batch,
     proto_aggregate,
 )
+from .utils.loss import dist_contrastive_loss
 
 
 def get_path(args):
@@ -122,10 +123,11 @@ def train(p: Params):
         # 每类采样支持集 S；查询集 Q 取全部剩余有标签样本（论文 D_k \ S_k）
         sup_idx, que_idx, que_y = sample_per_class(labeled_idx_by_class, p.support_size)
 
-        # 本地原型（基于支持集, Eq.2）；extract_prototypes 内部 index_add_ 向量化累加
+        sup_x = prepare_input_batch(p.train_set.x[sup_idx], p.dataset)
+        sup_y = p.train_set.y[sup_idx]
         C_local = extract_prototypes(
             model,
-            DataLoader(Subset(full_ds, sup_idx), p.batch_size),
+            DataLoader(TensorDataset(sup_x, sup_y), p.batch_size),
             p.num_class,
             p.feature_dim,
             device,
@@ -140,7 +142,8 @@ def train(p: Params):
             shuffle=True,
         )
         for xq_b, yq_b in q_loader:
-            f_q = model.extractor(xq_b.to(device))  # [B_q, D]
+            xq_b = prepare_input_batch(xq_b.to(device), p.dataset)
+            f_q = model.extractor(xq_b)  # [B_q, D]
             # 本地原型距离概率 → CE(真实标签)（dist_contrastive_loss = Eq.(6)+CE）
             loss = dist_contrastive_loss(f_q, C_local, yq_b.to(device))
             optimizer.zero_grad()
@@ -159,7 +162,8 @@ def train(p: Params):
             shuffle=True,
         )
         for (xu_b,) in u_loader:
-            f_u = model.extractor(xu_b.to(device))  # [B_u, D]
+            xu_b = prepare_input_batch(xu_b.to(device), p.dataset)
+            f_u = model.extractor(xu_b)  # [B_u, D]
             p_bar_u = pseudolabel(f_u, p.helper_protos, p.sharpen_T)  # [B_u, K] soft
             if p_bar_u is None:
                 # 首轮 H_r 为空（无辅助客户端原型），无监督项跳过
@@ -176,9 +180,11 @@ def train(p: Params):
 
     # 3. 最终原型：用全量有标签数据 D_{i,k}^L（RunClient 步骤3, Eq.2 全量版）
     #    counts = 每类有标签样本数，由 extract_prototypes 的 bincount 直接给出
+    lab_x = prepare_input_batch(p.train_set.x[labeled_idx], p.dataset)
+    lab_y = p.train_set.y[labeled_idx]
     final_protos, final_counts = extract_prototypes(
         model,
-        DataLoader(Subset(full_ds, labeled_idx), batch_size=p.batch_size),
+        DataLoader(TensorDataset(lab_x, lab_y), batch_size=p.batch_size),
         p.num_class,
         p.feature_dim,
         device,

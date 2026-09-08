@@ -10,12 +10,12 @@ from .utils import (
     BaseServer,
     clone_cpu_state,
     evaluate_model,
-    flattened_matrix_aggregate,
     fmt_num,
-    generate_adjacency_matrix,
     get_model,
-    kl_loss,
 )
+from .utils.aggregate import flattened_matrix_aggregate
+from .utils.loss import kl_loss
+from .utils.topology import generate_adjacency_matrix
 
 
 def get_path(args):

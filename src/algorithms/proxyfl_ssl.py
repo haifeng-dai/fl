@@ -10,15 +10,14 @@ from .utils import (
     BaseParams,
     BaseServer,
     clone_cpu_state,
-    dist_contrastive_loss,
     evaluate_model,
     fmt_num,
     get_model,
-    masked_kl_loss,
     param_aggregate,
     prepare_input_batch,
 )
 from .utils.augment import strong_augment, weak_augment
+from .utils.loss import dist_contrastive_loss, masked_kl_loss
 from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
 
 

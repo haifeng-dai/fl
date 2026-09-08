@@ -11,17 +11,17 @@ from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader, TensorDataset
 
 from .utils import (
-    DATASET_SPECS,
     BaseParams,
     BaseServer,
     clone_cpu_state,
     fmt_num,
     get_model,
-    kl_loss,
     param_aggregate,
     prepare_input_batch,
-    strong_augment,
 )
+from .utils.augment import strong_augment
+from .utils.input import DATASET_SPECS
+from .utils.loss import kl_loss
 
 
 def get_path(args):

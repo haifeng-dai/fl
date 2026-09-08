@@ -13,9 +13,9 @@ from .utils import (
     BaseServer,
     clone_cpu_state,
     fmt_num,
-    generate_adjacency_matrix,
     get_model,
 )
+from .utils.topology import generate_adjacency_matrix
 
 logger = logging.getLogger(__name__)
 

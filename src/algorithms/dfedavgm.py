@@ -9,12 +9,11 @@ from .utils import (
     BaseParams,
     BaseServer,
     clone_cpu_state,
-    compute_mh_weights,
-    flattened_matrix_aggregate,
     fmt_num,
-    generate_adjacency_matrix,
     get_model,
 )
+from .utils.aggregate import flattened_matrix_aggregate
+from .utils.topology import compute_mh_weights, generate_adjacency_matrix
 
 
 def get_path(args):

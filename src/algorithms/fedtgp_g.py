@@ -7,9 +7,9 @@ from torch.utils.data import DataLoader
 from .fedtgp import TGP, Params, get_path, train
 from .utils import (
     BaseServer,
-    dist_contrastive_loss,
     proto_aggregate,
 )
+from .utils.loss import dist_contrastive_loss
 
 
 class Server(BaseServer):

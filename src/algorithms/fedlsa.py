@@ -10,10 +10,10 @@ from .utils import (
     BaseParams,
     BaseServer,
     clone_cpu_state,
-    cos_similarity,
     fmt_num,
     get_model,
 )
+from .utils.loss import cos_similarity
 
 
 def get_path(args):

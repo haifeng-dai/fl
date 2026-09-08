@@ -12,9 +12,9 @@ from .utils import (
     evaluate_model,
     fmt_num,
     get_model,
-    kl_loss,
     param_aggregate,
 )
+from .utils.loss import kl_loss
 
 
 def get_path(args):

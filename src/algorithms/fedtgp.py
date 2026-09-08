@@ -11,12 +11,12 @@ from .utils import (
     BaseParams,
     BaseServer,
     clone_cpu_state,
-    dist_contrastive_loss,
     extract_prototypes,
     fmt_num,
     get_model,
     proto_aggregate,
 )
+from .utils.loss import dist_contrastive_loss
 
 
 def get_path(args):

@@ -12,9 +12,9 @@ from .utils import (
     clone_cpu_state,
     fmt_num,
     get_model,
-    masked_kl_loss,
 )
 from .utils.augment import strong_augment, weak_augment
+from .utils.loss import masked_kl_loss
 from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
 
 SAGE_KAPPA = math.log(2.0) / 0.05

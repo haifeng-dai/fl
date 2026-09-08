@@ -11,8 +11,8 @@ from .utils import (
     clone_cpu_state,
     fmt_num,
     get_model,
-    kl_loss,
 )
+from .utils.loss import kl_loss
 
 
 def get_path(args):

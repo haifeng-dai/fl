@@ -14,8 +14,8 @@ from .utils import (
     extract_prototypes,
     fmt_num,
     get_model,
-    orthogonality_loss,
 )
+from .utils.loss import orthogonality_loss
 
 
 def get_path(args):

@@ -9,11 +9,11 @@ from .utils import (
     BaseParams,
     BaseServer,
     clone_cpu_state,
-    cos_similarity,
     extract_prototypes,
     get_model,
     proto_aggregate,
 )
+from .utils.loss import cos_similarity
 
 
 def get_path(args):

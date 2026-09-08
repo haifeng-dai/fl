@@ -8,11 +8,11 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
-    flattened_matrix_aggregate,
     fmt_num,
-    generate_adjacency_matrix,
     get_model,
 )
+from .utils.aggregate import flattened_matrix_aggregate
+from .utils.topology import generate_adjacency_matrix
 
 
 def get_path(args):
