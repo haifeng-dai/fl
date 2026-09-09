@@ -26,6 +26,7 @@ def get_path(args):
         f"_{fmt_num(args.gpt_lr)}_{fmt_num(args.gpt_epochs)}"
         f"_{fmt_num(args.gpt_batch_size)}_{fmt_num(args.gpt_threshold)}"
         f"_{fmt_num(args.ema_beta)}"
+        f"_{fmt_num(args.conf)}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
@@ -33,8 +34,7 @@ def get_path(args):
 @dataclass
 class Params(BaseParams):
     global_class_dist: torch.Tensor
-    confidence: float
-    lam: float
+    conf: float
     alp: float
     bet: float
     temperature: float
@@ -93,7 +93,7 @@ def train(p: Params):
                 confidence_g, y_hat = p_g.max(dim=1)
 
             # 高置信度判定：max(y_i) > τ，仅用全局 logits（论文 §5.2.1）
-            hc_mask = confidence_g.ge(p.confidence).float()
+            hc_mask = confidence_g.ge(p.conf).float()
             # hc 类别集合 ξ={ŷ_i}，同时作为 L_u 的伪标签目标（Eq.9）
             xi_hc = F.one_hot(y_hat, p.num_class).bool()
             loss_u = masked_kl_loss(logits_u_s, xi_hc.float(), hc_mask)
@@ -247,6 +247,7 @@ class Server(BaseServer):
                 "每个客户端必须同时包含有标签和无标签数据"
             )
         super().__init__(args, is_ssl=True, pfl=False)
+        self.conf = args.conf
         self.temperature = args.temperature
         self.unlabeled_ratio = args.unlabeled_ratio
         self.gpt_epochs = args.gpt_epochs
@@ -327,8 +328,7 @@ class Server(BaseServer):
                 Params(
                     **asdict(base),
                     global_class_dist=self.global_class_dist,
-                    confidence=self.confidence,
-                    lam=self.lam,
+                    conf=self.conf,
                     alp=self.alp,
                     bet=self.bet,
                     temperature=self.temperature,

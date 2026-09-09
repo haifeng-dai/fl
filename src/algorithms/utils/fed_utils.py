@@ -123,8 +123,6 @@ class BaseServer:
 
         if self.ssl != "none":
             self.label_ratio = args.label_ratio
-            self.lam = args.lam
-            self.confidence = args.confidence
 
         (
             self.train_sets,

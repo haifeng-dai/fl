@@ -44,8 +44,6 @@ def build_common_name(args):
                 args.ssl,
                 fmt_value(args.unlabeled_ratio),
                 fmt_value(args.label_ratio),
-                fmt_value(args.lam),
-                fmt_value(args.confidence),
             ]
         )
         if args.ssl == "sfd":

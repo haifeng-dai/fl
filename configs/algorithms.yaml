@@ -2,6 +2,16 @@
 
 sage:
     temperature: 1.0
+    lambda_u: 1.0
+    conf: 0.95
+
+fedavg_gpl:
+    lambda_u: 1.0
+    conf: 0.95
+
+fedavg_lpl:
+    lambda_u: 1.0
+    conf: 0.95
 
 fedprox:
     mu: 0.01
@@ -115,11 +125,12 @@ proxyfl:
     mu: 0.01
 
 proxyfl_ssl:
-    temperature: 1.0
-    gpt_lr: 0.01
-    gpt_epochs: 100
-    gpt_batch_size: 10
-    gpt_threshold: 100.0
+    conf: 0.95
+    alp: 1.0
+    bet: 1.0
+    gpt_lr: 0.005
+    gpt_epochs: 10
+    gpt_batch_size: 64
     ema_beta: 0.99
 
 # 联邦半监督学习测试算法（fedtest）
@@ -176,6 +187,7 @@ protofssl:
     sharpen_T: 0.5
 
 fedmatch:
+    conf: 0.95
     h_interval: 10
     num_helpers: 2
     lambda_s: 10.0

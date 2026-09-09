@@ -28,7 +28,7 @@ from .utils.loss import kl_loss
 def get_path(args):
     """构造实验日志文件名（含域配置与算法超参值）。"""
     args.file_name = (
-        f"{args.common_name}_{fmt_num(args.confidence)}"
+        f"{args.common_name}_{fmt_num(args.conf)}"
         f"_{fmt_num(args.h_interval)}_{fmt_num(args.num_helpers)}"
         f"_{fmt_num(args.lambda_s)}_{fmt_num(args.lambda_i)}"
         f"_{fmt_num(args.lambda_a)}_{fmt_num(args.lambda_l2)}"
@@ -46,7 +46,7 @@ class Params(BaseParams):
     server_psi_state: dict[str, torch.Tensor]
     curr_round: int
     helper_psi_states: list[dict[str, torch.Tensor]] | None
-    confidence: float
+    conf: float
     lambda_s: float
     lambda_i: float
     lambda_a: float
@@ -252,7 +252,7 @@ def compute_iccs_loss(
     y_logits: torch.Tensor,
     helper_net: nn.Module | None,
     helper_states: list[dict[str, torch.Tensor]],
-    confidence: float,
+    confidence_threshold: float,
     lambda_i: float,
     lambda_a: float,
     curr_round: int,
@@ -261,7 +261,7 @@ def compute_iccs_loss(
 ) -> tuple[torch.Tensor, int, int]:
     """计算基于置信度掩码的 inter-client consistency KL 损失与 agreement 伪标签 CE 损失。"""
     y_probs = torch.softmax(y_logits.detach(), dim=1)
-    conf_mask = y_probs.max(dim=1).values >= confidence
+    conf_mask = y_probs.max(dim=1).values >= confidence_threshold
 
     if not conf_mask.any():
         return torch.tensor(0.0, device=x_ub_raw.device), 0, 0
@@ -403,7 +403,7 @@ def train(p: Params):
                 y_logits=y_logits,
                 helper_net=helper_net,
                 helper_states=helper_states,
-                confidence=p.confidence,
+                confidence_threshold=p.conf,
                 lambda_i=p.lambda_i,
                 lambda_a=p.lambda_a,
                 curr_round=p.curr_round,
@@ -477,7 +477,7 @@ class Server(BaseServer):
             raise ValueError("fedmatch does not support ssl='client'")
 
         # 算法超参数
-        self.confidence = args.confidence
+        self.conf = args.conf
         self.h_interval = args.h_interval
         self.num_helpers = args.num_helpers
         self.lambda_s = args.lambda_s
@@ -635,7 +635,7 @@ class Server(BaseServer):
                         server_psi_state=curr_server_psi,
                         curr_round=r,
                         helper_psi_states=helper_map.get(cid),
-                        confidence=self.confidence,
+                        confidence_threshold=self.conf,
                         lambda_s=self.lambda_s,
                         lambda_i=self.lambda_i,
                         lambda_a=self.lambda_a,

@@ -25,12 +25,15 @@ SAGE_KAPPA = math.log(2.0) / 0.05
 class Params(BaseParams):
     unlabeled_ratio: int
     lambda_u: float
-    confidence: float
+    conf: float
     temperature: float
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{fmt_num(args.temperature)}"
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.temperature)}"
+        f"_{fmt_num(args.lambda_u)}_{fmt_num(args.conf)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -80,8 +83,8 @@ def train(p: Params):
                 p_l = torch.softmax(logits_u_w / p.temperature, dim=1)
                 confidence_l, targets_l = p_l.max(dim=1)
 
-                mask_l = confidence_l.ge(p.confidence).float()
-                mask_g = confidence_g.ge(p.confidence).float()
+                mask_l = confidence_l.ge(p.conf).float()
+                mask_g = confidence_g.ge(p.conf).float()
                 delta_C = (confidence_l - confidence_g).abs()
                 correction = torch.exp(-SAGE_KAPPA * delta_C)
                 delta_l = F.one_hot(targets_l, p.num_class).float()
@@ -144,6 +147,8 @@ class Server(BaseServer):
             )
         super().__init__(args, is_ssl=True)
         self.unlabeled_ratio = args.unlabeled_ratio
+        self.lambda_u = args.lambda_u
+        self.conf = args.conf
         self.temperature = args.temperature
         self.pseudo_acc = []
         self.pseudo_count = []
@@ -163,8 +168,8 @@ class Server(BaseServer):
                 Params(
                     **asdict(base),
                     unlabeled_ratio=self.unlabeled_ratio,
-                    lambda_u=self.lam,
-                    confidence=self.confidence,
+                    lambda_u=self.lambda_u,
+                    conf=self.conf,
                     temperature=self.temperature,
                 )
                 for base in self.build_base_params(selected)

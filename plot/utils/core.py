@@ -64,7 +64,7 @@ class ResultLoader:
         elif values["partition"] == "pathological":
             required.append("n_class")
         if values["ssl"] != "none":
-            required.extend(["unlabeled_ratio", "label_ratio", "lam", "confidence"])
+            required.extend(["unlabeled_ratio", "label_ratio"])
             if values["ssl"] == "sfd":
                 required.extend(["label_domain", "unlabel_domain"])
         elif values["fdg"]:

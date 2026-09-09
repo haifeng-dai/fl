@@ -7,10 +7,11 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
+    fmt_num,
     get_model,
     prepare_input_batch,
 )
@@ -19,15 +20,18 @@ from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
 
 
 def get_path(args):
-    args.file_name = args.common_name
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.lambda_u)}"
+        f"_{fmt_num(args.conf)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
 @dataclass
 class Params(BaseParams):
     unlabeled_ratio: int
-    lam: float
-    confidence: float
+    lambda_u: float
+    conf: float
 
 
 def fixmatch_loss(logits_l, logits_u_w, logits_u_s, y_l, confidence, lam):
@@ -132,8 +136,8 @@ def train(p: Params):
                 logits_u_w,
                 logits_u_s,
                 y_l,
-                p.confidence,
-                p.lam,
+                p.conf,
+                p.lambda_u,
             )
 
             optimizer.zero_grad()
@@ -172,8 +176,8 @@ class Server(BaseServer):
             raise ValueError("fedavg_lpl 要求 ssl 为 sample、double 或 sfd。")
         super().__init__(args, is_ssl=True, pfl=False)
         self.unlabeled_ratio = args.unlabeled_ratio
-        self.lambda_u = args.lam
-        self.confidence = args.confidence
+        self.lambda_u = args.lambda_u
+        self.conf = args.conf
         self.loss_x = []
         self.loss_u = []
         self.pseudo_selected = []
@@ -208,8 +212,8 @@ class Server(BaseServer):
                 Params(
                     **asdict(base),
                     unlabeled_ratio=self.unlabeled_ratio,
-                    lam=self.lambda_u,
-                    confidence=self.confidence,
+                    lambda_u=self.lambda_u,
+                    conf=self.conf,
                 )
                 for base in self.build_base_params(selected)
             ]

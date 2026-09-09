@@ -47,14 +47,12 @@ target_domain: rotate_cutout # str，仅 FDG 模式生效：该域为测试
 ssl: double # none | sample | client | double | sfd
 unlabeled_ratio: 2 # 无标签 batch 相对于有标签 batch 的比例
 label_ratio: 0.1 # float (0~1]，统一适用于 sample / client / double / sfd 场景的有标签数据比例
-lam: 1.0 # float，半监督无监督损失权重；0 = 退化为纯监督。
-confidence: 0.95 # float，FixMatch 伪标签置信度阈值。
 # SFD 专属配置（当 ssl: sfd 时生效）
 label_domain: clean # str，指定有标签源域。
 unlabel_domain: rotate_cutout # str，指定无标签目标域。
 
 # 训练相关 (Training)
-rounds: 200 # 完整正式训练的通信轮数
+rounds: 1000 # 完整正式训练的通信轮数
 epochs: 10
 lr: 0.01
 momentum: 0.0
