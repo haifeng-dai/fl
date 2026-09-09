@@ -188,11 +188,21 @@ class DecomposedModel(nn.Module):
         self.psi = copy.deepcopy(model)
         self.l1_thres = l1_thres
 
-    def sync_theta(self):
-        """将 θ 的每个参数重建为 σ + ψ（保留计算图，梯度可回传至 σ/ψ）。"""
+    def sync_theta(self, mode: str = "both"):
+        """将 θ 的每个参数重建为 σ + ψ。
+
+        mode='sigma': 仅 σ 保持可导（有监督阶段固定 ψ）
+        mode='psi': 仅 ψ 保持可导（无监督阶段固定 σ）
+        mode='both': σ 与 ψ 均可导
+        """
         for name, sp in self.sigma.named_parameters():
             pp = self.psi.get_parameter(name)
-            merged = sp + pp
+            if mode == "sigma":
+                merged = sp + pp.detach()
+            elif mode == "psi":
+                merged = sp.detach() + pp
+            else:
+                merged = sp + pp
             target = self.theta
             *mod_path, attr = name.split(".")
             for part in mod_path:
@@ -237,6 +247,7 @@ class DecomposedModel(nn.Module):
 def compute_iccs_loss(
     dm: DecomposedModel,
     x_ub_raw: torch.Tensor,
+    y_ub_raw: torch.Tensor,
     y_logits: torch.Tensor,
     helper_net: nn.Module | None,
     helper_states: list[dict[str, torch.Tensor]],
@@ -246,13 +257,13 @@ def compute_iccs_loss(
     curr_round: int,
     num_class: int,
     dataset_name: str,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, int, int]:
     """计算基于置信度掩码的 inter-client consistency KL 损失与 agreement 伪标签 CE 损失。"""
     y_probs = torch.softmax(y_logits.detach(), dim=1)
     conf_mask = y_probs.max(dim=1).values >= confidence
 
     if not conf_mask.any():
-        return torch.tensor(0.0, device=x_ub_raw.device)
+        return torch.tensor(0.0, device=x_ub_raw.device), 0, 0
 
     x_conf_raw = x_ub_raw[conf_mask]
     local_conf_logits = y_logits[conf_mask]  # 承接梯度，不 detach
@@ -287,7 +298,13 @@ def compute_iccs_loss(
     loss_ce = lambda_a * F.cross_entropy(y_hard_logits, y_pseudo)
     loss_iccs = loss_iccs + loss_ce
 
-    return loss_iccs
+    pseudo_cnt = int(conf_mask.sum().item())
+    y_ub_device = y_ub_raw.to(y_pseudo.device)
+    pseudo_corr = int(
+        (y_pseudo == y_ub_device[conf_mask]).sum().item()
+    )
+
+    return loss_iccs, pseudo_cnt, pseudo_corr
 
 
 def train(p: Params):
@@ -332,6 +349,7 @@ def train(p: Params):
     x_l = p.train_set.x[p.train_set.is_labeled]
     y_l = p.train_set.y[p.train_set.is_labeled]
     x_u = p.train_set.x[~p.train_set.is_labeled]
+    y_u = p.train_set.y[~p.train_set.is_labeled]
 
     # 5. 无标签批大小按步数反推
     num_steps = round(len(x_l) / p.batch_size)
@@ -340,42 +358,46 @@ def train(p: Params):
     l_loader = DataLoader(
         TensorDataset(x_l, y_l), batch_size=p.batch_size, shuffle=True
     )
-    u_loader = DataLoader(TensorDataset(x_u), batch_size=bsize_u, shuffle=True)
+    u_loader = DataLoader(TensorDataset(x_u, y_u), batch_size=bsize_u, shuffle=True)
 
     # 6. 本地训练：每步先监督（仅 σ）再无监督（仅 ψ），步后重建 θ
     total_loss = 0.0
+    pseudo_count = 0
+    pseudo_correct = 0
     num_batches = 0
     for _ in range(p.epochs):
-        for (x_lb, y_lb), (x_ub,) in zip(l_loader, u_loader):
+        for (x_lb, y_lb), (x_ub, y_ub) in zip(l_loader, u_loader):
             x_lb, y_lb = x_lb.to(device), y_lb.to(device)
             x_ub = x_ub.to(device)
 
             x_lb_norm = prepare_input_batch(x_lb, p.dataset)
             x_ub_norm = prepare_input_batch(x_ub, p.dataset)
 
-            # ── 监督分支（仅更新 σ）──
+            # ── 监督分支（仅更新 σ，固定 ψ）──
+            dm.sync_theta(mode="sigma")
             optimizer_s.zero_grad()
             loss_s = p.lambda_s * F.cross_entropy(dm.theta(x_lb_norm), y_lb)
             loss_s.backward()
             optimizer_s.step()
-            dm.sync_theta()
 
-            # ── 无监督分支（仅更新 ψ）：单次 backward ──
+            # ── 无监督分支（仅更新 ψ，固定 σ）──
+            dm.sync_theta(mode="psi")
             optimizer_u.zero_grad()
             y_logits = dm.theta(x_ub_norm)
 
-            # L1(ψ) 与 L2(σ − ψ) 正则化项
+            # L1(ψ) 与 L2(σ − ψ) 正则化项（固定 σ 作为锚点）
             reg_l1 = sum(pp.abs().sum() for pp in dm.psi.parameters())
             reg_l2 = sum(
-                (sp - pp).square().sum()
+                (sp.detach() - pp).square().sum()
                 for sp, pp in zip(dm.sigma.parameters(), dm.psi.parameters())
             )
             loss_u = p.lambda_l1 * reg_l1 + p.lambda_l2 * reg_l2
 
             # 计算置信度掩码下的 ICCS KL 与 CE 损失
-            loss_iccs = compute_iccs_loss(
+            loss_iccs, p_cnt, p_corr = compute_iccs_loss(
                 dm=dm,
                 x_ub_raw=x_ub,
+                y_ub_raw=y_ub,
                 y_logits=y_logits,
                 helper_net=helper_net,
                 helper_states=helper_states,
@@ -387,10 +409,11 @@ def train(p: Params):
                 dataset_name=p.dataset,
             )
             loss_u = loss_u + loss_iccs
+            pseudo_count += p_cnt
+            pseudo_correct += p_corr
 
             loss_u.backward()
             optimizer_u.step()
-            dm.sync_theta()
 
             total_loss += (loss_s.item() + loss_u.item()) / 2
             num_batches += 1
@@ -432,6 +455,8 @@ def train(p: Params):
         "loss": total_loss / max(1, num_batches),
         "sigma": clone_cpu_state(c2s_sigma),
         "psi": clone_cpu_state(c2s_psi),
+        "pseudo_count": pseudo_count,
+        "pseudo_correct": pseudo_correct,
     }
 
     del dm, model, optimizer_s, optimizer_u, helper_net, helper_states
@@ -462,6 +487,8 @@ class Server(BaseServer):
         self.psi_factor = args.psi_factor
 
         self.parameter_names = tuple(name for name, _ in self.model.named_parameters())
+        self.pseudo_acc = []
+        self.pseudo_count = []
 
         # 分解模型状态
         self.sigma_state = clone_cpu_state(self.model.state_dict())
@@ -625,10 +652,14 @@ class Server(BaseServer):
             sigma_list = []
             psi_list = []
             total_loss = 0.0
+            total_pseudo_count = 0
+            total_pseudo_correct = 0
             for cid, res in results.items():
                 total_loss += res["loss"]
                 sigma_list.append(res["sigma"])
                 psi_list.append(res["psi"])
+                total_pseudo_count += res["pseudo_count"]
+                total_pseudo_correct += res["pseudo_correct"]
 
                 # 更新客户端历史
                 self.client_sigma_states[cid] = clone_cpu_state(res["sigma"])
@@ -642,6 +673,11 @@ class Server(BaseServer):
 
             # 6. 等权平均聚合全局 σ 与 ψ
             self.loss.append(total_loss / num_join)
+            round_pseudo_acc = (
+                total_pseudo_correct / max(1, total_pseudo_count)
+            ) * 100.0
+            self.pseudo_acc.append(round_pseudo_acc)
+            self.pseudo_count.append(total_pseudo_count)
             uniform_weights = [1.0 / len(sigma_list)] * len(sigma_list)
             self.sigma_state = aggregate_sigma_states(sigma_list, uniform_weights)
             self.psi_state = param_aggregate(psi_list, uniform_weights)
@@ -656,12 +692,23 @@ class Server(BaseServer):
             self.model.load_state_dict(eval_state)
             self.evaluate()
 
-            print(f"Global Acc: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}")
-            print(f"Round finished in {time.time() - t0:.2f} seconds")
+            round_duration = time.time() - t0
+            print(
+                f"Global Acc: {self.acc[-1]:.2f}% | "
+                f"Loss: {self.loss[-1]:.4f} | "
+                f"Pseudo Acc: {self.pseudo_acc[-1]:.2f}% | "
+                f"Pseudo Count: {self.pseudo_count[-1]}"
+            )
+            print(f"Round finished in {round_duration:.2f} seconds")
 
     def save(self):
         """保存指标与最终参数（global 与评估模型保持一致，使用 sparsify=True）。"""
-        metrics = {"acc": self.acc, "loss": self.loss}
+        metrics = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "pseudo_acc": self.pseudo_acc,
+            "pseudo_count": self.pseudo_count,
+        }
         params = {
             "global": merge_state(
                 self.sigma_state,
@@ -669,7 +716,5 @@ class Server(BaseServer):
                 self.l1_thres,
                 sparsify=True,
             ),
-            "sigma": self.sigma_state,
-            "psi": self.psi_state,
         }
         self.deal_save(metrics, params)

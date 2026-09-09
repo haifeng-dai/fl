@@ -54,8 +54,8 @@ label_domain: clean # str，指定有标签源域。
 unlabel_domain: rotate_cutout # str，指定无标签目标域。
 
 # 训练相关 (Training)
-rounds: 1000 # 完整正式训练的通信轮数
-epochs: 1
+rounds: 200 # 完整正式训练的通信轮数
+epochs: 10
 lr: 0.01
 momentum: 0.0
 weight_decay: 0.0

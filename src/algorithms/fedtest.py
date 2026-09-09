@@ -33,8 +33,6 @@ class Params(BaseParams):
     global_protos: torch.Tensor
     global_valid: torch.Tensor
     proto_scale: float
-    thresholds: torch.Tensor
-    threshold_valid: torch.Tensor
     lambda_s: float
     lambda_u: float
 
@@ -44,7 +42,6 @@ class ClientCalibrateParams(BaseParams):
     global_protos: torch.Tensor
     global_valid: torch.Tensor
     proto_scale: float
-    num_bins: int = 100
 
 
 @dataclass
@@ -52,8 +49,9 @@ class ClientDiagnoseParams(BaseParams):
     global_protos: torch.Tensor
     global_valid: torch.Tensor
     proto_scale: float
-    thresholds: torch.Tensor
-    threshold_valid: torch.Tensor
+    radius_q10: torch.Tensor
+    radius_q50: torch.Tensor
+    radius_valid: torch.Tensor
 
 
 @torch.no_grad()
@@ -100,46 +98,6 @@ def mse_distance(features, prototypes):
     return diff.square().mean(dim=-1)
 
 
-def prototype_distribution(features, prototypes, valid_mask, proto_scale):
-    """计算样本在各类别目标原型上的 softmax 概率分布 [N, C]。
-    对于非有效类别，概率置 0。
-    """
-    num_class = prototypes.size(0)
-    valid_indices = torch.where(valid_mask)[0]
-    probs = torch.zeros(features.size(0), num_class, device=features.device)
-    if valid_indices.numel() == 0:
-        return probs
-
-    valid_protos = prototypes[valid_indices]
-    distance = mse_distance(features, valid_protos)
-    scale = max(float(proto_scale), 1e-8)
-    prob_valid = torch.softmax(-distance / scale, dim=1)
-    probs[:, valid_indices] = prob_valid
-    return probs
-
-
-def compute_partial_label_loss(logits, candidate_mask):
-    """偏标签（Partial-Label）损失：
-    L_u = -log(sum_{j in C(u)} p(j)) = logsumexp(logits) - logsumexp_{j in C(u)}(logits_j)
-    若候选集为空，跳过；若全集入选，loss 为 0。
-    """
-    cand_counts = candidate_mask.sum(dim=1)
-    active_mask = cand_counts > 0
-    if not active_mask.any():
-        return torch.tensor(0.0, device=logits.device, requires_grad=True), 0
-
-    active_logits = logits[active_mask]
-    active_cand = candidate_mask[active_mask]
-
-    total_lse = torch.logsumexp(active_logits, dim=1)
-
-    masked_logits = active_logits.masked_fill(~active_cand, float("-inf"))
-    cand_lse = torch.logsumexp(masked_logits, dim=1)
-
-    sample_loss = total_lse - cand_lse
-    loss = sample_loss.mean()
-    return loss, int(active_mask.sum().item())
-
 
 def train(p: Params):
     device = torch.device(p.client_gpu)
@@ -162,29 +120,6 @@ def train(p: Params):
 
     global_protos = p.global_protos.to(device)
     global_valid = p.global_valid.to(device).bool()
-    thresholds = p.thresholds.to(device)
-    threshold_valid = p.threshold_valid.to(device).bool()
-
-    has_ssl = (
-        p.lambda_u > 0
-        and bool(threshold_valid.any())
-        and loaders.unlabeled_loader is not None
-    )
-
-    if has_ssl:
-        model_teacher = get_model(
-            p.model_name,
-            p.dataset,
-            p.num_class,
-            p.feature_dim,
-        ).to(device)
-        model_teacher.load_state_dict(p.model_state)
-        model_teacher.eval()
-        for param in model_teacher.parameters():
-            param.requires_grad = False
-    else:
-        model_teacher = None
-
     optimizer = torch.optim.SGD(
         model_l.parameters(),
         lr=p.lr,
@@ -192,11 +127,10 @@ def train(p: Params):
         weight_decay=p.weight_decay,
     )
 
-    stats = torch.zeros(8, dtype=torch.float64, device=device)
+    stats = torch.zeros(6, dtype=torch.float64, device=device)
     # 0/1: loss_x sum/count
     # 2/3: loss_cal sum/count
-    # 4/5: loss_u sum/count
-    # 6/7: loss_total sum/count
+    # 4/5: loss_total sum/count
 
     model_l.train()
 
@@ -236,38 +170,6 @@ def train(p: Params):
 
             loss = loss_x + p.lambda_s * loss_cal
 
-            loss_u = torch.tensor(0.0, device=device)
-            u_count = 0
-            if has_ssl and unlabeled_batch is not None:
-                x_u_raw, _ = unlabeled_batch
-                x_u_raw = x_u_raw.to(device)
-                x_u_weak = weak_augment(x_u_raw, p.dataset)
-                x_u_strong = strong_augment(x_u_raw, p.dataset)
-
-                with torch.no_grad():
-                    features_u_teacher = model_teacher.extractor(x_u_weak)
-                    prob_u = prototype_distribution(
-                        features_u_teacher,
-                        global_protos,
-                        global_valid,
-                        p.proto_scale,
-                    )
-                    candidate_mask = (
-                        (prob_u >= thresholds.unsqueeze(0))
-                        & threshold_valid.unsqueeze(0)
-                        & global_valid.unsqueeze(0)
-                    )
-
-                features_u_student = model_l.extractor(x_u_strong)
-                logits_u_student = model_l.classifier(features_u_student)
-
-                loss_u, u_count = compute_partial_label_loss(
-                    logits_u_student,
-                    candidate_mask,
-                )
-                if u_count > 0:
-                    loss = loss + p.lambda_u * loss_u
-
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -280,12 +182,8 @@ def train(p: Params):
             stats[2] += (diff.detach().double() * valid_labeled.double()).sum()
             stats[3] += valid_count
 
-            if u_count > 0:
-                stats[4] += loss_u.detach().double() * float(u_count)
-                stats[5] += float(u_count)
-
-            stats[6] += loss.detach().double() * bs
-            stats[7] += bs
+            stats[4] += loss.detach().double() * bs
+            stats[5] += bs
 
     stats = stats.cpu().tolist()
 
@@ -295,16 +193,14 @@ def train(p: Params):
         "loss_x_count": int(stats[1]),
         "loss_calibrate_sum": stats[2],
         "loss_calibrate_count": int(stats[3]),
-        "loss_u_sum": stats[4],
-        "loss_u_count": int(stats[5]),
-        "loss_total_sum": stats[6],
-        "loss_total_count": int(stats[7]),
+        "loss_total_sum": stats[4],
+        "loss_total_count": int(stats[5]),
     }
 
 
 @torch.no_grad()
 def client_calibrate_worker(p: ClientCalibrateParams):
-    """阶段1：在有标签样本上统计正负样本概率直方图，用于服务器拟合 Youden 阈值。"""
+    """收集各真实类别样本到自身目标原型的弱增强距离。"""
     device = torch.device(p.client_gpu)
 
     model = get_model(
@@ -320,41 +216,36 @@ def client_calibrate_worker(p: ClientCalibrateParams):
     prototypes = p.global_protos.to(device)
     valid = p.global_valid.to(device).bool()
 
-    num_class = p.num_class
-    num_bins = p.num_bins
-
-    hist_pos = torch.zeros(num_class, num_bins, dtype=torch.long, device=device)
-    hist_neg = torch.zeros(num_class, num_bins, dtype=torch.long, device=device)
+    class_distances = [[] for _ in range(p.num_class)]
 
     labeled_mask = p.train_set.is_labeled.bool()
     labeled_indices = torch.where(labeled_mask)[0]
 
     if labeled_indices.numel() > 0:
         labeled_x = p.train_set.x[labeled_indices]
-        labeled_y = p.train_set.y[labeled_indices].to(device)
         loader_l = DataLoader(
-            TensorDataset(labeled_x, labeled_y),
+            TensorDataset(labeled_x, p.train_set.y[labeled_indices]),
             batch_size=max(p.batch_size, 256),
             shuffle=False,
         )
         for bx_raw, by in loader_l:
             bx_raw = bx_raw.to(device)
             bx_weak = weak_augment(bx_raw, p.dataset)
-            feat_l = model.extractor(bx_weak)
-            probs_l = prototype_distribution(feat_l, prototypes, valid, p.proto_scale)
-            bin_idx = (probs_l * num_bins).long().clamp(0, num_bins - 1)
-
-            for c in range(num_class):
-                pos = by == c
-                if pos.any():
-                    hist_pos[c] += torch.bincount(bin_idx[pos, c], minlength=num_bins)
-                neg = ~pos
-                if neg.any():
-                    hist_neg[c] += torch.bincount(bin_idx[neg, c], minlength=num_bins)
+            features = model.extractor(bx_weak)
+            dist = mse_distance(features, prototypes)
+            dist[:, ~valid] = float("inf")
+            own_dist = dist.gather(1, by.to(device)[:, None]).squeeze(1)
+            proto_pred = dist.argmin(dim=1)
+            proto_correct = proto_pred == by.to(device)
+            for c in range(p.num_class):
+                mask = (by == c) & valid[c].cpu() & proto_correct.cpu()
+                if mask.any():
+                    class_distances[c].append(own_dist[mask.to(device)].cpu())
 
     return {
-        "hist_pos": hist_pos.cpu(),
-        "hist_neg": hist_neg.cpu(),
+        "class_distances": [
+            torch.cat(v) if v else torch.empty(0) for v in class_distances
+        ],
     }
 
 
@@ -375,8 +266,9 @@ def client_diagnose_worker(p: ClientDiagnoseParams):
 
     prototypes = p.global_protos.to(device)
     valid = p.global_valid.to(device).bool()
-    thresholds = p.thresholds.to(device)
-    threshold_valid = p.threshold_valid.to(device).bool()
+    radius_q10 = p.radius_q10.to(device)
+    radius_q50 = p.radius_q50.to(device)
+    radius_valid = p.radius_valid.to(device).bool()
 
     num_class = p.num_class
 
@@ -413,9 +305,9 @@ def client_diagnose_worker(p: ClientDiagnoseParams):
     # 18: mis_singleton_count
     # 19: mis_singleton_correct
     # 20: mis_empty_count
-    diag_counts = torch.zeros(21, dtype=torch.float64, device=device)
+    diag_counts = torch.zeros(35, dtype=torch.float64, device=device)
 
-    has_thresh = bool(threshold_valid.any())
+    has_thresh = bool(radius_valid.any())
 
     if unlabeled_indices.numel() > 0:
         raw_x = p.train_set.x[unlabeled_indices]
@@ -430,15 +322,29 @@ def client_diagnose_worker(p: ClientDiagnoseParams):
             bx_prep = prepare_input_batch(bx_raw, p.dataset)
             feat_u = model.extractor(bx_prep)
             logits_u = model.classifier(feat_u)
-            probs_u = prototype_distribution(feat_u, prototypes, valid, p.proto_scale)
+            dist_u = mse_distance(feat_u, prototypes)
+            dist_u[:, ~valid] = float("inf")
+            prob_u = torch.softmax(-dist_u / max(float(p.proto_scale), 1e-8), dim=1)
+            prob_max, prob_pred = prob_u.max(dim=1)
+            prob90 = prob_max > 0.9
+            diag_counts[26] += prob90.double().sum()
+            diag_counts[27] += (prob90 & prob_pred.eq(by)).double().sum()
 
             cls_pred = logits_u.argmax(dim=1)
-            proto_pred = probs_u.argmax(dim=1)
+            cls_prob, cls_prob_pred = torch.softmax(logits_u, dim=1).max(dim=1)
+            cls95 = cls_prob > 0.95
+            proto_pred = dist_u.argmin(dim=1)
 
             cls_ok = cls_pred == by
             proto_ok = proto_pred == by
             is_seen = labeled_present[by]
             is_mis = ~is_seen
+            diag_counts[30] += cls95.double().sum()
+            diag_counts[31] += (cls95 & cls_prob_pred.eq(by)).double().sum()
+            diag_counts[32] += (cls95 & is_mis).double().sum()
+            diag_counts[33] += (cls95 & cls_prob_pred.eq(by) & is_mis).double().sum()
+            diag_counts[28] += (prob90 & is_mis).double().sum()
+            diag_counts[29] += (prob90 & prob_pred.eq(by) & is_mis).double().sum()
 
             n_batch = float(by.size(0))
             diag_counts[0] += n_batch
@@ -456,14 +362,19 @@ def client_diagnose_worker(p: ClientDiagnoseParams):
             if has_thresh:
                 bx_weak = weak_augment(bx_raw, p.dataset)
                 feat_u_weak = model.extractor(bx_weak)
-                probs_u_weak = prototype_distribution(
-                    feat_u_weak, prototypes, valid, p.proto_scale
-                )
+                dist_u_weak = mse_distance(feat_u_weak, prototypes)
+                high_mask = (dist_u_weak <= radius_q10.unsqueeze(0)) & radius_valid.unsqueeze(0)
+                high_size = high_mask.sum(dim=1)
+                high_true = high_mask.gather(1, by.unsqueeze(1)).squeeze(1)
+                high_single = high_size == 1
+                diag_counts[21] += (high_size > 0).double().sum()
+                diag_counts[22] += high_true.double().sum()
+                diag_counts[23] += high_single.double().sum()
+                diag_counts[24] += (high_single & high_true).double().sum()
+                diag_counts[25] += (high_size > 1).double().sum()
                 cand_mask = (
-                    (probs_u_weak >= thresholds.unsqueeze(0))
-                    & threshold_valid.unsqueeze(0)
-                    & valid.unsqueeze(0)
-                )
+                    dist_u_weak <= radius_q50.unsqueeze(0)
+                ) & radius_valid.unsqueeze(0)
                 c_size = cand_mask.sum(dim=1)
                 true_in_cand = cand_mask.gather(1, by.unsqueeze(1)).squeeze(1)
                 is_single = c_size == 1
@@ -490,59 +401,6 @@ def client_diagnose_worker(p: ClientDiagnoseParams):
     }
 
 
-def _fit_youden_thresholds(hist_pos: torch.Tensor, hist_neg: torch.Tensor):
-    """根据正负样本全局直方图 [C, B]，通过后缀和计算 Youden 裁剪点 t_c。
-    若存在并列最大 Youden 指标，选取最大 bin 索引（更严格的更高阈值）。
-    返回:
-        thresholds: [C] 阈值
-        threshold_valid: [C] bool 是否有效
-        max_youdens: [C] float 对应的最大 Youden 指标
-    """
-    num_class, num_bins = hist_pos.shape
-    device = hist_pos.device
-    thresholds = torch.zeros(num_class, device=device)
-    threshold_valid = torch.zeros(num_class, dtype=torch.bool, device=device)
-    max_youdens = torch.zeros(num_class, device=device)
-
-    bin_edges = torch.linspace(0.0, (num_bins - 1) / num_bins, num_bins, device=device)
-
-    # 后缀和: sum_{j=b}^{B-1}
-    cum_pos = hist_pos.flip(dims=[-1]).cumsum(dim=-1).flip(dims=[-1]).float()
-    cum_neg = hist_neg.flip(dims=[-1]).cumsum(dim=-1).flip(dims=[-1]).float()
-
-    total_pos = cum_pos[:, 0]
-    total_neg = cum_neg[:, 0]
-
-    for c in range(num_class):
-        n_pos = total_pos[c].item()
-        n_neg = total_neg[c].item()
-        if n_pos < 1 or n_neg < 1:
-            thresholds[c] = 1.0
-            threshold_valid[c] = False
-            continue
-
-        tpr = cum_pos[c] / n_pos
-        fpr = cum_neg[c] / n_neg
-        youden = tpr - fpr
-
-        max_j = youden.max()
-
-        if float(max_j.item()) <= 0.0:
-            thresholds[c] = 1.0
-            threshold_valid[c] = False
-            max_youdens[c] = float(max_j.item())
-            continue
-
-        best_bins = torch.where(torch.isclose(youden, max_j, atol=1e-12, rtol=0.0))[0]
-        best_bin = int(best_bins[-1].item())
-
-        thresholds[c] = bin_edges[best_bin]
-        threshold_valid[c] = True
-        max_youdens[c] = float(max_j.item())
-
-    return thresholds, threshold_valid, max_youdens
-
-
 class Server(BaseServer):
     def __init__(self, args):
         if args.ssl in ("none", "client"):
@@ -566,9 +424,10 @@ class Server(BaseServer):
         self.unlabeled_ratio = args.unlabeled_ratio
         self.proto_scale = 1.0
 
-        # 当前轮阈值
-        self.thresholds = torch.zeros(self.num_class)
-        self.threshold_valid = torch.zeros(self.num_class, dtype=torch.bool)
+        # 当前轮距离分位数半径
+        self.radius_q10 = torch.zeros(self.num_class)
+        self.radius_q50 = torch.zeros(self.num_class)
+        self.radius_valid = torch.zeros(self.num_class, dtype=torch.bool)
 
         # 核心指标序列
         self.acc = []
@@ -579,7 +438,6 @@ class Server(BaseServer):
         metric_names = (
             "loss_x",
             "loss_calibrate",
-            "loss_u",
             "round_time",
             "unlabeled_classifier_acc",
             "unlabeled_proto_acc",
@@ -597,7 +455,6 @@ class Server(BaseServer):
             "missing_singleton_ratio",
             "missing_singleton_acc",
             "missing_empty_ratio",
-            "mean_youden",
         )
         for name in metric_names:
             setattr(self, name, [])
@@ -710,8 +567,6 @@ class Server(BaseServer):
                     global_protos=self.global_protos.clone(),
                     global_valid=self.global_valid.clone(),
                     proto_scale=self.proto_scale,
-                    thresholds=self.thresholds.clone(),
-                    threshold_valid=self.threshold_valid.clone(),
                     lambda_s=self.lambda_s,
                     lambda_u=self.lambda_u,
                 )
@@ -727,14 +582,11 @@ class Server(BaseServer):
             lcal_cnt = sum(
                 train_results[cid]["loss_calibrate_count"] for cid in selected
             )
-            lu_sum = sum(train_results[cid]["loss_u_sum"] for cid in selected)
-            lu_cnt = sum(train_results[cid]["loss_u_count"] for cid in selected)
             ltot_sum = sum(train_results[cid]["loss_total_sum"] for cid in selected)
             ltot_cnt = sum(train_results[cid]["loss_total_count"] for cid in selected)
 
             self.loss_x.append(lx_sum / max(1, lx_cnt))
             self.loss_calibrate.append(lcal_sum / max(1, lcal_cnt))
-            self.loss_u.append(lu_sum / max(1, lu_cnt))
             self.loss.append(ltot_sum / max(1, ltot_cnt))
 
             # 2. FedAvg 聚合模型参数
@@ -768,7 +620,7 @@ class Server(BaseServer):
             )
             self.global_valid = self.mean_valid.clone()
 
-            # 5. 阶段1：直方图校准 (使用当前轮最新的 G_t, P_t, tau_t)
+            # 5. 距离分位数校准 (使用当前轮最新的全局模型与目标原型)
             cal_params = [
                 ClientCalibrateParams(
                     **asdict(base),
@@ -784,33 +636,98 @@ class Server(BaseServer):
                 cal_params,
             )
 
-            # 6. 服务器聚合直方图并拟合当前轮最新 Youden 裁剪点 t_t
-            hist_pos_all = torch.stack(
-                [cal_results[cid]["hist_pos"] for cid in selected]
-            ).sum(dim=0)
-            hist_neg_all = torch.stack(
-                [cal_results[cid]["hist_neg"] for cid in selected]
-            ).sum(dim=0)
+            # 6. 服务器精确聚合各类 Q10、Q50 距离半径
+            radius_q10 = torch.zeros(self.num_class)
+            radius_q50 = torch.zeros(self.num_class)
+            radius_valid = torch.zeros(self.num_class, dtype=torch.bool)
+            for c in range(self.num_class):
+                parts = [
+                    cal_results[cid]["class_distances"][c]
+                    for cid in selected
+                    if cal_results[cid]["class_distances"][c].numel() > 0
+                ]
+                if parts:
+                    d = torch.cat(parts)
+                    radius_q10[c] = torch.quantile(d, 0.10)
+                    radius_q50[c] = torch.quantile(d, 0.50)
+                    radius_valid[c] = True
+            self.radius_q10 = radius_q10
+            self.radius_q50 = radius_q50
+            self.radius_valid = radius_valid
 
-            self.thresholds, self.threshold_valid, max_youdens = _fit_youden_thresholds(
-                hist_pos_all, hist_neg_all
-            )
-            mean_youden_val = (
-                float(max_youdens[self.threshold_valid].mean().item())
-                if self.threshold_valid.any()
-                else 0.0
-            )
-            self.mean_youden.append(mean_youden_val)
+            valid_idx = torch.where(radius_valid & self.global_valid)[0]
+            pair_overlap10 = pair_overlap50 = 0.0
+            pair_total = 0
+            midpoint10 = []
+            midpoint50 = []
+            if valid_idx.numel() >= 2:
+                proto_dist = mse_distance(
+                    self.global_protos[valid_idx], self.global_protos[valid_idx]
+                )
+                for i in range(valid_idx.numel()):
+                    for j in range(i + 1, valid_idx.numel()):
+                        ci, cj = valid_idx[i], valid_idx[j]
+                        dij = float(proto_dist[i, j])
+                        if dij <= 0:
+                            continue
+                        pair_total += 1
+                        if float(torch.sqrt(radius_q10[ci]) + torch.sqrt(radius_q10[cj])) >= dij**0.5:
+                            pair_overlap10 += 1
+                        if float(torch.sqrt(radius_q50[ci]) + torch.sqrt(radius_q50[cj])) >= dij**0.5:
+                            pair_overlap50 += 1
+                for i in range(valid_idx.numel()):
+                    ci = valid_idx[i]
+                    other = proto_dist[i].clone()
+                    other[i] = float("inf")
+                    nearest = other.min().clamp_min(1e-12)
+                    midpoint10.append(float(4 * radius_q10[ci] / nearest))
+                    midpoint50.append(float(4 * radius_q50[ci] / nearest))
+            pair_overlap10 = 100.0 * pair_overlap10 / max(1, pair_total)
+            # 5. 距离分位数校准 (使用当前轮最新的全局模型与目标原型)
+            midpoint10_mean = sum(midpoint10) / max(1, len(midpoint10))
+            midpoint50_mean = sum(midpoint50) / max(1, len(midpoint50))
 
-            # 7. 阶段2：候选集合质量诊断 (使用同轮次的 G_t, P_t, tau_t, t_t)
+            distance_summary = []
+            for c in range(self.num_class):
+                parts = [
+                    cal_results[cid]["class_distances"][c]
+                    for cid in selected
+                    if cal_results[cid]["class_distances"][c].numel() > 0
+                ]
+                if parts:
+                    d = torch.cat(parts)
+                    q = torch.quantile(
+                        d, torch.tensor([0.01, 0.10, 0.50, 0.90, 0.99, 1.0])
+                    )
+                    distance_summary.append((c, int(d.numel()), [float(v) for v in q]))
+            inter_distance_summary = []
+            nearest_inter_summary = []
+            if valid_idx.numel() >= 2:
+                inter_values = proto_dist[torch.triu(
+                    torch.ones_like(proto_dist, dtype=torch.bool), diagonal=1
+                )]
+                inter_values = inter_values[torch.isfinite(inter_values) & (inter_values > 0)]
+                if inter_values.numel() > 0:
+                    iq = torch.quantile(
+                        inter_values,
+                        torch.tensor([0.01, 0.10, 0.50, 0.90, 0.99]),
+                    )
+                    inter_distance_summary = [float(v) for v in iq]
+                for i, c in enumerate(valid_idx.tolist()):
+                    other = proto_dist[i].clone()
+                    other[i] = float("inf")
+                    nearest_inter_summary.append((c, float(other.min())))
+
+            # 6. 服务器精确聚合各类 Q10、Q50 距离半径
             diag_params = [
                 ClientDiagnoseParams(
                     **asdict(base),
                     global_protos=self.global_protos.clone(),
                     global_valid=self.global_valid.clone(),
                     proto_scale=self.proto_scale,
-                    thresholds=self.thresholds.clone(),
-                    threshold_valid=self.threshold_valid.clone(),
+                    radius_q10=self.radius_q10.clone(),
+                    radius_q50=self.radius_q50.clone(),
+                    radius_valid=self.radius_valid.clone(),
                 )
                 for base in self.build_base_params(selected)
             ]
@@ -878,6 +795,61 @@ class Server(BaseServer):
             self.missing_singleton_ratio.append(mis_singleton_ratio)
             self.missing_singleton_acc.append(mis_singleton_acc)
             self.missing_empty_ratio.append(mis_empty_ratio)
+            high_hit = 100.0 * float(diag[21]) / max(1, total)
+            high_cover = 100.0 * float(diag[22]) / max(1, total)
+            high_hit_acc = 100.0 * float(diag[22]) / max(1.0, float(diag[21]))
+            high_single = 100.0 * float(diag[23]) / max(1, total)
+            high_single_acc = 100.0 * float(diag[24]) / max(1.0, float(diag[23]))
+            high_multi = 100.0 * float(diag[25]) / max(1, total)
+            high_multi_hit = 100.0 * float(diag[25]) / max(1.0, float(diag[21]))
+            prob90_rate = 100.0 * float(diag[26]) / max(1, total)
+            prob90_acc = (
+                f"{100.0 * float(diag[27]) / float(diag[26]):.2f}%"
+                if diag[26] > 0 else "N/A"
+            )
+            prob90_missing_rate = 100.0 * float(diag[28]) / max(1, mis_total)
+            prob90_missing_acc = (
+                f"{100.0 * float(diag[29]) / float(diag[28]):.2f}%"
+                if diag[28] > 0 else "N/A"
+            )
+            cls95_rate = 100.0 * float(diag[30]) / max(1, total)
+            cls95_acc = (
+                f"{100.0 * float(diag[31]) / float(diag[30]):.2f}%"
+                if diag[30] > 0 else "N/A"
+            )
+            cls95_missing_rate = 100.0 * float(diag[32]) / max(1, mis_total)
+            cls95_missing_acc = (
+                f"{100.0 * float(diag[33]) / float(diag[32]):.2f}%"
+                if diag[32] > 0 else "N/A"
+            )
+            q50_text = (
+                f"覆盖={cand_cov:.2f}% | 平均候选数={avg_cand_size:.2f} | "
+                f"空集率={empty_ratio:.2f}% | 单类率={singleton_ratio:.2f}% | "
+                f"单类准确率={singleton_acc:.2f}%"
+            )
+            distance_text = "\n".join(
+                f"  c{c} (n={n}): q01={q[0]:.4g} | q10={q[1]:.4g} | "
+                f"q50={q[2]:.4g} | q90={q[3]:.4g} | q99={q[4]:.4g} | q100={q[5]:.4g}"
+                for c, n, q in distance_summary
+            )
+            inter_text = (
+                "q01={:.4g},q10={:.4g},q50={:.4g},q90={:.4g},q99={:.4g}".format(
+                    *inter_distance_summary
+                )
+                if inter_distance_summary
+                else "无有效类间距离"
+            )
+            nearest_inter_text = "; ".join(
+                f"c{c}:{d:.4g}" for c, d in nearest_inter_summary
+            )
+            intra_inter_ratio_text = ""
+            nearest_map = dict(nearest_inter_summary)
+            if nearest_map:
+                intra_inter_ratio_text = "; ".join(
+                    f"c{c}:{q[2] / nearest_map[c]:.3f}"
+                    for c, _, q in distance_summary
+                    if c in nearest_map and nearest_map[c] > 0
+                )
 
             # 8. 测试集评估
             acc, acc_proto_mean, acc_proto = self._evaluate_accuracy()
@@ -888,24 +860,32 @@ class Server(BaseServer):
             self.round_time.append(time.time() - round_start)
 
             # 9. 格式化控制台输出
-            thresh_str = ", ".join(
-                [
-                    f"c{c}:{self.thresholds[c]:.2f}"
-                    for c in range(min(self.num_class, 10))
-                    if self.threshold_valid[c]
-                ]
-            )
             print(
                 f"\n--- FedTest 第 {round_idx + 1}/{self.rounds} 轮 ---\n"
                 f"测试准确率: 分类器={self.acc[-1]:.2f}% | 目标原型={self.acc_proto[-1]:.2f}% | 统计原型={self.acc_proto_mean[-1]:.2f}%\n"
-                f"训练损失: CE={self.loss_x[-1]:.4f} | 原型校准={self.loss_calibrate[-1]:.4f} | 偏标签Lu={self.loss_u[-1]:.4f} | 总损失={self.loss[-1]:.4f}\n"
+                f"训练损失: CE={self.loss_x[-1]:.4f} | 原型校准={self.loss_calibrate[-1]:.4f} | 总损失={self.loss[-1]:.4f}\n"
                 f"无标签分类: 分类器={unlabeled_cls_acc:.2f}% (常见={seen_cls_acc:.2f}%, 缺失={mis_cls_acc:.2f}%) | "
                 f"原型={unlabeled_prt_acc:.2f}% (常见={seen_prt_acc:.2f}%, 缺失={mis_prt_acc:.2f}%)\n"
+                f"无标签样本数: 总数={total} | 常见类={seen_total} | 缺失类={mis_total}\n"
                 f"候选集质量: 真实覆盖率={cand_cov:.2f}% | 平均候选数={avg_cand_size:.2f} | 空集率={empty_ratio:.2f}% | "
                 f"单候选率={singleton_ratio:.2f}% (准确率={singleton_acc:.2f}%)\n"
                 f"缺失类候选: 真实覆盖率={mis_cand_cov:.2f}% | 平均候选数={mis_avg_cand_size:.2f} | 空集率={mis_empty_ratio:.2f}% | "
                 f"单候选率={mis_singleton_ratio:.2f}% (准确率={mis_singleton_acc:.2f}%)\n"
-                f"自适应阈值: Youden均值={mean_youden_val:.3f} | 部分类别裁剪点=[{thresh_str}]\n"
+                f"Q10: 命中率={high_hit:.2f}% | 命中样本真实准确率={high_hit_acc:.2f}% | "
+                f"全体真实覆盖={high_cover:.2f}% | 单类率={high_single:.2f}% | "
+                f"单类准确率={high_single_acc:.2f}% | 多类命中率(全体)={high_multi:.2f}% | "
+                f"多类比例(Q10命中)={high_multi_hit:.2f}%\n"
+                f"原型概率>90%: 样本率={prob90_rate:.2f}% | 准确率={prob90_acc} | "
+                f"缺失类样本率={prob90_missing_rate:.2f}% | 缺失类准确率={prob90_missing_acc}\n"
+                f"分类器概率>95%: 样本率={cls95_rate:.2f}% | 准确率={cls95_acc} | "
+                f"缺失类样本率={cls95_missing_rate:.2f}% | 缺失类准确率={cls95_missing_acc}\n"
+                f"Q50: {q50_text}\n"
+                f"几何重叠: Q10={pair_overlap10:.2f}% | Q50={pair_overlap50:.2f}% | 中点比例均值(Q10/Q50)={midpoint10_mean:.4f}/{midpoint50_mean:.4f}\n"
+                f"原型预测正确样本类内距离分布:\n{distance_text}\n"
+                f"类间原型距离分布: {inter_text}\n"
+                f"各类最近异类原型距离: {nearest_inter_text}\n"
+                f"正确样本类内q50/最近类间距离: {intra_inter_ratio_text}\n"
+                f"半径: Q10有效={int(self.radius_valid.sum())} | Q50有效={int(self.radius_valid.sum())}\n"
                 f"本轮耗时: {self.round_time[-1]:.2f} 秒"
             )
 
@@ -917,7 +897,6 @@ class Server(BaseServer):
             "loss": self.loss,
             "loss_x": self.loss_x,
             "loss_calibrate": self.loss_calibrate,
-            "loss_u": self.loss_u,
             "round_time": self.round_time,
             "unlabeled_classifier_acc": self.unlabeled_classifier_acc,
             "unlabeled_proto_acc": self.unlabeled_proto_acc,
@@ -935,7 +914,6 @@ class Server(BaseServer):
             "missing_singleton_ratio": self.missing_singleton_ratio,
             "missing_singleton_acc": self.missing_singleton_acc,
             "missing_empty_ratio": self.missing_empty_ratio,
-            "mean_youden": self.mean_youden,
         }
 
         self.deal_save(
@@ -944,6 +922,8 @@ class Server(BaseServer):
                 "global": self.model.state_dict(),
                 "proto": self.global_protos,
                 "proto_mean": self.mean_protos,
-                "thresholds": self.thresholds,
+                "radius_q10": self.radius_q10,
+                "radius_q50": self.radius_q50,
+                "radius_valid": self.radius_valid,
             },
         )

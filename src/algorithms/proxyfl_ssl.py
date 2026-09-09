@@ -10,11 +10,9 @@ from .utils import (
     BaseParams,
     BaseServer,
     clone_cpu_state,
-    evaluate_model,
     fmt_num,
     get_model,
     param_aggregate,
-    prepare_input_batch,
 )
 from .utils.augment import strong_augment, weak_augment
 from .utils.loss import dist_contrastive_loss, masked_kl_loss
@@ -62,14 +60,8 @@ def train(p: Params):
     class_counts = torch.zeros(p.num_class, device=device)
     total_loss = 0.0
     num_batches = 0
-    u_total = 0
-    u_active_count = 0
-    hc_count = 0
-    hc_correct = 0
-    lc_count = 0
-    lc_hit = 0
-    global_correct = 0
-    local_correct = 0
+    pseudo_count = 0
+    pseudo_correct = 0
 
     model.train()
     for local_epoch in range(p.epochs):
@@ -227,21 +219,8 @@ def train(p: Params):
                 valid = hc_mask.bool()
                 class_counts += F.one_hot(y_hat[valid], p.num_class).float().sum(dim=0)
 
-                u_batch_size = len(y_u)
-                u_total += u_batch_size
-                u_active_count += len(active_idx)
-                cur_hc = valid.sum().item()
-                hc_count += cur_hc
-                hc_correct += ((y_hat == y_u) & valid).sum().item()
-                cur_lc = u_batch_size - cur_hc
-                lc_count += cur_lc
-                # 检查真实标签 y_u 是否在犹豫候选集 xi_lc 中
-                y_u_indices = torch.arange(u_batch_size, device=device)
-                in_lc = xi_lc[y_u_indices, y_u] & (~valid)
-                lc_hit += in_lc.sum().item()
-                global_correct += (y_hat == y_u).sum().item()
-                y_local = y_tilde.argmax(dim=-1)
-                local_correct += (y_local == y_u).sum().item()
+                pseudo_count += int(valid.sum().item())
+                pseudo_correct += int(((y_hat == y_u) & valid).sum().item())
             total_loss += loss.item()
             num_batches += 1
 
@@ -251,14 +230,8 @@ def train(p: Params):
         "state": state,
         "num_samples": len(p.train_set.y),
         "class_counts": class_counts.cpu().detach().clone(),
-        "u_total": u_total,
-        "u_active_count": u_active_count,
-        "hc_count": hc_count,
-        "hc_correct": hc_correct,
-        "lc_count": lc_count,
-        "lc_hit": lc_hit,
-        "global_correct": global_correct,
-        "local_correct": local_correct,
+        "pseudo_count": pseudo_count,
+        "pseudo_correct": pseudo_correct,
     }
 
 
@@ -283,19 +256,7 @@ class Server(BaseServer):
             (self.num_class,), 1.0 / self.num_class, dtype=torch.float32
         )
         self.pseudo_acc = []
-        self.valid_ratio = []
-        self.num_valid = []
-        self.hc_acc = []
-        self.hc_ratio = []
-        self.lc_hit_ratio = []
-        self.active_ratio = []
-        self.global_pseudo_acc = []
-        self.local_pseudo_acc = []
-        self.fedavg_acc = []
-        self.fedavg_pred_dist = []
-        self.gpt_pred_dist = []
-        self.gpt_loss = []
-        self.gpt_min_class_distance = []
+        self.pseudo_count = []
 
     def update_global_distribution(self, counts):
         total = torch.stack(counts).to(dtype=torch.float32).sum(dim=0)
@@ -303,27 +264,6 @@ class Server(BaseServer):
         self.global_class_dist = (
             self.ema_beta * self.global_class_dist + (1.0 - self.ema_beta) * current
         )
-
-    def get_prediction_distribution(self):
-        """返回当前全局模型的预测类别分布，不改变模型参数。"""
-        loader = DataLoader(self.test_set, batch_size=128, shuffle=False)
-        total = 0
-        pred_counts = torch.zeros(self.num_class, dtype=torch.long)
-
-        self.model.to(self.device)
-        self.model.eval()
-        with torch.no_grad():
-            for x, y, *_ in loader:
-                x_norm = prepare_input_batch(x.to(self.device), self.dataset)
-                logits = self.model(x_norm)
-                prediction = logits.argmax(dim=1)
-                target = y.to(self.device)
-                total += target.numel()
-                pred_counts += torch.bincount(
-                    prediction.cpu(), minlength=self.num_class
-                )
-        self.model.cpu()
-        return pred_counts.float() / total
 
     def update_gpt(self, states, weights):
         classifier_states = [
@@ -350,8 +290,6 @@ class Server(BaseServer):
             max_dist = distances.min(dim=-1).values.max()
 
         self.gpt.train()
-        total_loss = 0.0
-        num_batches = 0
         for _ in range(self.gpt_epochs):
             for proxy, label in loader:
                 loss = dist_contrastive_loss(
@@ -363,8 +301,6 @@ class Server(BaseServer):
                 self.gpt_optimizer.zero_grad()
                 loss.backward()
                 self.gpt_optimizer.step()
-                total_loss += loss.item()
-                num_batches += 1
         self.gpt.eval()
 
         global_state = self.model.state_dict()
@@ -372,19 +308,12 @@ class Server(BaseServer):
         global_state["classifier.bias"] = self.gpt.bias.detach().cpu().clone()
         self.model.load_state_dict(global_state)
 
-        with torch.no_grad():
-            distances = torch.cdist(self.gpt.weight, self.gpt.weight, p=2)
-            distances.fill_diagonal_(float("inf"))
-            min_class_distance = distances.min().item()
-        return total_loss / num_batches, min_class_distance
-
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
         for r in range(self.rounds):
             start = time.time()
-            print(f"\n--- ProxyFL-SSL Round {r + 1}/{self.rounds} ---")
-
             selected = sorted(torch.randperm(self.num_clients)[:num_join].tolist())
+            print(f"\n--- ProxyFL-SSL Round {r + 1}/{self.rounds} ---")
             print(f"Selected clients: {selected}")
 
             parameters = [
@@ -400,107 +329,49 @@ class Server(BaseServer):
             ]
             results = self.run_clients(train, parameters)
 
-            # 汇集各客户端的回传结果，计算聚合权重与统计量
             states = []
             sample_counts = []
             class_counts = []
             total_loss = 0.0
-            total_u = 0
-            total_active = 0
-            total_hc = 0
-            total_hc_correct = 0
-            total_lc = 0
-            total_lc_hit = 0
-            total_global_correct = 0
-            total_local_correct = 0
+            total_pseudo_count = 0
+            total_pseudo_correct = 0
             for res in results.values():
                 states.append(res["state"])
                 sample_counts.append(res["num_samples"])
                 class_counts.append(res["class_counts"])
                 total_loss += res["loss"]
-                total_u += res["u_total"]
-                total_active += res["u_active_count"]
-                total_hc += res["hc_count"]
-                total_hc_correct += res["hc_correct"]
-                total_lc += res["lc_count"]
-                total_lc_hit += res["lc_hit"]
-                total_global_correct += res["global_correct"]
-                total_local_correct += res["local_correct"]
+                total_pseudo_count += res["pseudo_count"]
+                total_pseudo_correct += res["pseudo_correct"]
+
             total_samples = sum(sample_counts)
             weights = [count / total_samples for count in sample_counts]
             self.model.load_state_dict(param_aggregate(states, weights))
-            fedavg_acc = evaluate_model(self.model, self.test_set, self.device)
-            fedavg_pred_dist = self.get_prediction_distribution()
             self.update_global_distribution(class_counts)
-            gpt_loss, min_class_distance = self.update_gpt(states, weights)
-            gpt_pred_dist = self.get_prediction_distribution()
-
-            self.fedavg_acc.append(fedavg_acc)
-            self.fedavg_pred_dist.append(fedavg_pred_dist)
-            self.gpt_pred_dist.append(gpt_pred_dist)
-            self.gpt_loss.append(gpt_loss)
-            self.gpt_min_class_distance.append(min_class_distance)
+            self.update_gpt(states, weights)
 
             self.loss.append(total_loss / num_join)
+            round_pseudo_acc = (
+                (total_pseudo_correct / max(1, total_pseudo_count)) * 100.0
+            )
+            self.pseudo_acc.append(round_pseudo_acc)
+            self.pseudo_count.append(total_pseudo_count)
+
             self.evaluate()
-
-            u_tot_safe = max(1, total_u)
-            hc_ratio = total_hc / u_tot_safe
-            hc_acc = total_hc_correct / max(1, total_hc)
-            lc_hit_ratio = total_lc_hit / max(1, total_lc)
-            active_ratio = total_active / u_tot_safe
-            global_pseudo_acc = total_global_correct / u_tot_safe
-            local_pseudo_acc = total_local_correct / u_tot_safe
-
-            # 保持旧字段兼容
-            self.pseudo_acc.append(global_pseudo_acc)
-            self.valid_ratio.append(hc_ratio)
-            self.num_valid.append(total_hc)
-
-            self.hc_ratio.append(hc_ratio)
-            self.hc_acc.append(hc_acc)
-            self.lc_hit_ratio.append(lc_hit_ratio)
-            self.active_ratio.append(active_ratio)
-            self.global_pseudo_acc.append(global_pseudo_acc)
-            self.local_pseudo_acc.append(local_pseudo_acc)
-
+            round_duration = time.time() - start
             print(
-                f"Global Accuracy: {self.acc[-1]:.2f}%, Avg Loss: {self.loss[-1]:.4f}"
+                f"Global Acc: {self.acc[-1]:.2f}% | "
+                f"Loss: {self.loss[-1]:.4f} | "
+                f"Pseudo Acc: {self.pseudo_acc[-1]:.2f}% | "
+                f"Pseudo Count: {self.pseudo_count[-1]}"
             )
-            print(
-                f"U-Usage: HC Ratio={hc_ratio * 100:.2f}%, Active Ratio={active_ratio * 100:.2f}% | "
-                f"HC Acc: {hc_acc * 100:.2f}%, LC Hit Ratio: {lc_hit_ratio * 100:.2f}%"
-            )
-            print(
-                f"Direct Pseudo Acc: Global={global_pseudo_acc * 100:.2f}%, Local={local_pseudo_acc * 100:.2f}%"
-            )
-            print(
-                f"FedAvg Acc: {fedavg_acc:.2f}%, GPT Loss: {gpt_loss:.4f}, GPT Min Class Dist: {min_class_distance:.4f}"
-            )
-            fmt = lambda d: "[" + ", ".join(f"{v:.3f}" for v in d.tolist()) + "]"
-            print(f"Pred Dist: {fmt(fedavg_pred_dist)} -> {fmt(gpt_pred_dist)}")
-            print(f"Round finished in {time.time() - start:.2f} seconds")
+            print(f"Round finished in {round_duration:.2f} seconds")
 
     def save(self):
-        self.deal_save(
-            {
-                "acc": self.acc,
-                "loss": self.loss,
-                "pseudo_acc": self.pseudo_acc,
-                "valid_ratio": self.valid_ratio,
-                "num_valid": self.num_valid,
-                "hc_ratio": self.hc_ratio,
-                "hc_acc": self.hc_acc,
-                "lc_hit_ratio": self.lc_hit_ratio,
-                "active_ratio": self.active_ratio,
-                "global_pseudo_acc": self.global_pseudo_acc,
-                "local_pseudo_acc": self.local_pseudo_acc,
-                "fedavg_acc": self.fedavg_acc,
-                "fedavg_pred_dist": self.fedavg_pred_dist,
-                "gpt_pred_dist": self.gpt_pred_dist,
-                "gpt_loss": self.gpt_loss,
-                "gpt_min_class_distance": self.gpt_min_class_distance,
-                "global_class_dist": self.global_class_dist.cpu().detach().clone(),
-            },
-            {"global_model": self.model.state_dict(), "gpt": self.gpt.state_dict()},
-        )
+        metrics = {
+            "acc": self.acc,
+            "loss": self.loss,
+            "pseudo_acc": self.pseudo_acc,
+            "pseudo_count": self.pseudo_count,
+        }
+        params = {"global": self.model.state_dict()}
+        self.deal_save(metrics, params)
