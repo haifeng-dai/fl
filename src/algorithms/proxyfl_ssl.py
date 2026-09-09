@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -34,6 +35,8 @@ class Params(BaseParams):
     global_class_dist: torch.Tensor
     confidence: float
     lam: float
+    alp: float
+    bet: float
     temperature: float
     unlabeled_ratio: int
 
@@ -208,9 +211,10 @@ def train(p: Params):
                 # 无活跃无标签样本：返回 0（乘 0 保持计算图连通）
                 loss_c = z_pool.sum() * 0.0
 
-            loss = loss_s + p.lam * loss_u + p.lam * loss_c
+            loss = loss_s + p.alp * loss_u + p.bet * loss_c
 
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 
@@ -249,6 +253,8 @@ class Server(BaseServer):
         self.gpt_batch_size = args.gpt_batch_size
         self.gpt_threshold = args.gpt_threshold
         self.ema_beta = args.ema_beta
+        self.alp = args.alp
+        self.bet = args.bet
 
         self.gpt = torch.nn.Linear(self.feature_dim, self.num_class).to(self.device)
         self.gpt_optimizer = torch.optim.SGD(self.gpt.parameters(), lr=args.gpt_lr)
@@ -299,6 +305,7 @@ class Server(BaseServer):
                     margin=min(max_dist.item(), self.gpt_threshold),
                 )
                 self.gpt_optimizer.zero_grad()
+                check_losses(loss, locals())
                 loss.backward()
                 self.gpt_optimizer.step()
         self.gpt.eval()
@@ -322,6 +329,8 @@ class Server(BaseServer):
                     global_class_dist=self.global_class_dist,
                     confidence=self.confidence,
                     lam=self.lam,
+                    alp=self.alp,
+                    bet=self.bet,
                     temperature=self.temperature,
                     unlabeled_ratio=self.unlabeled_ratio,
                 )
@@ -351,8 +360,8 @@ class Server(BaseServer):
 
             self.loss.append(total_loss / num_join)
             round_pseudo_acc = (
-                (total_pseudo_correct / max(1, total_pseudo_count)) * 100.0
-            )
+                total_pseudo_correct / max(1, total_pseudo_count)
+            ) * 100.0
             self.pseudo_acc.append(round_pseudo_acc)
             self.pseudo_count.append(total_pseudo_count)
 

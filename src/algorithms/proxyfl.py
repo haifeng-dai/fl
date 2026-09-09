@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     evaluate_model,
     fmt_num,
@@ -98,11 +99,13 @@ def train(p: Params):
 
             # 反向传播并更新代理模型
             opt_p.zero_grad()
+            check_losses(loss_p, locals())
             loss_p.backward()
             opt_p.step()
 
             # 反向传播并更新本地模型
             opt_l.zero_grad()
+            check_losses(loss_l, locals())
             loss_l.backward()
             opt_l.step()
 

@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -377,6 +378,7 @@ def train(p: Params):
             dm.sync_theta(mode="sigma")
             optimizer_s.zero_grad()
             loss_s = p.lambda_s * F.cross_entropy(dm.theta(x_lb_norm), y_lb)
+            check_losses(loss_s, locals())
             loss_s.backward()
             optimizer_s.step()
 
@@ -412,6 +414,7 @@ def train(p: Params):
             pseudo_count += p_cnt
             pseudo_correct += p_corr
 
+            check_losses(loss_u, locals())
             loss_u.backward()
             optimizer_u.step()
 

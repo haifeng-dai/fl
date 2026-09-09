@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     fmt_num,
@@ -96,6 +97,7 @@ def train(p: Params):
             optimizer_v.zero_grad()
             out = model(x)
             loss = F.cross_entropy(out, y)
+            check_losses(loss, locals())
             loss.backward()
             optimizer_v.step()
 
@@ -126,6 +128,7 @@ def train(p: Params):
             optimizer_u.zero_grad()
             out = model(x)
             loss = F.cross_entropy(out, y)
+            check_losses(loss, locals())
             loss.backward()
 
             # c. 梯度修正与状态回滚：将梯度适配到 u，并将参数乘回 mu 复位

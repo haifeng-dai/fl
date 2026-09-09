@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -136,6 +137,7 @@ def train(p: Params):
             )
 
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 

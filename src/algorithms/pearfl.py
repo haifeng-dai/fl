@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -92,6 +93,7 @@ def train(p: Params):
 
         # 总损失
         loss = l_ce + p.lamda * l_reg
+        check_losses(loss, locals())
         loss.backward()
         optimizer.step()
 

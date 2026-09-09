@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -50,6 +51,7 @@ def train(p: Params):
             output = model(x)
             loss = F.cross_entropy(output, y)
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
             total_loss += loss.item()

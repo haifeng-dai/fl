@@ -13,6 +13,7 @@ from src import TrainingFailureError
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     evaluate,
     extract_prototypes,
@@ -87,6 +88,7 @@ def train(p: Params):
                     )
 
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 

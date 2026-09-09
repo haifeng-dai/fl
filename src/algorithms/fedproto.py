@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -65,6 +66,7 @@ def train(p: Params):
                 loss = loss_ce
 
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 

@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -62,6 +63,7 @@ def train(p: Params):
             loss_con = cos_similarity(features, global_protos, target, tau=1.0)
 
             loss = (1 - p.alpha) * loss_ce + p.alpha * loss_con
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 

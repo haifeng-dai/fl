@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -77,6 +78,7 @@ def train(p: Params):
             loss = task_loss + lin_penalty + quad_penalty
 
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 

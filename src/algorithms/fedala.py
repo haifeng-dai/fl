@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, Subset
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -146,6 +147,7 @@ class ALA:
                 optimizer.zero_grad()
                 output = model_t(x)
                 loss = F.cross_entropy(output, y)
+                check_losses(loss, locals())
                 loss.backward()
 
                 # 利用 ALA 梯度推导新的聚合权重
@@ -240,6 +242,7 @@ def train(p: Params):
             output = local_model(x)
             loss = F.cross_entropy(output, y)
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 

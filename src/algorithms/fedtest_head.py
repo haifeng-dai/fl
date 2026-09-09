@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, Subset, TensorDataset
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     fmt_num,
@@ -393,6 +394,7 @@ def train(p: Params):
                     singleton_pseudo_label_correct
                 )
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
             loss_sum += loss_x.item() * y_l.size(0)
@@ -770,6 +772,7 @@ class Server(BaseServer):
                 self.proto_anchor_weight * anchor_loss
                 + self.proto_sep_weight * sep_loss
             )
+            check_losses(proto_loss, locals())
             proto_loss.backward()
             optimizer.step()
 
@@ -848,6 +851,7 @@ class Server(BaseServer):
             optimizer.zero_grad()
             logits = self.model.classifier(proto_features)
             loss_head = F.cross_entropy(logits, proto_labels)
+            check_losses(loss_head, locals())
             loss_head.backward()
             optimizer.step()
 

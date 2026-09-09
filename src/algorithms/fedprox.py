@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -56,6 +57,7 @@ def train(p: Params):
             logits = model(x)
             loss = F.cross_entropy(logits, y)
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
 
             # FedProx 近端项优化算法：

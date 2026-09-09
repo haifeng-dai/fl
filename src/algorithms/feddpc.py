@@ -8,6 +8,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -122,6 +123,7 @@ def train(p: Params):
             loss = loss_ce_local + p.lambda_p * loss_ce_proto
 
             optimizer_head.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer_head.step()
 
@@ -159,6 +161,7 @@ def train(p: Params):
                 loss_proto = F.mse_loss(features, target_protos)
 
                 optimizer_body.zero_grad()
+                check_losses(loss_proto, locals())
                 loss_proto.backward()
                 optimizer_body.step()
 
@@ -331,6 +334,7 @@ class Server(BaseServer):
                 loss = loss_mse + self.lambda_acl * loss_ortho
 
                 optimizer.zero_grad()
+                check_losses(loss, locals())
                 loss.backward()
                 optimizer.step()
                 num_batches += 1

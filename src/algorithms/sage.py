@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -108,6 +109,7 @@ def train(p: Params):
 
             # ── 总损失：有监督 + λu × 无监督 ──
             supervised_loss = F.cross_entropy(logits_l, y_l)
+            unsupervised_loss = None
             if cur_valid_count > 0:
                 unsupervised_loss = masked_kl_loss(logits_u_s, targets, valid_mask)
                 loss = supervised_loss + p.lambda_u * unsupervised_loss
@@ -115,6 +117,7 @@ def train(p: Params):
                 loss = supervised_loss
 
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
             loss_sum += loss.item()

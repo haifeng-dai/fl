@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -95,6 +96,7 @@ def train_phase1(p: ParamsPhase1):
             optimizer.zero_grad()
             output = model(x)
             loss = F.cross_entropy(output, y)
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 

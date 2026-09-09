@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -136,6 +137,7 @@ def train(p: Params):
             loss = loss_ce + p.lambda_ * loss_proto
 
             opt.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             opt.step()
             total_loss_m += loss.item()
@@ -175,6 +177,7 @@ def train(p: Params):
             loss = dist_contrastive_loss(feature, protos, y)
 
             opt_pln.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             opt_pln.step()
             total_loss_p += loss.item()

@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -89,6 +90,7 @@ def train(p: Params):
 
             # 整体损失
             loss = loss_ce + p.mu * loss_con
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
             total_loss += loss.item()

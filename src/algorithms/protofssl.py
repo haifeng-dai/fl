@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     fmt_num,
@@ -147,6 +148,7 @@ def train(p: Params):
             # 本地原型距离概率 → CE(真实标签)（dist_contrastive_loss = Eq.(6)+CE）
             loss = dist_contrastive_loss(f_q, C_local, yq_b.to(device))
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -171,6 +173,7 @@ def train(p: Params):
             # 本地原型距离概率 → CE(soft 伪标签)（dist_contrastive_loss = Eq.(6)+CE）
             loss_unsup = p.lambda_ * dist_contrastive_loss(f_u, C_local, p_bar_u)
             optimizer.zero_grad()
+            check_losses(loss_unsup, locals())
             loss_unsup.backward()
             optimizer.step()
             total_loss += loss_unsup.item()

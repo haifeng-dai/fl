@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, Subset, TensorDataset
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     fmt_num,
@@ -629,6 +630,7 @@ def train(p: Params):
                 train_stats[14] += (proto_q_values * selected_u.float()).sum().double()
 
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 
@@ -996,6 +998,7 @@ class Server(BaseServer):
                 self.proto_anchor_weight * anchor_loss
                 + self.proto_sep_weight * sep_loss
             )
+            check_losses(proto_loss, locals())
             proto_loss.backward()
             optimizer.step()
 

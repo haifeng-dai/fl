@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
+    check_losses,
     BaseParams,
     BaseServer,
     clone_cpu_state,
@@ -77,6 +78,7 @@ def train(p: Params):
 
             output = model(x)
             loss = F.cross_entropy(output, y)
+            check_losses(loss, locals())
             loss.backward()
 
             optimizer.step()
@@ -108,6 +110,7 @@ def train(p: Params):
     x, y = x.to(device), y.to(device)
     output = model(x)
     loss = F.cross_entropy(output, y)
+    check_losses(loss, locals())
     loss.backward()
 
     # 4.3 逐层进行剪枝（Pruning）和生长（Regrowing）

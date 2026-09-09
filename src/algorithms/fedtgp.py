@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     fmt_num,
@@ -103,6 +104,7 @@ def train(p: Params):
             loss = l_ce + p.lamda_ * l_proto
 
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 
@@ -270,6 +272,7 @@ class Server(BaseServer):
                     proto_batch, proto_gen, labels_batch, margin=margin
                 )
                 optimizer.zero_grad()
+                check_losses(loss, locals())
                 loss.backward()
                 optimizer.step()
 

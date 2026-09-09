@@ -8,6 +8,7 @@ from .input import prepare_input_batch
 __all__ = [
     "BaseParams",
     "BaseServer",
+    "check_losses",
     "clone_cpu_state",
     "evaluate",
     "evaluate_model",
@@ -27,6 +28,27 @@ def clone_cpu_state(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     用于客户端训练结束后的模型状态导出，防止 Ray 对象存储出现悬空引用。
     """
     return {k: v.cpu().detach().clone() for k, v in state.items()}
+
+
+def check_losses(loss: torch.Tensor, variables: dict[str, object]) -> None:
+    """先检查总损失，异常时报告作用域内所有非有限 Tensor。"""
+    if torch.isfinite(loss).all():
+        return
+
+    non_finite = []
+    for name, value in variables.items():
+        if not isinstance(value, torch.Tensor):
+            continue
+        kinds = []
+        if torch.isnan(value).any():
+            kinds.append("nan")
+        if torch.isinf(value).any():
+            kinds.append("inf")
+        if kinds:
+            non_finite.append(f"{name}={'/'.join(kinds)}")
+
+    details = ", ".join(non_finite) or "loss=nan-or-inf"
+    raise FloatingPointError(f"Non-finite tensors detected: {details}")
 
 
 def fmt_num(x):

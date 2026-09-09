@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 
 from .fedtgp import TGP, Params, get_path, train
 from .utils import (
+    check_losses,
     BaseServer,
     proto_aggregate,
 )
@@ -135,6 +136,7 @@ class Server(BaseServer):
                     proto_batch, proto_gen, labels_batch, margin=margin
                 )
                 optimizer.zero_grad()
+                check_losses(loss, locals())
                 loss.backward()
                 optimizer.step()
 
