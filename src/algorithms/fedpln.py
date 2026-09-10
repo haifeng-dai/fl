@@ -6,9 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -18,7 +18,14 @@ from .utils.loss import dist_contrastive_loss
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{fmt_num(args.lambda_)}_{fmt_num(args.epoch_pln)}_{fmt_num(args.lr_pln)}_{fmt_num(args.batch_size_pln)}_{fmt_num(args.depth_pln)}_{fmt_num(args.width_pln)}_{args.mode}_{fmt_num(args.fixed_proto)}_{fmt_num(args.init_emb)}_{fmt_num(args.har)}"
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.lambda_)}"
+        f"_{fmt_num(args.epoch_pln)}_{fmt_num(args.lr_pln)}"
+        f"_{fmt_num(args.batch_size_pln)}_{fmt_num(args.depth_pln)}"
+        f"_{fmt_num(args.width_pln)}_{args.mode}"
+        f"_{fmt_num(args.fixed_proto)}_{fmt_num(args.init_emb)}"
+        f"_{fmt_num(args.har)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -97,7 +104,7 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化模型与 PLN 网络
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
     pln = PLN(
         p.num_class, p.width_pln, p.feature_dim, p.depth_pln, p.fixed_proto, p.init_emb

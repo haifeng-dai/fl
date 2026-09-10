@@ -126,9 +126,9 @@ def train(p: Params):
 
     # 1. 初始化模型
     # 本地个性化专家模型 (Student)
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     # 全局代理模型 (从压缩的 SVD 参数重建)
-    model_g = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model_g = get_model(p).to(device)
 
     with torch.no_grad():
         # A. 从 SVD 参数中重建并加载全局代理模型参数

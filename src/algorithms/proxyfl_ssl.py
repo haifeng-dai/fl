@@ -17,16 +17,14 @@ from .utils import (
 )
 from .utils.augment import strong_augment, weak_augment
 from .utils.loss import dist_contrastive_loss, masked_kl_loss
-from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
+from .utils.ssl import build_fixmatch_loaders, iterate_fixmatch_batches
 
 
 def get_path(args):
     args.file_name = (
-        f"{args.common_name}_{fmt_num(args.temperature)}"
-        f"_{fmt_num(args.gpt_lr)}_{fmt_num(args.gpt_epochs)}"
+        f"{args.common_name}_{fmt_num(args.gpt_lr)}_{fmt_num(args.gpt_epochs)}"
         f"_{fmt_num(args.gpt_batch_size)}_{fmt_num(args.gpt_threshold)}"
-        f"_{fmt_num(args.ema_beta)}"
-        f"_{fmt_num(args.conf)}"
+        f"_{fmt_num(args.ema_beta)}_{fmt_num(args.conf)}"
     )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
@@ -37,16 +35,15 @@ class Params(BaseParams):
     conf: float
     alp: float
     bet: float
-    temperature: float
     unlabeled_ratio: int
 
 
 def train(p: Params):
     device = torch.device(p.client_gpu)
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
 
-    model_g = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model_g = get_model(p).to(device)
     model_g.load_state_dict(p.model_state)
     model_g.eval()
     for parameter in model_g.parameters():
@@ -68,9 +65,7 @@ def train(p: Params):
 
     model.train()
     for local_epoch in range(p.epochs):
-        for labeled_batch, (x_u, y_u) in iterate_ssl_batches(loaders):
-            assert labeled_batch is not None
-            x_l, y_l = labeled_batch
+        for (x_l, y_l), (x_u, y_u) in iterate_fixmatch_batches(loaders):
             x_l, y_l = x_l.to(device), y_l.to(device)
             x_u, y_u = x_u.to(device), y_u.to(device)
             x_l = weak_augment(x_l, p.dataset)
@@ -89,7 +84,7 @@ def train(p: Params):
 
             with torch.no_grad():
                 y_g = model_g(x_u_w)  # 全局 logits（论文 Eq.3 的 y_i）
-                p_g = torch.softmax(y_g / p.temperature, dim=-1)
+                p_g = torch.softmax(y_g, dim=-1)
                 confidence_g, y_hat = p_g.max(dim=1)
 
             # 高置信度判定：max(y_i) > τ，仅用全局 logits（论文 §5.2.1）
@@ -248,7 +243,6 @@ class Server(BaseServer):
             )
         super().__init__(args, is_ssl=True, pfl=False)
         self.conf = args.conf
-        self.temperature = args.temperature
         self.unlabeled_ratio = args.unlabeled_ratio
         self.gpt_epochs = args.gpt_epochs
         self.gpt_batch_size = args.gpt_batch_size
@@ -331,7 +325,6 @@ class Server(BaseServer):
                     conf=self.conf,
                     alp=self.alp,
                     bet=self.bet,
-                    temperature=self.temperature,
                     unlabeled_ratio=self.unlabeled_ratio,
                 )
                 for base in self.build_base_params(selected)

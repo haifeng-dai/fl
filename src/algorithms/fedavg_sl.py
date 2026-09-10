@@ -6,9 +6,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     get_model,
 )
@@ -23,7 +23,7 @@ def get_path(args):
 def train(p: BaseParams):
     device = torch.device(p.client_gpu)
 
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim)
+    model = get_model(p)
     model.load_state_dict(p.model_state)
     model.to(device)
 

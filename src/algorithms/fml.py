@@ -39,13 +39,13 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化全局模型 (MEME)
-    global_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+    global_model = get_model(p).to(
         device
     )
     global_model.load_state_dict(p.model_state)
 
     # 2. 初始化本地模型 (个性化模型)
-    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+    local_model = get_model(p).to(
         device
     )
     local_model.load_state_dict(p.local_state)

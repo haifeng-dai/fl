@@ -122,20 +122,31 @@ def expand_sweep(config_dict):
     """
     如果配置项中存在列表，则展开为多个实验配置。
     """
-    sweep_keys = [k for k, v in config_dict.items() if isinstance(v, list)]
+    normalized_config = config_dict.copy()
+    sweep_keys = []
+    for key, value in config_dict.items():
+        if not isinstance(value, list):
+            continue
+        if not value:
+            raise ValueError(f"扫描参数 {key} 不能是空列表")
+        if len(value) == 1:
+            normalized_config[key] = value[0]
+        else:
+            sweep_keys.append(key)
+
     if not sweep_keys:
-        return [SimpleNamespace(**config_dict)]
+        return [SimpleNamespace(**normalized_config)]
 
     print(f"-> Detected parameter sweep for keys: {sweep_keys}")
 
-    lists_to_product = [config_dict[k] for k in sweep_keys]
+    lists_to_product = [normalized_config[k] for k in sweep_keys]
     combinations = list(itertools.product(*lists_to_product))
 
     configs = []
     algo_configs = load_yaml("configs/algorithms.yaml")
 
     for combo in combinations:
-        new_config_dict = config_dict.copy()
+        new_config_dict = normalized_config.copy()
         for i, k in enumerate(sweep_keys):
             new_config_dict[k] = combo[i]
 

@@ -21,7 +21,11 @@ from .utils.loss import dist_contrastive_loss
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{fmt_num(args.lamda_)}_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}_{fmt_num(args.margin_threshold)}"
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.lamda_)}"
+        f"_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}"
+        f"_{fmt_num(args.margin_threshold)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -66,7 +70,7 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 初始化模型并加载全局状态
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
 
     # 设置配置与优化器

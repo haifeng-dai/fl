@@ -6,9 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -42,7 +42,7 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载最新的全局模型参数
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
 
     # 2. 设置优化器与数据加载器

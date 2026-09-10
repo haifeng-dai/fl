@@ -6,9 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     fmt_num,
     get_model,
 )
@@ -27,7 +27,11 @@ def get_path(args):
         adj_suffix += f"_{fmt_num(args.m_scale_free)}"
 
     # 将算法的关键超参加入文件名，便于区分实验
-    args.file_name = f"{args.common_name}_{adj_suffix}_{fmt_num(args.local_v_epochs)}_{fmt_num(args.lr_v)}_{fmt_num(args.momentum_v)}_{fmt_num(args.weight_decay_v)}"
+    args.file_name = (
+        f"{args.common_name}_{adj_suffix}_{fmt_num(args.local_v_epochs)}"
+        f"_{fmt_num(args.lr_v)}_{fmt_num(args.momentum_v)}"
+        f"_{fmt_num(args.weight_decay_v)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -48,7 +52,7 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
 
     # 合并 body 和 head 参数以加载完整模型
     full_state = {}

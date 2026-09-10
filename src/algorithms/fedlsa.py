@@ -7,9 +7,9 @@ import torch.nn.functional as F
 from torch import nn
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -18,7 +18,11 @@ from .utils.loss import cos_similarity
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{fmt_num(args.lambda_com)}_{fmt_num(args.alpha_sep)}_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}_{fmt_num(args.tau)}"
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.lambda_com)}"
+        f"_{fmt_num(args.alpha_sep)}_{fmt_num(args.server_epochs)}"
+        f"_{fmt_num(args.server_lr)}_{fmt_num(args.tau)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -112,7 +116,7 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    raw_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim)
+    raw_model = get_model(p)
     model = FedLSAModel(raw_model)
     model.load_state_dict(p.model_state)
     model.to(device)

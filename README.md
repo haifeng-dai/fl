@@ -1,6 +1,6 @@
 # Unified Federated Learning Framework (Ray Powered)
 
-本项目是一个高性能、一站式的多 GPU 并行联邦学习研究框架。它集成了 29 种主流联邦学习算法，并采用 **Ray** 分布式计算后端，为大规模客户端模拟（尤其是 ResNet 等深度模型）提供工业级的稳定性与效率。
+本项目是一个基于 **Ray** 的多 GPU 联邦学习研究框架，支持多种联邦学习算法、大规模客户端模拟和半监督/域泛化实验。客户端训练任务由 Ray 统一调度，项目仅支持 NVIDIA CUDA GPU。
 
 ## 🚀 快速开始
 
@@ -29,20 +29,24 @@ uv run main.py -a fedavg -t
 # 定制通信轮数 (测试或正式训练均生效，覆盖 YAML 中的 rounds)
 uv run main.py -a fedavg -t -r 10
 
-# 多次测试 (配合 YAML times 指定运行次数轴，-rt 选择要跑的试验索引)
-uv run main.py -a fedavg -t -rt "0,1,2"
+# 多次实验 (配合 YAML times 指定运行次数，--run_time 选择试验索引)
+uv run main.py -a fedavg -t --run_time "0,1,2"
+
+# 从检查点恢复训练
+uv run main.py -a fedavg --resume_from results/<实验目录>/checkpoints/checkpoint_50.pt
 ```
 
 ## 🛠️ 核心参数说明
 
-- `-a, --algo`: 算法名称（支持 FedAvg, FedProx, Scaffold, FedRep, FedALA 等 23 种）。
+- `-a, --algo`: 算法名称；具体可用算法以 `configs/algorithms.yaml` 和 `src/algorithms/` 中的实现为准。
 - `model`（YAML）: 模型架构（支持 cnn, resnet18, resnet50, harcnn 等）。
 - `dataset`（YAML）: 数据集（支持 cifar10/100, mnist, tiny_imagenet 等）。
-- `max_workers_per_gpu`（YAML）: **关键资源参数**。每块 GPU 上同时运行的 Worker 数量（如 2 表示单卡 2 并行）。
+- `max_workers_per_gpu`（YAML）: **关键资源参数**。每块 GPU 上同时运行的 Worker 数量，当前默认值为 `5`；较大的模型通常需要降低该值。
 - `gpus`（YAML）: 指定至少一张 NVIDIA GPU（如 `0,1,2,3`）。本项目不提供 CPU 训练模式，CUDA 不可用时会直接报错。
-- `-t, --test`: 开启测试模式（无需参数值），日志直接输出到终端而非文件；默认只测一次（`times=1`），并强制 `rounds=3, epochs=2` 实现极速测试。
-- `-rt, --run_time`: 指定要运行的试验索引子集（0 起始，逗号分隔，如 `"0,1,2"`），与 YAML `times` 配合实现多次测试。
+- `-t, --test`: 开启测试模式（无需参数值），日志直接输出到终端而非文件；默认只测一次（`times=1`），并使用较小的轮数和 Epoch 进行快速验证。
+- `--run_time`: 指定要运行的试验索引子集（0 起始，逗号分隔，如 `"0,1,2"`），与 YAML `times` 配合执行多次实验。
 - `-r, --rounds`: 定制通信轮次，覆盖 YAML 中的 `rounds`；默认正式训练为 1000 轮，测试模式与正式训练均生效。
+- `--resume_from`: 从指定 checkpoint 文件恢复训练；checkpoint 是否保存以及保存间隔由 `checkpoint_enabled` 和 `checkpoint_interval` 控制。
 
 ## 📂 配置与结果管理
 
@@ -50,6 +54,24 @@ uv run main.py -a fedavg -t -rt "0,1,2"
 - **算法专属配置**: `configs/algorithms.yaml`（支持超参数搜索，只需将参数设为列表即可自动展开）。
 - **实验结果存储**: `results/`
 - **运行日志存储**: `logs/`
+- **检查点存储**: 默认位于对应实验结果目录下的 `checkpoints/`
+
+## 🧪 测试与开发
+
+使用项目环境运行测试：
+
+```bash
+uv run pytest
+```
+
+快速验证 Ray、GPU 和基本训练流程：
+
+```bash
+uv run main.py -a fedavg -t
+```
+
+运行前请在 `configs/default.yaml` 中确认 `gpus`、`model`、`dataset` 和
+`max_workers_per_gpu` 配置。项目不提供 CPU fallback；没有可用 CUDA GPU 时会直接报错。
 
 ## 🧩 域划分与半监督（测试集生成规则）
 

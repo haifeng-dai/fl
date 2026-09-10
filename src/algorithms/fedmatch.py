@@ -252,7 +252,7 @@ def compute_iccs_loss(
     y_logits: torch.Tensor,
     helper_net: nn.Module | None,
     helper_states: list[dict[str, torch.Tensor]],
-    confidence_threshold: float,
+    conf: float,
     lambda_i: float,
     lambda_a: float,
     curr_round: int,
@@ -261,7 +261,7 @@ def compute_iccs_loss(
 ) -> tuple[torch.Tensor, int, int]:
     """计算基于置信度掩码的 inter-client consistency KL 损失与 agreement 伪标签 CE 损失。"""
     y_probs = torch.softmax(y_logits.detach(), dim=1)
-    conf_mask = y_probs.max(dim=1).values >= confidence_threshold
+    conf_mask = y_probs.max(dim=1).values >= conf
 
     if not conf_mask.any():
         return torch.tensor(0.0, device=x_ub_raw.device), 0, 0
@@ -301,9 +301,7 @@ def compute_iccs_loss(
 
     pseudo_cnt = int(conf_mask.sum().item())
     y_ub_device = y_ub_raw.to(y_pseudo.device)
-    pseudo_corr = int(
-        (y_pseudo == y_ub_device[conf_mask]).sum().item()
-    )
+    pseudo_corr = int((y_pseudo == y_ub_device[conf_mask]).sum().item())
 
     return loss_iccs, pseudo_cnt, pseudo_corr
 
@@ -313,7 +311,7 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 重建分解模型：θ 前向实体 + σ/ψ 可训练副本
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     dm = DecomposedModel(model, p.l1_thres)
     dm.load_sigma_psi(p.sigma_state, p.psi_state)
 
@@ -341,7 +339,7 @@ def train(p: Params):
     # 准备一个单例的 GPU 模型供 helper 推理复用
     helper_net = None
     if helper_states:
-        helper_net = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+        helper_net = get_model(p).to(
             device
         )
         helper_net.eval()
@@ -403,7 +401,7 @@ def train(p: Params):
                 y_logits=y_logits,
                 helper_net=helper_net,
                 helper_states=helper_states,
-                confidence_threshold=p.conf,
+                conf=p.conf,
                 lambda_i=p.lambda_i,
                 lambda_a=p.lambda_a,
                 curr_round=p.curr_round,
@@ -635,7 +633,7 @@ class Server(BaseServer):
                         server_psi_state=curr_server_psi,
                         curr_round=r,
                         helper_psi_states=helper_map.get(cid),
-                        confidence_threshold=self.conf,
+                        conf=self.conf,
                         lambda_s=self.lambda_s,
                         lambda_i=self.lambda_i,
                         lambda_a=self.lambda_a,

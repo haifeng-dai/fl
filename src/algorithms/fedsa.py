@@ -20,7 +20,11 @@ from .utils.loss import dist_contrastive_loss
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{fmt_num(args.alpha_sa)}_{fmt_num(args.lambda_r)}_{fmt_num(args.lambda_mcl)}_{fmt_num(args.lambda_cc)}"
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.alpha_sa)}"
+        f"_{fmt_num(args.lambda_r)}_{fmt_num(args.lambda_mcl)}"
+        f"_{fmt_num(args.lambda_cc)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -58,7 +62,7 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
 
     optimizer = torch.optim.SGD(

@@ -45,13 +45,13 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化代理模型 (公共/共享模型)
-    proxy_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+    proxy_model = get_model(p).to(
         device
     )
     proxy_model.load_state_dict(p.model_state)
 
     # 2. 初始化本地模型 (私有/个性化模型)
-    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+    local_model = get_model(p).to(
         device
     )
     local_model.load_state_dict(p.local_state)

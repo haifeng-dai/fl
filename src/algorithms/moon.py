@@ -34,18 +34,18 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化包含全局权重的当前本地模型
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
 
     # 2. 初始化全局模型（冻结）用于计算对抗损失
-    global_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+    global_model = get_model(p).to(
         device
     )
     global_model.load_state_dict(p.model_state)
     global_model.eval()
 
     # 3. 初始化上一轮本地模型（冻结）用于计算对抗损失
-    prev_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+    prev_model = get_model(p).to(
         device
     )
     prev_model.load_state_dict(p.prev_state)

@@ -19,7 +19,11 @@ from .utils import (
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{fmt_num(args.eta)}_{fmt_num(args.rand_percent)}_{fmt_num(args.layer_idx)}_{fmt_num(args.ala_threshold)}_{fmt_num(args.num_pre_loss)}"
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.eta)}"
+        f"_{fmt_num(args.rand_percent)}_{fmt_num(args.layer_idx)}"
+        f"_{fmt_num(args.ala_threshold)}_{fmt_num(args.num_pre_loss)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -188,11 +192,11 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 初始化模型
-    global_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+    global_model = get_model(p).to(
         device
     )
     global_model.load_state_dict(p.model_state)
-    local_model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+    local_model = get_model(p).to(
         device
     )
     local_model.load_state_dict(p.local_model_state)

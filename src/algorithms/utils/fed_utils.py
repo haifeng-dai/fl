@@ -68,9 +68,7 @@ def evaluate(
     acc = evaluate_model(model, test_set, device)
     p_acc = 0.0
     if prototype is not None:
-        p_acc = evaluate_prototype(
-            model, prototype.to(device), test_set, device
-        )
+        p_acc = evaluate_prototype(model, prototype.to(device), test_set, device)
     return {"acc": acc, "p_acc": p_acc}
 
 
@@ -256,9 +254,7 @@ class BaseServer:
             tgt_eval = Subset(self.test_set, tgt_idx)
             acc_tgt = evaluate_model(self.model, tgt_eval, self.device)
             self.acc_target.append(acc_tgt)
-            acc_all = evaluate_model(
-                self.model, self.test_set, self.device
-            )
+            acc_all = evaluate_model(self.model, self.test_set, self.device)
             self.acc.append(acc_all)
             if protos is not None:
                 p_acc = evaluate_prototype(
@@ -386,10 +382,29 @@ class BaseServer:
         print(f"-> Params saved to: {params_path}")
 
 
-def get_model(model_name, dataset_name, n_class, feature_dim):
+def get_model(
+    p=None,
+    dataset_name=None,
+    n_class=None,
+    feature_dim=None,
+    *,
+    model_name=None,
+):
     """
     模型工厂函数。
+
+    支持两种调用方式：
+    1. get_model(p): 直接传入包含模型配置的参数对象（如 BaseParams、Server 实例等）
+    2. get_model(model_name, dataset_name, n_class, feature_dim): 兼容传统显式传参
     """
+    if p is not None and not isinstance(p, str):
+        model_name = p.model_name
+        dataset_name = getattr(p, "dataset", getattr(p, "dataset_name", None))
+        n_class = getattr(p, "num_class", getattr(p, "n_class", None))
+        feature_dim = p.feature_dim
+    else:
+        model_name = model_name or p
+
     sets = [
         "tiny_imagenet",
         "flowers102",

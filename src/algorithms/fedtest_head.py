@@ -18,7 +18,7 @@ from .utils import (
     proto_aggregate,
 )
 from .utils.augment import strong_augment, weak_augment
-from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
+from .utils.ssl import build_fixmatch_loaders, iterate_fixmatch_batches
 
 
 def get_path(args):
@@ -99,12 +99,7 @@ def estimate_prototypes_worker(p: BaseParams):
     """客户端使用当前轮次最新的全局模型，在有标签数据上提取类别原型。"""
     device = torch.device(p.client_gpu)
 
-    model = get_model(
-        p.model_name,
-        p.dataset,
-        p.num_class,
-        p.feature_dim,
-    ).to(device)
+    model = get_model(p).to(device)
 
     model.load_state_dict(p.model_state)
     model.eval()
@@ -138,7 +133,7 @@ def estimate_prototypes_worker(p: BaseParams):
 def estimate_radii_worker(p: RadiiParams):
     """客户端使用当前轮次最新的全局模型与全局原型，重估类别半径。"""
     device = torch.device(p.client_gpu)
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
     model.eval()
 
@@ -246,11 +241,11 @@ def singleton_pseudo_label_loss(
 
 def train(p: Params):
     device = torch.device(p.client_gpu)
-    model_l = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model_l = get_model(p).to(device)
     model_l.load_state_dict(p.model_state)
     has_unlabeled_loss = (p.lambda_u > 0.0) or (p.lambda_p > 0.0)
     if has_unlabeled_loss:
-        model_g = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(
+        model_g = get_model(p).to(
             device
         )
         model_g.load_state_dict(p.model_state)
@@ -293,8 +288,7 @@ def train(p: Params):
     }
     model_l.train()
     for _ in range(p.epochs):
-        for labeled_batch, unlabeled_batch in iterate_ssl_batches(loaders):
-            assert labeled_batch is not None
+        for labeled_batch, unlabeled_batch in iterate_fixmatch_batches(loaders):
             x_l_raw, y_l = labeled_batch
             x_u_raw = unlabeled_batch[0]
             x_l_raw, y_l = x_l_raw.to(device), y_l.to(device)

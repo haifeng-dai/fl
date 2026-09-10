@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 class FixMatchLoaders:
     """固定 ``B:μB`` 本地训练协议所需的双数据流。"""
 
-    labeled_loader: DataLoader | None
+    labeled_loader: DataLoader
     unlabeled_loader: DataLoader
     steps_per_epoch: int
     labeled_count: int
@@ -27,7 +27,7 @@ def build_fixmatch_loaders(
 
     有标签流仅使用 ``is_labeled=True`` 的样本；无监督流使用完整本地训练集
     ``L ∪ U``，忽略其中样本的标签。两个 loader 均在
-    单次遍历内无放回随机采样，迭代器重启由 :func:`iterate_ssl_batches` 处理。
+    单次遍历内无放回随机采样，迭代器重启由 :func:`iterate_fixmatch_batches` 处理。
 
     ``steps_per_epoch`` 以无标签池大小和监督 batch 大小计算，匹配
     SAGE/ProxyFL 等 FixMatch 式实现的本地训练预算。
@@ -44,26 +44,22 @@ def build_fixmatch_loaders(
     unlabeled_count = len(unlabeled_indices)
     unlabeled_batch_size = batch_size * unlabeled_ratio
 
-    labeled_data = None
-    if labeled_count > 0:
-        labeled_data = TensorDataset(
-            train_set.x[labeled_indices], train_set.y[labeled_indices]
-        )
+    labeled_data = TensorDataset(
+        train_set.x[labeled_indices], train_set.y[labeled_indices]
+    )
     unlabeled_data = TensorDataset(
         train_set.x[unlabeled_indices], train_set.y[unlabeled_indices]
     )
     steps_per_epoch = max(1, unlabeled_count // batch_size)
-    labeled_sampler = None
-    if labeled_data is not None:
-        labeled_sampler = RandomSampler(
-            labeled_data,
-            replacement=labeled_count < batch_size,
-            num_samples=(
-                max(batch_size, steps_per_epoch * batch_size)
-                if labeled_count < batch_size
-                else None
-            ),
-        )
+    labeled_sampler = RandomSampler(
+        labeled_data,
+        replacement=labeled_count < batch_size,
+        num_samples=(
+            max(batch_size, steps_per_epoch * batch_size)
+            if labeled_count < batch_size
+            else None
+        ),
+    )
     unlabeled_sampler = None
     if unlabeled_count < unlabeled_batch_size:
         unlabeled_sampler = RandomSampler(
@@ -71,15 +67,13 @@ def build_fixmatch_loaders(
             replacement=True,
             num_samples=steps_per_epoch * unlabeled_batch_size,
         )
-    labeled_loader = None
-    if labeled_data is not None:
-        labeled_loader = DataLoader(
-            labeled_data,
-            batch_size=batch_size,
-            shuffle=False,
-            sampler=labeled_sampler,
-            drop_last=True,
-        )
+    labeled_loader = DataLoader(
+        labeled_data,
+        batch_size=batch_size,
+        shuffle=False,
+        sampler=labeled_sampler,
+        drop_last=True,
+    )
     return FixMatchLoaders(
         labeled_loader=labeled_loader,
         unlabeled_loader=DataLoader(
@@ -97,29 +91,24 @@ def build_fixmatch_loaders(
     )
 
 
-def iterate_ssl_batches(
+def iterate_fixmatch_batches(
     loaders: FixMatchLoaders,
 ) -> Iterator[
     tuple[
-        tuple[torch.Tensor, torch.Tensor] | None,
+        tuple[torch.Tensor, torch.Tensor],
         tuple[torch.Tensor, torch.Tensor],
     ]
 ]:
     """产出一个 local epoch 的成对 batch，并在流耗尽后重启迭代器。"""
-    labeled_iterator = (
-        iter(loaders.labeled_loader) if loaders.labeled_loader is not None else None
-    )
+    labeled_iterator = iter(loaders.labeled_loader)
     unlabeled_iterator = iter(loaders.unlabeled_loader)
 
     for _ in range(loaders.steps_per_epoch):
-        if labeled_iterator is None:
-            labeled_batch = None
-        else:
-            try:
-                labeled_batch = next(labeled_iterator)
-            except StopIteration:
-                labeled_iterator = iter(loaders.labeled_loader)
-                labeled_batch = next(labeled_iterator)
+        try:
+            labeled_batch = next(labeled_iterator)
+        except StopIteration:
+            labeled_iterator = iter(loaders.labeled_loader)
+            labeled_batch = next(labeled_iterator)
 
         try:
             unlabeled_batch = next(unlabeled_iterator)

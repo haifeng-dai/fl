@@ -28,7 +28,7 @@ class Params(BaseParams):
 def train(p: Params):
     device = torch.device(p.client_gpu)
 
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.extractor.load_state_dict(p.model_state)
     model.classifier.load_state_dict(p.local_head_state)
 

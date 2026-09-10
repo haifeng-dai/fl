@@ -8,9 +8,9 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     fmt_num,
@@ -20,7 +20,13 @@ from .utils.loss import orthogonality_loss
 
 
 def get_path(args):
-    args.file_name = f"{args.common_name}_{fmt_num(args.lamda_)}_{fmt_num(args.head_epochs)}_{fmt_num(args.body_epochs)}_{fmt_num(args.lr_head)}_{fmt_num(args.lr_body)}_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}_{fmt_num(args.lambda_p)}_{fmt_num(args.lambda_acl)}"
+    args.file_name = (
+        f"{args.common_name}_{fmt_num(args.lamda_)}"
+        f"_{fmt_num(args.head_epochs)}_{fmt_num(args.body_epochs)}"
+        f"_{fmt_num(args.lr_head)}_{fmt_num(args.lr_body)}"
+        f"_{fmt_num(args.server_epochs)}_{fmt_num(args.server_lr)}"
+        f"_{fmt_num(args.lambda_p)}_{fmt_num(args.lambda_acl)}"
+    )
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
@@ -72,7 +78,7 @@ def train(p: Params):
     device = torch.device(p.client_gpu)
 
     # 初始化模型并加载本地持久化状态
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
     loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 

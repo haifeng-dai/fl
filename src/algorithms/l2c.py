@@ -61,7 +61,7 @@ def train_phase1(p: ParamsPhase1):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
 
     # 保存初始状态用于计算 Delta
@@ -123,7 +123,7 @@ def train_phase2(p: ParamsPhase2):
     device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
 
     # 2. 准备验证集

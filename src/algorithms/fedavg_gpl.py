@@ -16,7 +16,7 @@ from .utils import (
     prepare_input_batch,
 )
 from .utils.augment import strong_augment, weak_augment
-from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
+from .utils.ssl import build_fixmatch_loaders, iterate_fixmatch_batches
 
 
 def get_path(args):
@@ -88,9 +88,9 @@ def aggregate_metrics(results, selected):
 
 def train(p: Params):
     device = torch.device(p.client_gpu)
-    student = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    student = get_model(p).to(device)
     student.load_state_dict(p.model_state)
-    teacher = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    teacher = get_model(p).to(device)
     teacher.load_state_dict(p.teacher_state)
     teacher.eval()
     for parameter in teacher.parameters():
@@ -119,9 +119,7 @@ def train(p: Params):
     num_batches = 0
     student.train()
     for _ in range(p.epochs):
-        for labeled_batch, unlabeled_batch in iterate_ssl_batches(loaders):
-            if labeled_batch is None:
-                raise ValueError("fedavg_gpl 客户端缺少有标签 batch")
+        for labeled_batch, unlabeled_batch in iterate_fixmatch_batches(loaders):
             x_l, y_l = labeled_batch
             x_u, _ = unlabeled_batch
             x_l, y_l = x_l.to(device), y_l.to(device)

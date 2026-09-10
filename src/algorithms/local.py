@@ -26,7 +26,7 @@ def train(p: BaseParams):
     """
     device = torch.device(p.client_gpu)
 
-    model = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model = get_model(p).to(device)
     model.load_state_dict(p.model_state)
 
     optimizer = torch.optim.SGD(

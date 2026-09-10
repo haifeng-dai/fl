@@ -1,4 +1,3 @@
-import math
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -16,9 +15,7 @@ from .utils import (
 )
 from .utils.augment import strong_augment, weak_augment
 from .utils.loss import masked_kl_loss
-from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
-
-SAGE_KAPPA = math.log(2.0) / 0.05
+from .utils.ssl import build_fixmatch_loaders, iterate_fixmatch_batches
 
 
 @dataclass
@@ -26,26 +23,23 @@ class Params(BaseParams):
     unlabeled_ratio: int
     lambda_u: float
     conf: float
-    temperature: float
+    kappa: torch.Tensor = torch.log(torch.tensor(2.0)) / 0.05
 
 
 def get_path(args):
-    args.file_name = (
-        f"{args.common_name}_{fmt_num(args.temperature)}"
-        f"_{fmt_num(args.lambda_u)}_{fmt_num(args.conf)}"
-    )
+    args.file_name = f"{args.common_name}_{fmt_num(args.lambda_u)}_{fmt_num(args.conf)}"
     return os.path.join(args.log_path, f"{args.file_name}_{args.cur_time}.log")
 
 
 def train(p: Params):
     device = torch.device(p.client_gpu)
-    model_l = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model_l = get_model(p).to(device)
     model_l.load_state_dict(p.model_state)
-    model_g = get_model(p.model_name, p.dataset, p.num_class, p.feature_dim).to(device)
+    model_g = get_model(p).to(device)
     model_g.load_state_dict(p.model_state)
     model_g.eval()
-    for parameter in model_g.parameters():
-        parameter.requires_grad = False
+    for para in model_g.parameters():
+        para.requires_grad = False
 
     loaders = build_fixmatch_loaders(p.train_set, p.batch_size, p.unlabeled_ratio)
     optimizer = torch.optim.SGD(
@@ -56,49 +50,43 @@ def train(p: Params):
     )
     model_l.train()
     loss_sum = 0.0
+    supervised_count = 0
     pseudo_count = 0
     pseudo_correct = 0
     steps = 0
     for _ in range(p.epochs):
-        for labeled, (x_u, y_u) in iterate_ssl_batches(loaders):
-            # SAGE 仅支持 sample/double/sfd 混合模式，每客户端必有有标签样本
-            assert labeled is not None
-            x_l, y_l = labeled
-
+        for (x_l, y_l), (x_u, y_u) in iterate_fixmatch_batches(loaders):
             # ── 数据增强：有标签弱增强，无标签弱/强增强 ──
+            supervised_count += y_l.numel()
             x_l = weak_augment(x_l.to(device), p.dataset)
-            y_l = y_l.to(device)
-            x_u = x_u.to(device)
-            y_u = y_u.to(device)
+            x_u, y_u, y_l = x_u.to(device), y_u.to(device), y_l.to(device)
             x_u_w = weak_augment(x_u, p.dataset)
             x_u_s = strong_augment(x_u, p.dataset)
 
-            # ── 伪标签生成：完全在 no_grad 下执行（避免构建梯度图与中间视图悬空） ──
+            # ── 伪标签生成：完全在 no_grad 下执行 ──
             with torch.no_grad():
                 logits_g = model_g(x_u_w)
-                p_g = torch.softmax(logits_g / p.temperature, dim=1)
+                p_g = torch.softmax(logits_g, dim=1)
                 confidence_g, targets_g = p_g.max(dim=1)
 
                 logits_u_w = model_l(x_u_w)
-                p_l = torch.softmax(logits_u_w / p.temperature, dim=1)
+                p_l = torch.softmax(logits_u_w, dim=1)
                 confidence_l, targets_l = p_l.max(dim=1)
 
                 mask_l = confidence_l.ge(p.conf).float()
                 mask_g = confidence_g.ge(p.conf).float()
-                delta_C = (confidence_l - confidence_g).abs()
-                correction = torch.exp(-SAGE_KAPPA * delta_C)
-                delta_l = F.one_hot(targets_l, p.num_class).float()
-                delta_g = F.one_hot(targets_g, p.num_class).float()
-                targets = torch.where(
-                    mask_l.unsqueeze(1).bool(),
-                    correction.unsqueeze(1) * delta_l
-                    + (1.0 - correction).unsqueeze(1) * delta_g,
-                    delta_g,
-                )
-                valid_mask = torch.maximum(mask_l, mask_g)
+                delta_C = (confidence_l - confidence_g).abs()  # Eq. (2)
+                correction = torch.exp(-p.kappa * delta_C)  # Eq. (3)
+                delta_l = F.one_hot(targets_l, p.num_class).float()  # Eq. (4)
+                delta_g = F.one_hot(targets_g, p.num_class).float()  # Eq. (5)
+                w = correction.unsqueeze(1)
+                targets = w * delta_l + (1.0 - w) * delta_g  # Eqs. (6) & (7-1)
+                g_only = ~mask_l.bool() & mask_g.bool()
+                targets[g_only] = delta_g[g_only]  # Eq. (7-2)
+
+                valid_mask = torch.maximum(mask_l, mask_g)  # 选伪标签样本
                 cur_valid_count = int(valid_mask.sum().item())
                 pseudo_count += cur_valid_count
-
                 b_valid = valid_mask.bool()
                 final_targets = targets.argmax(dim=-1)
                 pseudo_correct += int(((final_targets == y_u) & b_valid).sum().item())
@@ -107,8 +95,7 @@ def train(p: Params):
             inputs = torch.cat((x_l, x_u_s))
             logits = model_l(inputs)
             batch_size = x_l.size(0)
-            logits_l = logits[:batch_size]
-            logits_u_s = logits[batch_size:]
+            logits_l, logits_u_s = logits[:batch_size], logits[batch_size:]
 
             # ── 总损失：有监督 + λu × 无监督 ──
             supervised_loss = F.cross_entropy(logits_l, y_l)
@@ -126,15 +113,12 @@ def train(p: Params):
             loss_sum += loss.item()
             steps += 1
 
-    final_state = clone_cpu_state(model_l.state_dict())
-    del model_l, model_g, optimizer, loaders
-    torch.cuda.empty_cache()
-
     return {
-        "state": final_state,
-        "loss": loss_sum / max(1, steps),
+        "state": clone_cpu_state(model_l.state_dict()),
+        "loss": loss_sum / steps,
         "pseudo_count": pseudo_count,
         "pseudo_correct": pseudo_correct,
+        "aggregation_count": supervised_count + pseudo_count,
     }
 
 
@@ -149,13 +133,8 @@ class Server(BaseServer):
         self.unlabeled_ratio = args.unlabeled_ratio
         self.lambda_u = args.lambda_u
         self.conf = args.conf
-        self.temperature = args.temperature
         self.pseudo_acc = []
         self.pseudo_count = []
-
-        for dataset in self.train_sets.values():
-            if dataset.is_labeled is None:
-                raise ValueError("SAGE 需要半监督数据中的 is_labeled 字段")
 
     def fit(self):
         num_join = max(1, int(self.num_clients * self.join_ratio))
@@ -170,26 +149,25 @@ class Server(BaseServer):
                     unlabeled_ratio=self.unlabeled_ratio,
                     lambda_u=self.lambda_u,
                     conf=self.conf,
-                    temperature=self.temperature,
                 )
                 for base in self.build_base_params(selected)
             ]
             results = self.run_clients(train, parameters)
 
             selected_states = []
-            current_weights = []
+            aggregation_counts = []
             total_loss = 0.0
             total_pseudo_count = 0
             total_pseudo_correct = 0
-            for cid, res in results.items():
+            for res in results.values():
                 selected_states.append(res["state"])
-                current_weights.append(self.weights[cid])
+                aggregation_counts.append(res["aggregation_count"])
                 total_loss += res["loss"]
                 total_pseudo_count += res["pseudo_count"]
                 total_pseudo_correct += res["pseudo_correct"]
 
-            sum_weights = sum(current_weights)
-            norm_weights = [w / sum_weights for w in current_weights]
+            sum_counts = sum(aggregation_counts)
+            norm_weights = [count / sum_counts for count in aggregation_counts]
             self.aggregate(selected_states, weights=norm_weights)
 
             round_pseudo_acc = (
@@ -200,14 +178,13 @@ class Server(BaseServer):
             self.pseudo_count.append(total_pseudo_count)
 
             self.evaluate()
-            round_duration = time.time() - started
             print(
                 f"Global Acc: {self.acc[-1]:.2f}% | "
                 f"Loss: {self.loss[-1]:.4f} | "
                 f"Pseudo Acc: {self.pseudo_acc[-1]:.2f}% | "
                 f"Pseudo Count: {self.pseudo_count[-1]}"
             )
-            print(f"Round finished in {round_duration:.2f} seconds")
+            print(f"Round finished in {time.time() - started:.2f} seconds")
 
     def save(self):
         metrics = {
