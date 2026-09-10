@@ -7,9 +7,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     fmt_num,
@@ -44,16 +44,15 @@ def train(p: Params):
     """
     PearFL 客户端工作函数：本地训练包含原型对齐损失，返回模型参数和本地原型
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     model.train()
 
     # 2. 将个性化共识原型转移到设备
     personalized_protos = (
-        p.personalized_protos.to(device) if p.personalized_protos is not None else None
+        p.personalized_protos.to(p.dev) if p.personalized_protos is not None else None
     )
 
     # 3. 准备数据加载器
@@ -75,7 +74,7 @@ def train(p: Params):
 
     # 强制执行 1 个 epoch 以适配 Algorithm 3 的 Inter-Epoch 交换
     for x, y, *_ in loader:
-        x, y = x.to(device), y.to(device)
+        x, y = x.to(p.dev), y.to(p.dev)
         optimizer.zero_grad()
 
         # 模型前向传播
@@ -86,7 +85,7 @@ def train(p: Params):
         l_ce = F.cross_entropy(logits, y)
 
         # 原型正则化损失
-        l_reg = torch.tensor(0.0, device=device)
+        l_reg = torch.tensor(0.0, device=p.dev)
         if personalized_protos is not None and personalized_protos.abs().sum() > 0:
             target_protos = personalized_protos[y]
             l_reg = F.mse_loss(features, target_protos)
@@ -109,7 +108,7 @@ def train(p: Params):
         loader,
         p.num_class,
         p.feature_dim,
-        device,
+        p.dev,
         return_counts=True,
     )
 

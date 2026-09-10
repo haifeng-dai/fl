@@ -97,9 +97,8 @@ def prototype_top2_distance(
 @torch.no_grad()
 def estimate_prototypes_worker(p: BaseParams):
     """客户端使用当前轮次最新的全局模型，在有标签数据上提取类别原型。"""
-    device = torch.device(p.client_gpu)
 
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
 
     model.load_state_dict(p.model_state)
     model.eval()
@@ -119,7 +118,7 @@ def estimate_prototypes_worker(p: BaseParams):
         loader,
         p.num_class,
         p.feature_dim,
-        device,
+        p.dev,
         return_counts=True,
     )
 
@@ -132,14 +131,13 @@ def estimate_prototypes_worker(p: BaseParams):
 @torch.no_grad()
 def estimate_radii_worker(p: RadiiParams):
     """客户端使用当前轮次最新的全局模型与全局原型，重估类别半径。"""
-    device = torch.device(p.client_gpu)
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     model.eval()
 
     num_class = p.num_class
-    prototypes = p.global_protos.to(device)
-    valid = p.global_valid.to(device).bool()
+    prototypes = p.global_protos.to(p.dev)
+    valid = p.global_valid.to(p.dev).bool()
 
     labeled_indices = torch.where(p.train_set.is_labeled.bool())[0].tolist()
     loader = DataLoader(
@@ -151,7 +149,7 @@ def estimate_radii_worker(p: RadiiParams):
     distance_by_class = [[] for _ in range(num_class)]
 
     for x, y, *_ in loader:
-        x, y = x.to(device), y.to(device)
+        x, y = x.to(p.dev), y.to(p.dev)
         x = prepare_input_batch(x, p.dataset)
 
         features = model.extractor(x)
@@ -163,11 +161,11 @@ def estimate_radii_worker(p: RadiiParams):
             if bool(valid[class_id]):
                 distance_by_class[class_id].append(distance[i, class_id])
 
-    radii = torch.zeros(num_class, device=device)
+    radii = torch.zeros(num_class, device=p.dev)
     radius_count = torch.zeros(
         num_class,
         dtype=torch.long,
-        device=device,
+        device=p.dev,
     )
 
     for class_id in range(num_class):
@@ -240,13 +238,12 @@ def singleton_pseudo_label_loss(
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
-    model_l = get_model(p).to(device)
+    model_l = get_model(p).to(p.dev)
     model_l.load_state_dict(p.model_state)
     has_unlabeled_loss = (p.lambda_u > 0.0) or (p.lambda_p > 0.0)
     if has_unlabeled_loss:
         model_g = get_model(p).to(
-            device
+            p.dev
         )
         model_g.load_state_dict(p.model_state)
         model_g.eval()
@@ -263,10 +260,10 @@ def train(p: Params):
     if loaders.labeled_loader is None:
         raise ValueError("fedtest 客户端缺少有标签样本")
     use_contrastive = bool((p.global_valid & p.radius_valid).any())
-    global_protos = p.global_protos.to(device)
-    global_valid = p.global_valid.to(device).bool()
-    candidate_valid = global_valid & p.radius_valid.to(device).bool()
-    global_radii = p.global_radii.to(device)
+    global_protos = p.global_protos.to(p.dev)
+    global_valid = p.global_valid.to(p.dev).bool()
+    candidate_valid = global_valid & p.radius_valid.to(p.dev).bool()
+    global_radii = p.global_radii.to(p.dev)
     optimizer = torch.optim.SGD(
         model_l.parameters(), lr=p.lr, momentum=p.momentum, weight_decay=p.weight_decay
     )
@@ -291,8 +288,8 @@ def train(p: Params):
         for labeled_batch, unlabeled_batch in iterate_fixmatch_batches(loaders):
             x_l_raw, y_l = labeled_batch
             x_u_raw = unlabeled_batch[0]
-            x_l_raw, y_l = x_l_raw.to(device), y_l.to(device)
-            x_u_raw = x_u_raw.to(device)
+            x_l_raw, y_l = x_l_raw.to(p.dev), y_l.to(p.dev)
+            x_u_raw = x_u_raw.to(p.dev)
 
             # 仅反向传播的有标签分支使用弱增强。
             x_l_weak = weak_augment(x_l_raw, p.dataset)
@@ -315,16 +312,16 @@ def train(p: Params):
             loss_u = loss_x * 0.0
             loss_contrast = loss_x * 0.0
             singleton_mask = torch.zeros(
-                x_u_raw.size(0), dtype=torch.bool, device=device
+                x_u_raw.size(0), dtype=torch.bool, device=p.dev
             )
             pseudo_labels = torch.zeros(
-                x_u_raw.size(0), dtype=torch.long, device=device
+                x_u_raw.size(0), dtype=torch.long, device=p.dev
             )
             candidate_mask = torch.zeros(
-                (x_u_raw.size(0), p.num_class), dtype=torch.bool, device=device
+                (x_u_raw.size(0), p.num_class), dtype=torch.bool, device=p.dev
             )
             candidate_size = torch.zeros(
-                x_u_raw.size(0), dtype=torch.long, device=device
+                x_u_raw.size(0), dtype=torch.long, device=p.dev
             )
             if has_unlabeled_loss and use_contrastive:
                 # 候选集合及反距离权重严格来自冻结 teacher 的原始输入。
@@ -369,13 +366,13 @@ def train(p: Params):
             loss_contrast_count += contrast_count
             # 真实 y_u 仅在所有训练损失构造完成后的诊断分支中读取。
             with torch.no_grad():
-                y_u = unlabeled_batch[1].to(device)
+                y_u = unlabeled_batch[1].to(p.dev)
                 candidate_stats["candidate_total"] += y_u.numel()
                 candidate_stats["candidate_empty"] += int(candidate_size.eq(0).sum())
                 candidate_stats["candidate_single"] += int(candidate_size.eq(1).sum())
                 candidate_stats["candidate_multi"] += int(candidate_size.gt(1).sum())
                 candidate_stats["candidate_size_sum"] += int(candidate_size.sum())
-                rows = torch.arange(y_u.size(0), device=device)
+                rows = torch.arange(y_u.size(0), device=p.dev)
                 candidate_stats["candidate_recall"] += int(
                     candidate_mask[rows, y_u].sum()
                 )
@@ -408,7 +405,7 @@ def train(p: Params):
         labeled_loader,
         p.num_class,
         p.feature_dim,
-        device,
+        p.dev,
         return_counts=True,
     )
     return {

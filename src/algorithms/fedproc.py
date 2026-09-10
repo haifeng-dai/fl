@@ -6,9 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     get_model,
@@ -29,12 +29,11 @@ class Params(BaseParams):
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
-    global_protos = p.global_protos.data.clone().to(device)
+    global_protos = p.global_protos.data.clone().to(p.dev)
 
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -53,7 +52,7 @@ def train(p: Params):
     model.train()
     for _ in range(p.epochs):
         for data, target, *_ in loader:
-            data, target = data.to(device), target.to(device)
+            data, target = data.to(p.dev), target.to(p.dev)
             optimizer.zero_grad()
             features = model.extractor(data)
             output = model.classifier(features)
@@ -72,7 +71,7 @@ def train(p: Params):
 
     # 3. 提取本地原型及样本计数
     local_protos, local_counts = extract_prototypes(
-        model, loader, p.num_class, p.feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, p.dev, return_counts=True
     )
 
     return {

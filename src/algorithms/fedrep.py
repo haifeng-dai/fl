@@ -28,9 +28,8 @@ class Params(BaseParams):
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
 
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     # 直接加载子模块 (特征提取器与分类器)
     model.extractor.load_state_dict(p.model_state)
     model.classifier.load_state_dict(p.local_head_state)
@@ -53,7 +52,7 @@ def train(p: Params):
         param.requires_grad = True
     for _ in range(p.epochs_head):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             logits = model(x)
             loss = F.cross_entropy(logits, y)
             optimizer.zero_grad()
@@ -70,7 +69,7 @@ def train(p: Params):
     num_batches = 0
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             logits = model(x)
             loss = F.cross_entropy(logits, y)
             optimizer.zero_grad()

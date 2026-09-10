@@ -36,17 +36,16 @@ def train(p: Params):
     """
     FML (Federated Mutual Learning) 联邦互学习本地训练。
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化全局模型 (MEME)
     global_model = get_model(p).to(
-        device
+        p.dev
     )
     global_model.load_state_dict(p.model_state)
 
     # 2. 初始化本地模型 (个性化模型)
     local_model = get_model(p).to(
-        device
+        p.dev
     )
     local_model.load_state_dict(p.local_state)
 
@@ -77,7 +76,7 @@ def train(p: Params):
 
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             out_g = global_model(x)
             out_l = local_model(x)
             ce_g = F.cross_entropy(out_g, y)

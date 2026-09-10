@@ -67,10 +67,9 @@ def train(p: Params):
     """
     FedTGP 客户端训练流程（基于原型匹配训练）。
     """
-    device = torch.device(p.client_gpu)
 
     # 初始化模型并加载全局状态
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
     # 设置配置与优化器
@@ -89,17 +88,17 @@ def train(p: Params):
 
     # 预处理全局原型以便在 GPU 上高效访问和计算
     global_protos_tensor = (
-        p.global_protos.to(device) if p.global_protos is not None else None
+        p.global_protos.to(p.dev) if p.global_protos is not None else None
     )
 
     # 本地模型多轮次训练
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             features = model.extractor(x)
             output = model.classifier(features)
             l_ce = F.cross_entropy(output, y)
-            l_proto = torch.tensor(0.0, device=device)
+            l_proto = torch.tensor(0.0, device=p.dev)
 
             if global_protos_tensor is not None:
                 target_protos = global_protos_tensor[y]
@@ -121,7 +120,7 @@ def train(p: Params):
 
     # 收集最新的本地原型及样本计数
     local_protos_avg, local_counts = extract_prototypes(
-        model, loader, p.num_class, p.feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, p.dev, return_counts=True
     )
 
     model_state = clone_cpu_state(model.state_dict())

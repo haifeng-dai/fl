@@ -6,9 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     fmt_num,
@@ -29,9 +29,8 @@ class Params(BaseParams):
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
 
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
     optimizer = torch.optim.SGD(
@@ -45,7 +44,7 @@ def train(p: Params):
     )
 
     global_protos_tensor = (
-        p.global_protos.to(device) if p.global_protos is not None else None
+        p.global_protos.to(p.dev) if p.global_protos is not None else None
     )
 
     total_loss = 0.0
@@ -53,7 +52,7 @@ def train(p: Params):
     model.train()
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             feature = model.extractor(x)
             logits = model.classifier(feature)
             loss_ce = F.cross_entropy(logits, y)
@@ -75,7 +74,7 @@ def train(p: Params):
 
     # 提取本地原型及样本计数
     local_protos, local_counts = extract_prototypes(
-        model, loader, p.num_class, p.feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, p.dev, return_counts=True
     )
 
     return {

@@ -1,3 +1,4 @@
+import math
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -18,12 +19,52 @@ from .utils.loss import masked_kl_loss
 from .utils.ssl import build_fixmatch_loaders, iterate_fixmatch_batches
 
 
+@torch.no_grad()
+def build_pseudo_label(
+    model_l,
+    model_g,
+    x_u_w: torch.Tensor,
+    conf: float,
+    kappa: float,
+    num_class: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """构造 SAGE 修正后的伪标签及有效掩码。"""
+    # global/local logits 生成伪标签概率
+    logits_g = model_g(x_u_w)
+    p_g = torch.softmax(logits_g, dim=1)
+    confidence_g, targets_g = p_g.max(dim=1)
+
+    logits_u_w = model_l(x_u_w)
+    p_l = torch.softmax(logits_u_w, dim=1)
+    confidence_l, targets_l = p_l.max(dim=1)
+
+    # 双侧置信阈值
+    mask_l = confidence_l.ge(conf).float()
+    mask_g = confidence_g.ge(conf).float()
+    # Eq. (2)：local/global 置信差
+    delta_c = (confidence_l - confidence_g).abs()
+    # Eq. (3)：基于置信差的修正权重
+    correction = torch.exp(-kappa * delta_c)
+    # Eq. (4)/(5)：local/global 硬伪标签
+    delta_l = F.one_hot(targets_l, num_class).float()
+    delta_g = F.one_hot(targets_g, num_class).float()
+    # Eqs. (6) & (7-1)：local/global 软伪标签修正
+    targets = correction.unsqueeze(1) * delta_l
+    targets += (1.0 - correction).unsqueeze(1) * delta_g
+    # Eq. (7-2)：仅 global 达到阈值时使用 global 硬伪标签
+    g_only = ~mask_l.bool() & mask_g.bool()
+    targets[g_only] = delta_g[g_only]
+    # local 或 global 任一模型高置信时，样本参与无监督训练
+    valid_mask = torch.maximum(mask_l, mask_g)
+    return targets, valid_mask
+
+
 @dataclass
 class Params(BaseParams):
     unlabeled_ratio: int
     lambda_u: float
     conf: float
-    kappa: torch.Tensor = torch.log(torch.tensor(2.0)) / 0.05
+    kappa: float = math.log(2.0) / 0.05
 
 
 def get_path(args):
@@ -32,16 +73,19 @@ def get_path(args):
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
-    model_l = get_model(p).to(device)
+    model_l = get_model(p).to(p.dev)
     model_l.load_state_dict(p.model_state)
-    model_g = get_model(p).to(device)
+    model_g = get_model(p).to(p.dev)
     model_g.load_state_dict(p.model_state)
     model_g.eval()
     for para in model_g.parameters():
         para.requires_grad = False
 
-    loaders = build_fixmatch_loaders(p.train_set, p.batch_size, p.unlabeled_ratio)
+    loaders = build_fixmatch_loaders(
+        p.train_set,
+        p.batch_size,
+        p.unlabeled_ratio,
+    )
     optimizer = torch.optim.SGD(
         model_l.parameters(),
         lr=p.lr,
@@ -58,38 +102,20 @@ def train(p: Params):
         for (x_l, y_l), (x_u, y_u) in iterate_fixmatch_batches(loaders):
             # ── 数据增强：有标签弱增强，无标签弱/强增强 ──
             supervised_count += y_l.numel()
-            x_l = weak_augment(x_l.to(device), p.dataset)
-            x_u, y_u, y_l = x_u.to(device), y_u.to(device), y_l.to(device)
+            x_l = weak_augment(x_l.to(p.dev), p.dataset)
+            x_u, y_u, y_l = x_u.to(p.dev), y_u.to(p.dev), y_l.to(p.dev)
             x_u_w = weak_augment(x_u, p.dataset)
             x_u_s = strong_augment(x_u, p.dataset)
 
-            # ── 伪标签生成：完全在 no_grad 下执行 ──
-            with torch.no_grad():
-                logits_g = model_g(x_u_w)
-                p_g = torch.softmax(logits_g, dim=1)
-                confidence_g, targets_g = p_g.max(dim=1)
-
-                logits_u_w = model_l(x_u_w)
-                p_l = torch.softmax(logits_u_w, dim=1)
-                confidence_l, targets_l = p_l.max(dim=1)
-
-                mask_l = confidence_l.ge(p.conf).float()
-                mask_g = confidence_g.ge(p.conf).float()
-                delta_C = (confidence_l - confidence_g).abs()  # Eq. (2)
-                correction = torch.exp(-p.kappa * delta_C)  # Eq. (3)
-                delta_l = F.one_hot(targets_l, p.num_class).float()  # Eq. (4)
-                delta_g = F.one_hot(targets_g, p.num_class).float()  # Eq. (5)
-                w = correction.unsqueeze(1)
-                targets = w * delta_l + (1.0 - w) * delta_g  # Eqs. (6) & (7-1)
-                g_only = ~mask_l.bool() & mask_g.bool()
-                targets[g_only] = delta_g[g_only]  # Eq. (7-2)
-
-                valid_mask = torch.maximum(mask_l, mask_g)  # 选伪标签样本
-                cur_valid_count = int(valid_mask.sum().item())
-                pseudo_count += cur_valid_count
-                b_valid = valid_mask.bool()
-                final_targets = targets.argmax(dim=-1)
-                pseudo_correct += int(((final_targets == y_u) & b_valid).sum().item())
+            # ── 生成修正伪标签并统计有效样本 ──
+            targets, valid_mask = build_pseudo_label(
+                model_l, model_g, x_u_w, p.conf, p.kappa, p.num_class
+            )
+            cur_valid_count = int(valid_mask.sum().item())
+            pseudo_count += cur_valid_count
+            b_valid = valid_mask.bool()
+            final_targets = targets.argmax(dim=-1)
+            pseudo_correct += int(((final_targets == y_u) & b_valid).sum().item())
 
             # ── 带梯度的前向计算：仅对有标签样本和无标签强增强样本求梯度 ──
             inputs = torch.cat((x_l, x_u_s))

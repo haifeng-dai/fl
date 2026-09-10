@@ -7,9 +7,9 @@ import torch.nn.functional as F
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -29,10 +29,9 @@ class Params(BaseParams):
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -45,9 +44,9 @@ def train(p: Params):
     )
 
     # 将参数向量移动到计算设备
-    grad_prev = p.grad_prev.to(device) if p.grad_prev is not None else None
+    grad_prev = p.grad_prev.to(p.dev) if p.grad_prev is not None else None
     global_model_vector = (
-        p.global_model_vector.to(device) if p.global_model_vector is not None else None
+        p.global_model_vector.to(p.dev) if p.global_model_vector is not None else None
     )
 
     total_loss = 0.0
@@ -56,7 +55,7 @@ def train(p: Params):
     model.train()
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             logits = model(x)
             task_loss = F.cross_entropy(logits, y)
 

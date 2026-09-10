@@ -94,10 +94,9 @@ def sample_per_class(labeled_idx_by_class, support_size):
 # 客户端本地训练（对应论文 RunClient）
 # --------------------------------------------------------------------------- #
 def train(p: Params):
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型（仅使用 extractor 作为特征提取器 f_θ，不使用 classifier）
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -131,8 +130,8 @@ def train(p: Params):
             DataLoader(TensorDataset(sup_x, sup_y), p.batch_size),
             p.num_class,
             p.feature_dim,
-            device,
-        ).to(device)  # extract_prototypes 返回 CPU，这里一次性搬回
+            p.dev,
+        ).to(p.dev)  # extract_prototypes 返回 CPU，这里一次性搬回
         model.train()  # 其内部置 eval，须恢复训练态（否则破坏后续 BN/随机失活）
 
         # 监督项（Eq.8 第一项）：全部剩余查询集按 batch_size 分批
@@ -143,10 +142,10 @@ def train(p: Params):
             shuffle=True,
         )
         for xq_b, yq_b in q_loader:
-            xq_b = prepare_input_batch(xq_b.to(device), p.dataset)
+            xq_b = prepare_input_batch(xq_b.to(p.dev), p.dataset)
             f_q = model.extractor(xq_b)  # [B_q, D]
             # 本地原型距离概率 → CE(真实标签)（dist_contrastive_loss = Eq.(6)+CE）
-            loss = dist_contrastive_loss(f_q, C_local, yq_b.to(device))
+            loss = dist_contrastive_loss(f_q, C_local, yq_b.to(p.dev))
             optimizer.zero_grad()
             check_losses(loss, locals())
             loss.backward()
@@ -164,7 +163,7 @@ def train(p: Params):
             shuffle=True,
         )
         for (xu_b,) in u_loader:
-            xu_b = prepare_input_batch(xu_b.to(device), p.dataset)
+            xu_b = prepare_input_batch(xu_b.to(p.dev), p.dataset)
             f_u = model.extractor(xu_b)  # [B_u, D]
             p_bar_u = pseudolabel(f_u, p.helper_protos, p.sharpen_T)  # [B_u, K] soft
             if p_bar_u is None:
@@ -190,7 +189,7 @@ def train(p: Params):
         DataLoader(TensorDataset(lab_x, lab_y), batch_size=p.batch_size),
         p.num_class,
         p.feature_dim,
-        device,
+        p.dev,
         return_counts=True,
     )
 

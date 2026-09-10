@@ -49,10 +49,9 @@ def train(p: Params):
     """
     DFedPGP 客户端工作函数：实现解耦更新和梯度推送
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
 
     # 合并 body 和 head 参数以加载完整模型
     full_state = {}
@@ -62,7 +61,7 @@ def train(p: Params):
 
     # 2. 准备解偏后的特征提取器参考值 (z_0 = u/mu)
     with torch.no_grad():
-        z_0 = {k: v.to(device) / p.mu for k, v in p.model_state.items()}
+        z_0 = {k: v.to(p.dev) / p.mu for k, v in p.model_state.items()}
 
     # 3. 初始化两个独立的优化器
     optimizer_v = torch.optim.SGD(
@@ -97,7 +96,7 @@ def train(p: Params):
     model.train()
     for _ in range(p.local_v_epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             optimizer_v.zero_grad()
             out = model(x)
             loss = F.cross_entropy(out, y)
@@ -113,7 +112,7 @@ def train(p: Params):
 
     # 恢复为原始带偏的 body_biased (U)
     model.extractor.load_state_dict(
-        {k.replace("extractor.", ""): v.to(device) for k, v in p.model_state.items()}
+        {k.replace("extractor.", ""): v.to(p.dev) for k, v in p.model_state.items()}
     )
 
     total_loss = 0.0
@@ -121,7 +120,7 @@ def train(p: Params):
 
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
 
             # a. 执行 U -> Z 转换 (除以 mu)，使 Forward 作用在解偏状态上
             with torch.no_grad():

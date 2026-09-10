@@ -13,6 +13,7 @@ from src import TrainingFailureError
 from .utils import (
     BaseParams,
     BaseServer,
+    EvalParams,
     check_losses,
     clone_cpu_state,
     evaluate,
@@ -51,12 +52,11 @@ def train(p: Params):
     """
     DFedSET Worker: 联合训练 + S/W 原型提取。
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
-    consensus_P = p.consensus_P.to(device)
+    consensus_P = p.consensus_P.to(p.dev)
 
     # 2. 设置优化器与数据加载器
     optimizer = torch.optim.SGD(
@@ -72,7 +72,7 @@ def train(p: Params):
     total_loss, num_batches = 0.0, 0
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             features = model.extractor(x)
             logits = model.classifier(features)
 
@@ -100,7 +100,7 @@ def train(p: Params):
 
     # 4. 提取本地最新原型 (S 和 W)
     local_protos, local_counts = extract_prototypes(
-        model, loader, p.num_class, p.feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, p.dev, return_counts=True
     )
     if p.confidence_mode == "count":
         confidence = local_counts.unsqueeze(-1).float()
@@ -458,20 +458,22 @@ class Server(BaseServer):
         futures = []
         for i in range(self.num_clients):
             client_proto = protos[i].cpu() if protos is not None else None
+            p = EvalParams(
+                client_id=i,
+                dev=self.client_dev[i],
+                model_state=target_states[i],
+                test_set=self.test_set_refs[i],
+                model_name=self.model_name,
+                dataset=self.dataset,
+                feature_dim=self.feature_dim,
+                num_class=self.num_class,
+                prototype=client_proto,
+            )
             futures.append(
                 evaluate.options(
                     num_gpus=self.ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
-                ).remote(
-                    self.model_name,
-                    self.dataset,
-                    self.feature_dim,
-                    target_states[i],
-                    self.test_set_refs[i],
-                    self.client_gpu[i],
-                    self.num_class,
-                    client_proto,
-                )
+                ).remote(p)
             )
         results = ray.get(futures)
         self.acc.append(sum(r["acc"] for r in results) / self.num_clients)

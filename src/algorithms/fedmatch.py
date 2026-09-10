@@ -308,10 +308,9 @@ def compute_iccs_loss(
 
 def train(p: Params):
     """Ray Worker：单客户端本地训练。"""
-    device = torch.device(p.client_gpu)
 
     # 1. 重建分解模型：θ 前向实体 + σ/ψ 可训练副本
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     dm = DecomposedModel(model, p.l1_thres)
     dm.load_sigma_psi(p.sigma_state, p.psi_state)
 
@@ -340,7 +339,7 @@ def train(p: Params):
     helper_net = None
     if helper_states:
         helper_net = get_model(p).to(
-            device
+            p.dev
         )
         helper_net.eval()
 
@@ -366,8 +365,8 @@ def train(p: Params):
     num_batches = 0
     for _ in range(p.epochs):
         for (x_lb, y_lb), (x_ub, y_ub) in zip(l_loader, u_loader):
-            x_lb, y_lb = x_lb.to(device), y_lb.to(device)
-            x_ub = x_ub.to(device)
+            x_lb, y_lb = x_lb.to(p.dev), y_lb.to(p.dev)
+            x_ub = x_ub.to(p.dev)
 
             x_lb_norm = prepare_input_batch(x_lb, p.dataset)
             x_ub_norm = prepare_input_batch(x_ub, p.dataset)

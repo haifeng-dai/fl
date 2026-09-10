@@ -53,10 +53,10 @@ unlabel_domain: rotate_cutout # str，指定无标签目标域。
 
 # 训练相关 (Training)
 rounds: 1000 # 完整正式训练的通信轮数
-epochs: 10
+epochs: 5
 lr: 0.01
-momentum: 0.0
-weight_decay: 0.0
+momentum: 0.9
+weight_decay: 0.0001
 batch_size: 64
 join_ratio: 1.0
 seed: 42

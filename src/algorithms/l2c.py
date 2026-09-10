@@ -9,9 +9,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -58,10 +58,9 @@ def train_phase1(p: ParamsPhase1):
     """
     L2C 客户端第一阶段：本地训练并计算参数增量 Delta Theta
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
     # 保存初始状态用于计算 Delta
@@ -92,7 +91,7 @@ def train_phase1(p: ParamsPhase1):
 
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             optimizer.zero_grad()
             output = model(x)
             loss = F.cross_entropy(output, y)
@@ -105,7 +104,7 @@ def train_phase1(p: ParamsPhase1):
 
     # 4. 计算 Delta = theta_t - theta_updated
     theta_mid = model.state_dict()
-    delta_theta = {k: (theta_t[k].to(device) - theta_mid[k]).cpu() for k in theta_t}
+    delta_theta = {k: (theta_t[k].to(p.dev) - theta_mid[k]).cpu() for k in theta_t}
 
     return {
         "loss": total_loss / num_batches,  # avg_loss
@@ -120,23 +119,22 @@ def train_phase2(p: ParamsPhase2):
     """
     L2C 客户端第二阶段：元学习更新 alpha 并执行最终加权聚合
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
     # 2. 准备验证集
-    alpha = p.alpha.to(device).detach().requires_grad_(True)
+    alpha = p.alpha.to(p.dev).detach().requires_grad_(True)
 
     # 3. 计算混合权重 w = softmax(alpha)
     w = F.softmax(alpha, dim=0)
 
     # 4. 虚拟聚合：theta_agg = theta^t - sum(w_j * delta_j)
-    theta_agg = {k: p.theta_t[k].to(device).clone() for k in p.theta_t}
+    theta_agg = {k: p.theta_t[k].to(p.dev).clone() for k in p.theta_t}
     for k in theta_agg:
         # 堆叠所有邻居的增量
-        layer_deltas = torch.stack([d[k].to(device) for d in p.neighbor_deltas])
+        layer_deltas = torch.stack([d[k].to(p.dev) for d in p.neighbor_deltas])
         # w: [num_neighbors] -> reshape for broadcasting
         dims = [1] * (layer_deltas.dim() - 1)
         theta_agg[k] -= torch.sum(layer_deltas * w.view(-1, *dims), dim=0)
@@ -149,7 +147,7 @@ def train_phase2(p: ParamsPhase2):
         # 使用第一个 batch 进行估算
         if len(val_loader) > 0:
             x_val, y_val, *_ = next(iter(val_loader))
-            x_val, y_val = x_val.to(device), y_val.to(device)
+            x_val, y_val = x_val.to(p.dev), y_val.to(p.dev)
 
             # 在聚合模型上计算验证损失 (使用 functional_call 以支持元梯度回传)
             outputs = torch.func.functional_call(model, theta_agg, (x_val,))

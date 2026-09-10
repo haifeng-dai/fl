@@ -6,9 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -29,14 +29,13 @@ def train(p: Params):
     """
     带有近端项 (Proximal term) 的 FedProx 本地训练流程。
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载全局状态
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
     # 2. 缓存全局模型参数，用于计算近端正则化项
-    global_model_params = {k: v.to(device) for k, v in p.model_state.items()}
+    global_model_params = {k: v.to(p.dev) for k, v in p.model_state.items()}
 
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -53,7 +52,7 @@ def train(p: Params):
 
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             logits = model(x)
             loss = F.cross_entropy(logits, y)
             optimizer.zero_grad()

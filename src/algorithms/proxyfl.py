@@ -42,17 +42,16 @@ def train(p: Params):
     """
     ProxyFL 本地训练流程，利用私有本地模型与共享代理模型之间的相互蒸馏机制 (Mutual Distillation)。
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化代理模型 (公共/共享模型)
     proxy_model = get_model(p).to(
-        device
+        p.dev
     )
     proxy_model.load_state_dict(p.model_state)
 
     # 2. 初始化本地模型 (私有/个性化模型)
     local_model = get_model(p).to(
-        device
+        p.dev
     )
     local_model.load_state_dict(p.local_state)
 
@@ -84,7 +83,7 @@ def train(p: Params):
 
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             out_p = proxy_model(x)
             out_l = local_model(x)
             ce_p = F.cross_entropy(out_p, y)

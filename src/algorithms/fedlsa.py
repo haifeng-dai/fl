@@ -113,13 +113,12 @@ def train(p: Params):
       L8:  L_COM ← ({a_j}, h_i)                  [公式 (8), 带 τ]
       L9:  L_HC = L_CE + λ * L_COM               [公式 (10)]
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
     raw_model = get_model(p)
     model = FedLSAModel(raw_model)
     model.load_state_dict(p.model_state)
-    model.to(device)
+    model.to(p.dev)
 
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -134,12 +133,12 @@ def train(p: Params):
     model.train()
     total_loss = 0.0
     num_batches = 0
-    global_anchors = p.global_anchors.to(device)
+    global_anchors = p.global_anchors.to(p.dev)
 
     # 2. 训练循环 (伪代码 L3-L11)
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
 
             # L4: h = nor(φ(ψ(x)))，extractor 的 hook 已自动完成 L2 归一化
             h = model.extractor(x)

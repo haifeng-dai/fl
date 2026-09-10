@@ -22,10 +22,9 @@ def train(p: BaseParams):
     """
     标准的 FedAvg 本地训练流程。
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载最新的全局模型参数
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
     # 2. 设置优化器与数据加载器
@@ -44,7 +43,7 @@ def train(p: BaseParams):
     num_batches = 0
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             logits = model(x)
             loss = F.cross_entropy(logits, y)
             optimizer.zero_grad()

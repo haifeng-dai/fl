@@ -49,10 +49,9 @@ def train(p: Params):
     """
     DisPFL 客户端工作函数：稀疏训练，带动态掩码搜索
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型并加载参数
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     model.train()
 
@@ -73,7 +72,7 @@ def train(p: Params):
 
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             optimizer.zero_grad()
 
             output = model(x)
@@ -86,7 +85,7 @@ def train(p: Params):
             # DisPFL 核心：参数掩码（确保未被掩码的参数保持为 0）
             for name, param in model.named_parameters():
                 if name in p.masks:
-                    param.data.mul_(p.masks[name].to(device))
+                    param.data.mul_(p.masks[name].to(p.dev))
 
             total_loss += loss.item()
             _, predicted = torch.max(output.data, 1)
@@ -101,13 +100,13 @@ def train(p: Params):
         p.anneal_factor
         * 0.5
         * (1 + torch.cos(torch.tensor(p.round_idx * torch.pi / p.num_rounds)))
-    ).to(device)
+    ).to(p.dev)
 
     # 4.2 获取用于重生长的梯度信息
     model.zero_grad()
     # 从 loader 中取一个 batch 的数据来计算全梯度
     x, y, *_ = next(iter(loader))
-    x, y = x.to(device), y.to(device)
+    x, y = x.to(p.dev), y.to(p.dev)
     output = model(x)
     loss = F.cross_entropy(output, y)
     check_losses(loss, locals())
@@ -117,7 +116,7 @@ def train(p: Params):
     new_masks = {}
     for name, param in model.named_parameters():
         if name in p.masks:
-            mask = p.masks[name].to(device)
+            mask = p.masks[name].to(p.dev)
             weights = param.data
             grads = param.grad.data
 
@@ -128,7 +127,7 @@ def train(p: Params):
             if n_remove > 0 and num_active > 0:
                 # 仅在当前活跃的权重中寻找最小值
                 temp_weights = torch.where(
-                    mask > 0, weights.abs(), torch.tensor(float("inf")).to(device)
+                    mask > 0, weights.abs(), torch.tensor(float("inf")).to(p.dev)
                 )
                 _, idx = torch.sort(temp_weights.view(-1))
                 mask.view(-1)[idx[:n_remove]] = 0

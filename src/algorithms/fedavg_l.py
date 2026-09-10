@@ -21,11 +21,10 @@ def get_path(args):
 
 
 def train(p: BaseParams):
-    device = torch.device(p.client_gpu)
 
     model = get_model(p)
     model.load_state_dict(p.model_state)
-    model.to(device)
+    model.to(p.dev)
 
     labeled_mask = p.train_set.is_labeled
     x_lb = p.train_set.x[labeled_mask]
@@ -48,8 +47,8 @@ def train(p: BaseParams):
     model.train()
     for _ in range(p.epochs):
         for x_batch, y_batch in loader:
-            x_batch = x_batch.to(device)
-            y_batch = y_batch.to(device)
+            x_batch = x_batch.to(p.dev)
+            y_batch = y_batch.to(p.dev)
             x_batch = weak_augment(x_batch, p.dataset)
             logits = model(x_batch)
             loss = F.cross_entropy(logits, y_batch)

@@ -2,12 +2,13 @@ import torch
 
 from .aggregate import param_aggregate, proto_aggregate
 from .evaluate import evaluate_model, evaluate_prototype
-from .fed_utils import BaseParams, BaseServer, evaluate, get_model
+from .fed_utils import BaseParams, BaseServer, EvalParams, evaluate, get_model
 from .input import prepare_input_batch
 
 __all__ = [
     "BaseParams",
     "BaseServer",
+    "EvalParams",
     "check_losses",
     "clone_cpu_state",
     "evaluate",

@@ -17,7 +17,7 @@ from .load_data import load_data
 @dataclasses.dataclass
 class BaseParams:
     client_id: int
-    client_gpu: str
+    dev: str
     model_state: dict[str, Any]
     train_set: Dataset
     model_name: str
@@ -31,6 +31,19 @@ class BaseParams:
     num_class: int
 
 
+@dataclasses.dataclass
+class EvalParams:
+    client_id: int
+    dev: str
+    model_state: dict[str, Any]
+    test_set: Any
+    model_name: str
+    dataset: str
+    feature_dim: int
+    num_class: int
+    prototype: torch.Tensor | None = None
+
+
 @ray.remote
 def train(worker_func, p: BaseParams):
     """
@@ -42,7 +55,7 @@ def train(worker_func, p: BaseParams):
     if not torch.cuda.is_available():
         raise RuntimeError("Ray Worker 未获得 CUDA GPU；本项目不支持 CPU 训练模式")
 
-    p.client_gpu = "cuda:0"
+    p.dev = "cuda:0"
     p.train_set = ray.get(p.train_set)
 
     try:
@@ -52,23 +65,17 @@ def train(worker_func, p: BaseParams):
 
 
 @ray.remote
-def evaluate(
-    model_name,
-    dataset_name,
-    feature_dim,
-    state_dict,
-    test_set,
-    device,
-    n_class,
-    prototype=None,
-):
+def evaluate(p: EvalParams):
     """Ray Worker: 并行评估单个客户端的模型准确率与原型准确率。"""
-    model = get_model(model_name, dataset_name, n_class, feature_dim).to(device)
-    model.load_state_dict(state_dict)
-    acc = evaluate_model(model, test_set, device)
+    model = get_model(p).to(p.dev)
+    model.load_state_dict(p.model_state)
+    test_set = (
+        ray.get(p.test_set) if isinstance(p.test_set, ray.ObjectRef) else p.test_set
+    )
+    acc = evaluate_model(model, test_set, p.dev)
     p_acc = 0.0
-    if prototype is not None:
-        p_acc = evaluate_prototype(model, prototype.to(device), test_set, device)
+    if p.prototype is not None:
+        p_acc = evaluate_prototype(model, p.prototype.to(p.dev), test_set, p.dev)
     return {"acc": acc, "p_acc": p_acc}
 
 
@@ -146,9 +153,7 @@ class BaseServer:
             train_counts[i] / total_samples for i in range(len(train_counts))
         ]
 
-        self.model = get_model(
-            self.model_name, self.dataset, self.num_class, self.feature_dim
-        ).cpu()
+        self.model = get_model(self).cpu()
         self.clients_state = [self.model.state_dict() for _ in range(self.num_clients)]
 
         # 1. 解析 GPU 资源
@@ -165,7 +170,7 @@ class BaseServer:
         self.device = torch.device(f"cuda:{dev_idx}")
 
         # 2. 强制设备映射：在 Ray Worker 环境中逻辑显卡始终映射为 cuda:0
-        self.client_gpu = {i: "cuda:0" for i in range(self.num_clients)}
+        self.client_dev = {i: "cuda:0" for i in range(self.num_clients)}
 
         # 3. 缓存测试集到 Ray Object Store，供并行评估使用
         if pfl:
@@ -230,9 +235,7 @@ class BaseServer:
             self.clients_state = params["client"]
         return params
 
-    def aggregate(
-        self, client_state_dicts, weights: list[float] | None = None, *args, **kwargs
-    ):
+    def aggregate(self, client_state_dicts, weights: list[float] | None = None):
         if weights is None:
             weights = self.weights
         aggregated_state = param_aggregate(client_state_dicts, weights)
@@ -298,20 +301,22 @@ class BaseServer:
         client_proto = protos.cpu() if protos is not None else None
         futures = []
         for i in range(self.num_clients):
+            eval_params = EvalParams(
+                client_id=i,
+                dev=self.client_dev[i],
+                model_state=target_states[i],
+                test_set=self.test_set_refs[i],
+                model_name=self.model_name,
+                dataset=self.dataset,
+                feature_dim=self.feature_dim,
+                num_class=self.num_class,
+                prototype=client_proto,
+            )
             futures.append(
                 evaluate.options(
                     num_gpus=self.ray_gpu_fraction,
                     scheduling_strategy="SPREAD",
-                ).remote(
-                    self.model_name,
-                    self.dataset,
-                    self.feature_dim,
-                    target_states[i],
-                    self.test_set_refs[i],
-                    self.client_gpu[i],
-                    self.num_class,
-                    client_proto,
-                )
+                ).remote(eval_params)
             )
         results = ray.get(futures)
         self.acc.append(sum(r["acc"] for r in results) / self.num_clients)
@@ -322,7 +327,7 @@ class BaseServer:
         return [
             BaseParams(
                 client_id=i,
-                client_gpu=self.client_gpu[i],
+                dev=self.client_dev[i],
                 model_state=self.model.state_dict(),
                 train_set=self.train_sets[i],
                 model_name=self.model_name,
@@ -382,29 +387,14 @@ class BaseServer:
         print(f"-> Params saved to: {params_path}")
 
 
-def get_model(
-    p=None,
-    dataset_name=None,
-    n_class=None,
-    feature_dim=None,
-    *,
-    model_name=None,
-):
+def get_model(p: Any):
     """
-    模型工厂函数。
-
-    支持两种调用方式：
-    1. get_model(p): 直接传入包含模型配置的参数对象（如 BaseParams、Server 实例等）
-    2. get_model(model_name, dataset_name, n_class, feature_dim): 兼容传统显式传参
+    模型工厂函数，统一从配置对象（BaseParams、EvalParams、Server 实例、ALA 实例等）直接读取属性并构建模型。
     """
-    if p is not None and not isinstance(p, str):
-        model_name = p.model_name
-        dataset_name = getattr(p, "dataset", getattr(p, "dataset_name", None))
-        n_class = getattr(p, "num_class", getattr(p, "n_class", None))
-        feature_dim = p.feature_dim
-    else:
-        model_name = model_name or p
-
+    model_name = p.model_name
+    dataset = p.dataset
+    num_class = p.num_class
+    feature_dim = p.feature_dim
     sets = [
         "tiny_imagenet",
         "flowers102",
@@ -417,18 +407,18 @@ def get_model(
         "vlcs",
         "domainnet",
     ]
-    input_channels = 3 if ("cifar" in dataset_name or dataset_name in sets) else 1
+    input_channels = 3 if ("cifar" in dataset or dataset in sets) else 1
     if model_name == "cnn":
-        return CNN(input_channels, n_class, feature_dim, dataset_name)
+        return CNN(input_channels, num_class, feature_dim, dataset)
     elif model_name == "resnet18":
-        return ResNet18(n_class, feature_dim, dataset_name)
+        return ResNet18(num_class, feature_dim, dataset)
     elif model_name == "resnet50":
-        return ResNet50(n_class, feature_dim, dataset_name)
+        return ResNet50(num_class, feature_dim, dataset)
     elif model_name == "harcnn":
         # HARCNN(in_channels, num_classes, feature_dim)：HAR 传感器数据为 9 通道
-        return HARCNN(in_channels=9, num_classes=n_class, feature_dim=feature_dim)
+        return HARCNN(in_channels=9, num_classes=num_class, feature_dim=feature_dim)
     elif model_name == "harmlp":
         # HARMLP(input_dim, num_classes, feature_dim)：har_feat 特征维度为 561
-        return HARMLP(input_dim=561, num_classes=n_class, feature_dim=feature_dim)
+        return HARMLP(input_dim=561, num_classes=num_class, feature_dim=feature_dim)
     else:
         raise ValueError(f"Unknown model: {model_name}")

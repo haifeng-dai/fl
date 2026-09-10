@@ -6,9 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     fmt_num,
@@ -36,9 +36,8 @@ def train(p: Params):
       - mode='train'  : 阶段一，执行本地模型训练
       - mode='extract': 阶段二，使用聚合后的全局模型提取本地锚点
     """
-    device = torch.device(p.client_gpu)
 
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     loader = torch.utils.data.DataLoader(
         p.train_set, batch_size=p.batch_size, shuffle=True
@@ -46,7 +45,7 @@ def train(p: Params):
 
     # ==================== 阶段一：本地模型训练 ====================
     if p.mode == "train":
-        global_anchors = p.global_anchors.to(device)
+        global_anchors = p.global_anchors.to(p.dev)
         optimizer = torch.optim.SGD(
             model.parameters(),
             lr=p.lr,
@@ -59,7 +58,7 @@ def train(p: Params):
         model.train()
         for _ in range(p.epochs):
             for data, target, *_ in loader:
-                data, target = data.to(device), target.to(device)
+                data, target = data.to(p.dev), target.to(p.dev)
                 optimizer.zero_grad()
                 features = model.extractor(data)
                 output = model.classifier(features)
@@ -89,7 +88,7 @@ def train(p: Params):
         return {"loss": avg_loss, "state": model_state}
     else:
         local_anchors, local_counts = extract_prototypes(
-            model, loader, p.num_class, p.feature_dim, device, return_counts=True
+            model, loader, p.num_class, p.feature_dim, p.dev, return_counts=True
         )
         return {"protos": local_anchors, "counts": local_counts}
 

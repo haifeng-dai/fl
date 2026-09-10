@@ -87,10 +87,9 @@ def aggregate_metrics(results, selected):
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
-    student = get_model(p).to(device)
+    student = get_model(p).to(p.dev)
     student.load_state_dict(p.model_state)
-    teacher = get_model(p).to(device)
+    teacher = get_model(p).to(p.dev)
     teacher.load_state_dict(p.teacher_state)
     teacher.eval()
     for parameter in teacher.parameters():
@@ -122,8 +121,8 @@ def train(p: Params):
         for labeled_batch, unlabeled_batch in iterate_fixmatch_batches(loaders):
             x_l, y_l = labeled_batch
             x_u, _ = unlabeled_batch
-            x_l, y_l = x_l.to(device), y_l.to(device)
-            x_u = x_u.to(device)
+            x_l, y_l = x_l.to(p.dev), y_l.to(p.dev)
+            x_u = x_u.to(p.dev)
             x_l = weak_augment(x_l, p.dataset)
             x_u_w = weak_augment(x_u, p.dataset)
             x_u_s = strong_augment(x_u, p.dataset)

@@ -59,10 +59,9 @@ def train(p: Params):
     基于语义锚点 (Semantic Anchors) 与多重正则化的 FedSA 本地训练流程。
     对齐论文公式 (5), (7), (8), (9)。
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
     optimizer = torch.optim.SGD(
@@ -79,8 +78,8 @@ def train(p: Params):
     total_loss = 0.0
     num_batches = 0
 
-    global_anchors = p.global_anchors.to(device)
-    prev_local_anchors = p.prev_local_anchors.to(device)
+    global_anchors = p.global_anchors.to(p.dev)
+    prev_local_anchors = p.prev_local_anchors.to(p.dev)
 
     # 为 MCL 损失计算边界 'd_i^*' - 公式 (7) 上下文
     d_star = max(margin(global_anchors), margin(prev_local_anchors))
@@ -88,7 +87,7 @@ def train(p: Params):
     # 2. 训练循环
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             features = model.extractor(x)
             logits = model.classifier(features)
 
@@ -107,7 +106,7 @@ def train(p: Params):
 
             # 公式 (8): 分类器校准损失
             loss_cc = F.cross_entropy(
-                output_cc, torch.arange(p.num_class, device=device)
+                output_cc, torch.arange(p.num_class, device=p.dev)
             )
 
             # 公式 (9): 总体损失
@@ -126,7 +125,7 @@ def train(p: Params):
 
     # 3. 计算最新的本地原型及样本计数
     local_anchors, local_counts = extract_prototypes(
-        model, loader, p.num_class, p.feature_dim, device, return_counts=True
+        model, loader, p.num_class, p.feature_dim, p.dev, return_counts=True
     )
 
     model_state = clone_cpu_state(model.state_dict())

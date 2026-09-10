@@ -47,7 +47,7 @@ class ALA:
         train_data,
         batch_size: int,
         model_name: str,
-        dataset_name: str,
+        dataset: str,
         rand_percent: int,
         layer_idx: int = 0,
         eta: float = 1.0,
@@ -55,20 +55,20 @@ class ALA:
         threshold: float = 0.1,
         num_pre_loss: int = 10,
         feature_dim: int = 512,
-        n_class: int = 10,
+        num_class: int = 10,
     ):
         self.client_id = client_id
         self.train_data = train_data
         self.batch_size = batch_size
         self.model_name = model_name
-        self.dataset_name = dataset_name
+        self.dataset = dataset
         self.rand_percent = rand_percent
         self.layer_idx = layer_idx
         self.eta = eta
         self.threshold = threshold
         self.num_pre_loss = num_pre_loss
         self.feature_dim = feature_dim
-        self.n_class = n_class
+        self.num_class = num_class
         self.device = device
 
         self.weights = None  # 可学习的本地聚合权重
@@ -110,9 +110,7 @@ class ALA:
                 param.data = param_g.data.clone()
 
         # 初始化用于精炼聚合权重的辅助模型
-        model_t = get_model(
-            self.model_name, self.dataset_name, self.n_class, self.feature_dim
-        )
+        model_t = get_model(self)
         model_t.to(self.device)
         model_t.load_state_dict(local_model.state_dict())
         params_t = list(model_t.parameters())
@@ -189,15 +187,14 @@ class ALA:
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
 
     # 初始化模型
     global_model = get_model(p).to(
-        device
+        p.dev
     )
     global_model.load_state_dict(p.model_state)
     local_model = get_model(p).to(
-        device
+        p.dev
     )
     local_model.load_state_dict(p.local_model_state)
 
@@ -207,20 +204,20 @@ def train(p: Params):
         train_data=p.train_set,
         batch_size=p.batch_size,
         model_name=p.model_name,
-        dataset_name=p.dataset,
+        dataset=p.dataset,
         rand_percent=p.rand_percent,
         layer_idx=p.layer_idx,
         eta=p.eta,
-        device=device,
+        device=p.dev,
         threshold=p.ala_threshold,
         num_pre_loss=p.num_pre_loss,
         feature_dim=p.feature_dim,
-        n_class=p.num_class,
+        num_class=p.num_class,
     )
 
     # 如果存在（非首次参与），则加载先前学习到的聚合权重
     if p.saved_weights is not None:
-        ala.weights = [w.to(device) for w in p.saved_weights]
+        ala.weights = [w.to(p.dev) for w in p.saved_weights]
 
     # 确定 ALA 阶段：从未参与过的客户端（无权重）执行收敛学习，
     # 而对于具有聚合历史记录的客户端，则进行后续的微观调优。
@@ -242,7 +239,7 @@ def train(p: Params):
     num_batches = 0
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             output = local_model(x)
             loss = F.cross_entropy(output, y)
             optimizer.zero_grad()

@@ -7,8 +7,8 @@ import torch.nn.functional as F
 
 from .utils import (
     BaseParams,
-    check_losses,
     BaseServer,
+    check_losses,
     get_model,
     param_aggregate,
 )
@@ -31,9 +31,8 @@ def train(p: Params):
     - 训练完整模型。
     - 训练完毕后返回更新后的提取器 (用于本地缓存) 和分类器 (用于全局聚合)。
     """
-    device = torch.device(p.client_gpu)
 
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
 
     # 加载子模块 (注意：字典中的键不应带前缀)
     model.extractor.load_state_dict(p.model_state)
@@ -54,7 +53,7 @@ def train(p: Params):
     num_batches = 0
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             output = model(x)
             loss = F.cross_entropy(output, y)
             optimizer.zero_grad()

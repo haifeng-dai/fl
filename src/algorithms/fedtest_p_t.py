@@ -114,9 +114,8 @@ def prototype_top2_distance(
 @torch.no_grad()
 def estimate_prototypes_worker(p: BaseParams):
     """客户端使用当前轮次最新的全局模型，在有标签数据上提取类别原型。"""
-    device = torch.device(p.client_gpu)
 
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
 
     model.load_state_dict(p.model_state)
     model.eval()
@@ -135,7 +134,7 @@ def estimate_prototypes_worker(p: BaseParams):
         loader,
         p.num_class,
         p.feature_dim,
-        device,
+        p.dev,
         return_counts=True,
     )
 
@@ -155,16 +154,15 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
       3. 用未优化的统计原型 raw_global_protos 计算相对原型几何 (真实距离与最近错误距离比值)。
     对无标签样本进行并行推断，替代服务端串行推断。
     """
-    device = torch.device(p.client_gpu)
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     model.eval()
 
     num_class = p.num_class
-    target_protos = p.global_protos.to(device)
-    target_valid = p.global_valid.to(device).bool()
-    raw_protos = p.raw_global_protos.to(device)
-    raw_valid = p.raw_global_valid.to(device).bool()
+    target_protos = p.global_protos.to(p.dev)
+    target_valid = p.global_valid.to(p.dev).bool()
+    raw_protos = p.raw_global_protos.to(p.dev)
+    raw_valid = p.raw_global_valid.to(p.dev).bool()
 
     n_target_valid = int(target_valid.sum().item())
     n_raw_valid = int(raw_valid.sum().item())
@@ -182,8 +180,8 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
     rel_q_list = []
     rel_y_list = []
 
-    radii = torch.zeros(num_class, device=device)
-    radius_count = torch.zeros(num_class, dtype=torch.long, device=device)
+    radii = torch.zeros(num_class, device=p.dev)
+    radius_count = torch.zeros(num_class, dtype=torch.long, device=p.dev)
 
     if len(labeled_indices) > 0:
         labeled_x = p.train_set.x[labeled_indices]
@@ -192,8 +190,8 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
         n_labeled = labeled_x.size(0)
 
         for i in range(0, n_labeled, eval_bs):
-            bx = prepare_input_batch(labeled_x[i : i + eval_bs].to(device), p.dataset)
-            by = labeled_y[i : i + eval_bs].to(device)
+            bx = prepare_input_batch(labeled_x[i : i + eval_bs].to(p.dev), p.dataset)
+            by = labeled_y[i : i + eval_bs].to(p.dev)
 
             features = model.extractor(bx)
 
@@ -255,7 +253,7 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
 
     labeled_present = (
         torch.bincount(p.train_set.y[labeled_mask], minlength=num_class) > 0
-    ).to(device)
+    ).to(p.dev)
 
     client_stats = {
         "total": 0,
@@ -278,14 +276,14 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
         eval_bs = 256
         n_unlabeled = unlabeled_x.size(0)
 
-        stats_counts = torch.zeros(9, dtype=torch.long, device=device)
+        stats_counts = torch.zeros(9, dtype=torch.long, device=p.dev)
         diag_q_list = []
         diag_corr_list = []
         diag_miss_list = []
 
         for i in range(0, n_unlabeled, eval_bs):
-            bx = prepare_input_batch(unlabeled_x[i : i + eval_bs].to(device), p.dataset)
-            by = unlabeled_y[i : i + eval_bs].to(device)
+            bx = prepare_input_batch(unlabeled_x[i : i + eval_bs].to(p.dev), p.dataset)
+            by = unlabeled_y[i : i + eval_bs].to(p.dev)
 
             features = model.extractor(bx)
             logits = model.classifier(features)
@@ -391,13 +389,12 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
 @torch.no_grad()
 def estimate_proto_gate_worker(p: ProtoGateParams):
     """客户端使用当前全局模型与判别目标原型，在有标签数据上按预测类别统计 q 与预测正误。"""
-    device = torch.device(p.client_gpu)
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     model.eval()
 
-    prototypes = p.global_protos.to(device)
-    valid = p.global_valid.to(device).bool()
+    prototypes = p.global_protos.to(p.dev)
+    valid = p.global_valid.to(p.dev).bool()
 
     labeled_indices = torch.where(p.train_set.is_labeled.bool())[0].tolist()
     loader = DataLoader(
@@ -411,7 +408,7 @@ def estimate_proto_gate_worker(p: ProtoGateParams):
 
     if int(valid.sum().item()) >= 2:
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             x = prepare_input_batch(x, p.dataset)
             features = model.extractor(x)
             pred, _, _, q = prototype_top2_distance(features, prototypes, valid)
@@ -437,14 +434,13 @@ def estimate_proto_gate_worker(p: ProtoGateParams):
 @torch.no_grad()
 def estimate_radii_worker(p: RadiiParams):
     """客户端使用当前轮次最新的全局模型与全局原型，重估类别半径。"""
-    device = torch.device(p.client_gpu)
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     model.eval()
 
     num_class = p.num_class
-    prototypes = p.global_protos.to(device)
-    valid = p.global_valid.to(device).bool()
+    prototypes = p.global_protos.to(p.dev)
+    valid = p.global_valid.to(p.dev).bool()
 
     labeled_indices = torch.where(p.train_set.is_labeled.bool())[0].tolist()
     loader = DataLoader(
@@ -456,7 +452,7 @@ def estimate_radii_worker(p: RadiiParams):
     distance_by_class = [[] for _ in range(num_class)]
 
     for x, y, *_ in loader:
-        x, y = x.to(device), y.to(device)
+        x, y = x.to(p.dev), y.to(p.dev)
         x = prepare_input_batch(x, p.dataset)
 
         features = model.extractor(x)
@@ -468,11 +464,11 @@ def estimate_radii_worker(p: RadiiParams):
             if bool(valid[class_id]):
                 distance_by_class[class_id].append(distance[i, class_id])
 
-    radii = torch.zeros(num_class, device=device)
+    radii = torch.zeros(num_class, device=p.dev)
     radius_count = torch.zeros(
         num_class,
         dtype=torch.long,
-        device=device,
+        device=p.dev,
     )
 
     for class_id in range(num_class):
@@ -493,13 +489,12 @@ def estimate_radii_worker(p: RadiiParams):
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
-    model_l = get_model(p).to(device)
+    model_l = get_model(p).to(p.dev)
     model_l.load_state_dict(p.model_state)
     has_unlabeled_loss = p.lambda_u > 0.0
     if has_unlabeled_loss:
         model_g = get_model(p).to(
-            device
+            p.dev
         )
         model_g.load_state_dict(p.model_state)
         model_g.eval()
@@ -523,12 +518,12 @@ def train(p: Params):
             minlength=p.num_class,
         )
         > 0
-    ).to(device)
+    ).to(p.dev)
 
-    global_protos = p.global_protos.to(device)
-    global_valid = p.global_valid.to(device).bool()
-    proto_q_thresholds = p.proto_q_thresholds.to(device)
-    proto_q_valid = p.proto_q_valid.to(device).bool()
+    global_protos = p.global_protos.to(p.dev)
+    global_valid = p.global_valid.to(p.dev).bool()
+    proto_q_thresholds = p.proto_q_thresholds.to(p.dev)
+    proto_q_valid = p.proto_q_valid.to(p.dev).bool()
 
     optimizer = torch.optim.SGD(
         model_l.parameters(), lr=p.lr, momentum=p.momentum, weight_decay=p.weight_decay
@@ -541,15 +536,15 @@ def train(p: Params):
     # 8: proto_unlabeled_total, 9: proto_missing_total, 10: proto_selected_count
     # 11: proto_selected_correct, 12: proto_selected_missing_count
     # 13: proto_selected_missing_correct, 14: proto_q_sum_selected
-    train_stats = torch.zeros(15, dtype=torch.float64, device=device)
+    train_stats = torch.zeros(15, dtype=torch.float64, device=p.dev)
 
     model_l.train()
     for _ in range(p.epochs):
         for labeled_batch, unlabeled_batch in iterate_fixmatch_batches(loaders):
             x_l_raw, y_l = labeled_batch
             x_u_raw = unlabeled_batch[0]
-            x_l_raw, y_l = x_l_raw.to(device), y_l.to(device)
-            x_u_raw = x_u_raw.to(device)
+            x_l_raw, y_l = x_l_raw.to(p.dev), y_l.to(p.dev)
+            x_u_raw = x_u_raw.to(p.dev)
 
             # 仅反向传播的有标签分支使用弱增强。
             x_l_weak = weak_augment(x_l_raw, p.dataset)
@@ -571,11 +566,11 @@ def train(p: Params):
             train_stats[3] += v_count
 
             loss_u = loss_x * 0.0
-            selected_u = torch.zeros(x_u_raw.size(0), dtype=torch.bool, device=device)
+            selected_u = torch.zeros(x_u_raw.size(0), dtype=torch.bool, device=p.dev)
             pseudo_labels = torch.zeros(
-                x_u_raw.size(0), dtype=torch.long, device=device
+                x_u_raw.size(0), dtype=torch.long, device=p.dev
             )
-            proto_q_values = torch.zeros(x_u_raw.size(0), device=device)
+            proto_q_values = torch.zeros(x_u_raw.size(0), device=p.dev)
 
             if can_pseudo_label:
                 with torch.no_grad():
@@ -609,7 +604,7 @@ def train(p: Params):
 
             # 真实 y_u 仅在所有训练损失构造完成后的诊断分支中读取 (完全无分支累加)
             with torch.no_grad():
-                y_u = unlabeled_batch[1].to(device)
+                y_u = unlabeled_batch[1].to(p.dev)
                 missing_u = ~labeled_present[y_u]
                 selected_missing = selected_u & missing_u
 

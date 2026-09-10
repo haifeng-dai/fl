@@ -101,17 +101,16 @@ def train(p: Params):
     """
     带有原型学习网络 (PLN) 的 FedPLN 本地训练流程。
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型与 PLN 网络
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     pln = PLN(
         p.num_class, p.width_pln, p.feature_dim, p.depth_pln, p.fixed_proto, p.init_emb
     )
-    pln.to(device)
+    pln.to(p.dev)
     pln.load_state_dict(p.pln_state)
-    all_classes = torch.arange(0, p.num_class).to(device)
+    all_classes = torch.arange(0, p.num_class).to(p.dev)
 
     # 2. 阶段一：训练核心模型（特征提取器）
     avg_loss_m = 0.0
@@ -134,7 +133,7 @@ def train(p: Params):
         protos = pln(all_classes)
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             feature = model.extractor(x)
             output = model.classifier(feature)
             loss_ce = F.cross_entropy(output, y)
@@ -174,7 +173,7 @@ def train(p: Params):
 
     for _ in range(p.epoch_pln):
         for x, y, *_ in loader_pln:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             protos = pln(all_classes)
 
             with torch.no_grad():

@@ -31,22 +31,21 @@ def train(p: Params):
     """
     带有模型交叉学习对抗损失 (Model-Contrastive Loss) 的 MOON 本地训练流程。
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化包含全局权重的当前本地模型
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
     # 2. 初始化全局模型（冻结）用于计算对抗损失
     global_model = get_model(p).to(
-        device
+        p.dev
     )
     global_model.load_state_dict(p.model_state)
     global_model.eval()
 
     # 3. 初始化上一轮本地模型（冻结）用于计算对抗损失
     prev_model = get_model(p).to(
-        device
+        p.dev
     )
     prev_model.load_state_dict(p.prev_state)
     prev_model.eval()
@@ -66,7 +65,7 @@ def train(p: Params):
     num_batches = 0
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             optimizer.zero_grad()
 
             # 前向传播：获取输出和表达特征 (z)
@@ -85,7 +84,7 @@ def train(p: Params):
             neg_sim = ce_moon(z, z_prev)
             logits = torch.cat([pos_sim.reshape(-1, 1), neg_sim.reshape(-1, 1)], dim=1)
             logits /= p.tau
-            labels = torch.zeros(z.size(0)).to(device).long()
+            labels = torch.zeros(z.size(0)).to(p.dev).long()
             loss_con = F.cross_entropy(logits, labels)
 
             # 整体损失

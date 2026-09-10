@@ -75,16 +75,15 @@ def train(p: Params):
     Phase 1: 冻结特征提取器，仅优化分类头。
     Phase 2: 冻结分类头，仅微调特征提取器并对齐全局原型。
     """
-    device = torch.device(p.client_gpu)
 
     # 初始化模型并加载本地持久化状态
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     loader = DataLoader(p.train_set, batch_size=p.batch_size, shuffle=True)
 
     # 预处理全局原型：从单一 Tensor 快速搬运到 GPU
     global_protos_tensor = (
-        p.global_protos.to(device) if p.global_protos is not None else None
+        p.global_protos.to(p.dev) if p.global_protos is not None else None
     )
 
     # === Phase 1: Local Head Optimization ===
@@ -106,14 +105,14 @@ def train(p: Params):
     num_batches_head = 0
     # 提前准备原型标签 (用于在 Phase 1 中锚定分类器)
     proto_labels = (
-        torch.arange(p.num_class, device=device)
+        torch.arange(p.num_class, device=p.dev)
         if global_protos_tensor is not None
         else None
     )
 
     for _ in range(p.head_epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
 
             # 1. 本地数据交叉熵损失
             out = model(x)
@@ -159,7 +158,7 @@ def train(p: Params):
 
         for _ in range(p.body_epochs):
             for x, y, *_ in loader:
-                x, y = x.to(device), y.to(device)
+                x, y = x.to(p.dev), y.to(p.dev)
 
                 # 仅计算特征与对应类别全局原型的 MSE 损失
                 features = model.extractor(x)
@@ -182,7 +181,7 @@ def train(p: Params):
 
     # 提取本地原型用于在服务器端指导全局 PLN 学习
     local_protos = extract_prototypes(
-        model, loader, p.num_class, p.feature_dim, device, return_counts=False
+        model, loader, p.num_class, p.feature_dim, p.dev, return_counts=False
     )
 
     model_state = clone_cpu_state(model.state_dict())

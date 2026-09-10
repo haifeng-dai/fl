@@ -6,9 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from .utils import (
-    check_losses,
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     fmt_num,
     get_model,
@@ -122,19 +122,18 @@ def train(p: Params):
     """
     FedKD 本地训练流程，采用基于 SVD 的通信压缩与相互知识蒸馏机制。
     """
-    device = torch.device(p.client_gpu)
 
     # 1. 初始化模型
     # 本地个性化专家模型 (Student)
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     # 全局代理模型 (从压缩的 SVD 参数重建)
-    model_g = get_model(p).to(device)
+    model_g = get_model(p).to(p.dev)
 
     with torch.no_grad():
         # A. 从 SVD 参数中重建并加载全局代理模型参数
         global_state_dict = {}
         for name, param_data in p.compressed_params_g.items():
-            global_state_dict[name] = reconstruct_param(param_data, device)
+            global_state_dict[name] = reconstruct_param(param_data, p.dev)
         model_g.load_state_dict(global_state_dict)
 
         # B. 加载本地模型参数
@@ -144,7 +143,7 @@ def train(p: Params):
             model.load_state_dict(global_state_dict)
 
     # 2. 初始化特征对齐层 (W_h)
-    W_h = torch.nn.Linear(p.feature_dim, p.feature_dim, bias=False, device=device)
+    W_h = torch.nn.Linear(p.feature_dim, p.feature_dim, bias=False, device=p.dev)
     if p.wh_state is not None:
         W_h.load_state_dict(p.wh_state)
 
@@ -182,7 +181,7 @@ def train(p: Params):
 
     for _ in range(p.epochs):
         for x, y, *_ in loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(p.dev), y.to(p.dev)
             rep = model.extractor(x)
             output = model.classifier(rep)
             rep_g = model_g.extractor(x)

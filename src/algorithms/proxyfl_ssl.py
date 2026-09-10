@@ -39,11 +39,10 @@ class Params(BaseParams):
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
-    model_g = get_model(p).to(device)
+    model_g = get_model(p).to(p.dev)
     model_g.load_state_dict(p.model_state)
     model_g.eval()
     for parameter in model_g.parameters():
@@ -57,7 +56,7 @@ def train(p: Params):
         momentum=p.momentum,
         weight_decay=p.weight_decay,
     )
-    class_counts = torch.zeros(p.num_class, device=device)
+    class_counts = torch.zeros(p.num_class, device=p.dev)
     total_loss = 0.0
     num_batches = 0
     pseudo_count = 0
@@ -66,8 +65,8 @@ def train(p: Params):
     model.train()
     for local_epoch in range(p.epochs):
         for (x_l, y_l), (x_u, y_u) in iterate_fixmatch_batches(loaders):
-            x_l, y_l = x_l.to(device), y_l.to(device)
-            x_u, y_u = x_u.to(device), y_u.to(device)
+            x_l, y_l = x_l.to(p.dev), y_l.to(p.dev)
+            x_u, y_u = x_u.to(p.dev), y_u.to(p.dev)
             x_l = weak_augment(x_l, p.dataset)
             x_u_w = weak_augment(x_u, p.dataset)
             x_u_s = strong_augment(x_u, p.dataset)
@@ -82,35 +81,33 @@ def train(p: Params):
             logits_u_w, logits_u_s = logits[batch_size:].chunk(2)
             loss_s = F.cross_entropy(logits_l, y_l)
 
-            with torch.no_grad():
+            with torch.no_grad():  # 对齐官方源码：local/global 置信度并集
                 y_g = model_g(x_u_w)  # 全局 logits（论文 Eq.3 的 y_i）
                 p_g = torch.softmax(y_g, dim=-1)
                 confidence_g, y_hat = p_g.max(dim=1)
-
-            # 高置信度判定：max(y_i) > τ，仅用全局 logits（论文 §5.2.1）
-            hc_mask = confidence_g.ge(p.conf).float()
-            # hc 类别集合 ξ={ŷ_i}，同时作为 L_u 的伪标签目标（Eq.9）
-            xi_hc = F.one_hot(y_hat, p.num_class).bool()
+                p_l = torch.softmax(logits_u_w.detach(), dim=-1)
+                confidence_l, _ = p_l.max(dim=1)
+                mask_g = confidence_g.ge(p.conf).float()
+                mask_l = confidence_l.ge(p.conf).float()
+                # local/global 任一置信度达到阈值即为高置信样本
+                # 与论文不匹配，但是是官方源码实现
+                hc_mask = torch.maximum(mask_l, mask_g)
+                # hc 类别集合仍使用全局 ŷ，同时作为 L_u 的伪标签目标
+                xi_hc = F.one_hot(y_hat, p.num_class).bool()
             loss_u = masked_kl_loss(logits_u_s, xi_hc.float(), hc_mask)
 
             # ══════════════════════════════════════════════════════════════
-            # ICPL 类别集合构建（论文 Eq.3-4）
-            # 每个样本的类别集合 ξ 表示"它可能是哪些类"，用于：
-            #   1) 定义正代理（损失处按 hc/lc 分别构造）
-            #   2) 判定负样本（类别集合不相交 → 负样本）
+            # ICPL 类别集合构建（论文 Eq.3-4）:
             #   ξ：有标签={y_i}；hc={ŷ_i}；lc={c | y_i(c) > P_G'(Y(c))}
             # ══════════════════════════════════════════════════════════════
-            # 有标签样本：类别集合 = 真实类（one-hot）
+            # 有标签样本：类别集合 = 真实类
             xi_l = F.one_hot(y_l, p.num_class).bool()
-            # 无标签样本：全局置信度达标 → hc
+            # 无标签样本：local/global 任一置信度达标 → hc
             is_hc = hc_mask.bool()
-
-            # 服务器 EMA 的全局类别先验 P_G'(Y)（各类别占比），动态逐类阈值
+            # 服务器 EMA 的全局类别先验 P_G'(Y)
             prior = p.global_class_dist.to(device=p_g.device, dtype=p_g.dtype)
-            # 低置信度样本的犹豫集合 ξ_lc：全局概率高于类别先验的类
-            # （模型认为可能是这些类，但不确信唯一——常含多个尾部类）
+            # 低置信度样本的犹豫集合 ξ_lc
             xi_lc = p_g > prior.unsqueeze(0)
-
             # 无标签样本的类别集合：
             #   hc → 全局硬伪标签类 ξ={ŷ_i}；lc → 犹豫集合
             xi_u = torch.where(is_hc.unsqueeze(1), xi_hc, xi_lc)
@@ -124,16 +121,13 @@ def train(p: Params):
             # ══════════════════════════════════════════════════════════════
             # 1) 活跃无标签下标：类别集合非空（犹豫集合全空则无法锚定，剔除）
             active_idx = torch.where(xi_u.any(dim=1))[0]
-
             # 2) 池特征 = [有标签特征 | 活跃无标签弱特征]
             z_l = z[:batch_size]  # 有标签特征（全部进池）
             # 无标签弱特征，仅保留活跃样本（强增强不参与 ICPL）
             z_u_active = z[batch_size : batch_size + unlabeled_size][active_idx]
             z_pool = torch.cat((z_l, z_u_active), dim=0)
-
             # 3) 池类别集合（含标注样本，供负样本 overlap 判定）
             xi_pool = torch.cat((xi_l, xi_u[active_idx]), dim=0)
-
             # 4) 无标签块起点：池 = [有标签块 | 无标签块]，只有无标签块产生对比损失
             unlabeled_start = len(y_l)
             unlabeled_count = len(active_idx)
@@ -179,7 +173,7 @@ def train(p: Params):
                     )
                     loss_c_hc = F.cross_entropy(
                         logits_hc,
-                        torch.zeros(z_hc.size(0), dtype=torch.long, device=device),
+                        torch.zeros(z_hc.size(0), dtype=torch.long, device=p.dev),
                     )
 
                 # ── lc 组：正代理 = ξ 内按本地概率加权（Eq.6 下）──
@@ -197,7 +191,7 @@ def train(p: Params):
                     )
                     loss_c_lc = F.cross_entropy(
                         logits_lc,
-                        torch.zeros(z_lc.size(0), dtype=torch.long, device=device),
+                        torch.zeros(z_lc.size(0), dtype=torch.long, device=p.dev),
                     )
 
                 # hc/lc 两项各自平均后求和（Eq.8）
@@ -236,9 +230,9 @@ def train(p: Params):
 
 class Server(BaseServer):
     def __init__(self, args):
-        if args.ssl not in ("sample", "double", "sfd"):
+        if args.ssl not in ("sample", "double"):
             raise ValueError(
-                "proxyfl_ssl 要求 ssl 为 sample、double 或 sfd；"
+                "proxyfl_ssl 要求 ssl 为 sample 或 double；"
                 "每个客户端必须同时包含有标签和无标签数据"
             )
         super().__init__(args, is_ssl=True, pfl=False)

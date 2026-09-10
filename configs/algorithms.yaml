@@ -1,7 +1,6 @@
 # 算法专属配置 (Algorithm Specific Arguments)
 
 sage:
-    temperature: 1.0
     lambda_u: 1.0
     conf: 0.95
 
@@ -129,8 +128,9 @@ proxyfl_ssl:
     alp: 1.0
     bet: 1.0
     gpt_lr: 0.005
-    gpt_epochs: 10
+    gpt_epochs: 100
     gpt_batch_size: 64
+    gpt_threshold: 100.0
     ema_beta: 0.99
 
 # 联邦半监督学习测试算法（fedtest）

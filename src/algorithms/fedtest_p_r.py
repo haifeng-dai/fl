@@ -107,9 +107,8 @@ def prototype_top2_distance(
 @torch.no_grad()
 def estimate_prototypes_worker(p: BaseParams):
     """客户端使用当前轮次最新的全局模型，在有标签数据上提取类别原型。"""
-    device = torch.device(p.client_gpu)
 
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
 
     model.load_state_dict(p.model_state)
     model.eval()
@@ -128,7 +127,7 @@ def estimate_prototypes_worker(p: BaseParams):
         loader,
         p.num_class,
         p.feature_dim,
-        device,
+        p.dev,
         return_counts=True,
     )
 
@@ -148,16 +147,15 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
       3. 用未优化的统计原型 raw_global_protos 计算相对原型几何 (真实距离与最近错误距离比值)。
     对无标签样本进行并行推断，替代服务端串行推断。
     """
-    device = torch.device(p.client_gpu)
-    model = get_model(p).to(device)
+    model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
     model.eval()
 
     num_class = p.num_class
-    target_protos = p.global_protos.to(device)
-    target_valid = p.global_valid.to(device).bool()
-    raw_protos = p.raw_global_protos.to(device)
-    raw_valid = p.raw_global_valid.to(device).bool()
+    target_protos = p.global_protos.to(p.dev)
+    target_valid = p.global_valid.to(p.dev).bool()
+    raw_protos = p.raw_global_protos.to(p.dev)
+    raw_valid = p.raw_global_valid.to(p.dev).bool()
 
     n_target_valid = int(target_valid.sum().item())
     n_raw_valid = int(raw_valid.sum().item())
@@ -173,10 +171,10 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
     rel_q_list = []
     rel_y_list = []
 
-    labeled_n_pred = torch.zeros(num_class, dtype=torch.long, device=device)
-    labeled_n_correct = torch.zeros(num_class, dtype=torch.long, device=device)
-    radii = torch.zeros(num_class, device=device)
-    radius_count = torch.zeros(num_class, dtype=torch.long, device=device)
+    labeled_n_pred = torch.zeros(num_class, dtype=torch.long, device=p.dev)
+    labeled_n_correct = torch.zeros(num_class, dtype=torch.long, device=p.dev)
+    radii = torch.zeros(num_class, device=p.dev)
+    radius_count = torch.zeros(num_class, dtype=torch.long, device=p.dev)
 
     if len(labeled_indices) > 0:
         labeled_x = p.train_set.x[labeled_indices]
@@ -185,8 +183,8 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
         n_labeled = labeled_x.size(0)
 
         for i in range(0, n_labeled, eval_bs):
-            bx = prepare_input_batch(labeled_x[i : i + eval_bs].to(device), p.dataset)
-            by = labeled_y[i : i + eval_bs].to(device)
+            bx = prepare_input_batch(labeled_x[i : i + eval_bs].to(p.dev), p.dataset)
+            by = labeled_y[i : i + eval_bs].to(p.dev)
 
             features = model.extractor(bx)
 
@@ -246,7 +244,7 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
 
     labeled_present = (
         torch.bincount(p.train_set.y[labeled_mask], minlength=num_class) > 0
-    ).to(device)
+    ).to(p.dev)
 
     client_stats = {
         "total": 0,
@@ -269,14 +267,14 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
         eval_bs = 256
         n_unlabeled = unlabeled_x.size(0)
 
-        stats_counts = torch.zeros(9, dtype=torch.long, device=device)
+        stats_counts = torch.zeros(9, dtype=torch.long, device=p.dev)
         diag_q_list = []
         diag_corr_list = []
         diag_miss_list = []
 
         for i in range(0, n_unlabeled, eval_bs):
-            bx = prepare_input_batch(unlabeled_x[i : i + eval_bs].to(device), p.dataset)
-            by = unlabeled_y[i : i + eval_bs].to(device)
+            bx = prepare_input_batch(unlabeled_x[i : i + eval_bs].to(p.dev), p.dataset)
+            by = unlabeled_y[i : i + eval_bs].to(p.dev)
 
             features = model.extractor(bx)
             logits = model.classifier(features)
@@ -371,13 +369,12 @@ def client_eval_and_diagnose_worker(p: ClientEvalParams):
 
 
 def train(p: Params):
-    device = torch.device(p.client_gpu)
-    model_l = get_model(p).to(device)
+    model_l = get_model(p).to(p.dev)
     model_l.load_state_dict(p.model_state)
     has_unlabeled_loss = p.lambda_u > 0.0
     if has_unlabeled_loss:
         model_g = get_model(p).to(
-            device
+            p.dev
         )
         model_g.load_state_dict(p.model_state)
         model_g.eval()
@@ -401,11 +398,11 @@ def train(p: Params):
             minlength=p.num_class,
         )
         > 0
-    ).to(device)
+    ).to(p.dev)
 
-    global_protos = p.global_protos.to(device)
-    global_valid = p.global_valid.to(device).bool()
-    proto_reliability = p.proto_reliability.to(device)
+    global_protos = p.global_protos.to(p.dev)
+    global_valid = p.global_valid.to(p.dev).bool()
+    proto_reliability = p.proto_reliability.to(p.dev)
 
     optimizer = torch.optim.SGD(
         model_l.parameters(), lr=p.lr, momentum=p.momentum, weight_decay=p.weight_decay
@@ -418,17 +415,17 @@ def train(p: Params):
     # 8: unlabeled_total, 9: missing_total, 10: unlabeled_weight_sum
     # 11: unlabeled_weighted_correct, 12: unlabeled_raw_correct
     # 13: missing_weight_sum, 14: missing_weighted_correct, 15: missing_raw_correct
-    train_stats = torch.zeros(16, dtype=torch.float64, device=device)
+    train_stats = torch.zeros(16, dtype=torch.float64, device=p.dev)
     # 按类别分解统计: 0: pseudo_count, 1: sum_q, 2: sum_sample_rel, 3: sum_weight, 4: sum_weighted_correct
-    class_diag_stats = torch.zeros((p.num_class, 5), dtype=torch.float64, device=device)
+    class_diag_stats = torch.zeros((p.num_class, 5), dtype=torch.float64, device=p.dev)
 
     model_l.train()
     for _ in range(p.epochs):
         for labeled_batch, unlabeled_batch in iterate_fixmatch_batches(loaders):
             x_l_raw, y_l = labeled_batch
             x_u_raw = unlabeled_batch[0]
-            x_l_raw, y_l = x_l_raw.to(device), y_l.to(device)
-            x_u_raw = x_u_raw.to(device)
+            x_l_raw, y_l = x_l_raw.to(p.dev), y_l.to(p.dev)
+            x_u_raw = x_u_raw.to(p.dev)
 
             # 仅反向传播的有标签分支使用弱增强。
             x_l_weak = weak_augment(x_l_raw, p.dataset)
@@ -452,12 +449,12 @@ def train(p: Params):
             train_stats[3] += v_count
 
             loss_u = loss_x * 0.0
-            weights = torch.zeros(x_u_raw.size(0), device=device)
+            weights = torch.zeros(x_u_raw.size(0), device=p.dev)
             pseudo_labels = torch.zeros(
-                x_u_raw.size(0), dtype=torch.long, device=device
+                x_u_raw.size(0), dtype=torch.long, device=p.dev
             )
-            proto_q_values = torch.ones(x_u_raw.size(0), device=device)
-            sample_reliability = torch.zeros(x_u_raw.size(0), device=device)
+            proto_q_values = torch.ones(x_u_raw.size(0), device=p.dev)
+            sample_reliability = torch.zeros(x_u_raw.size(0), device=p.dev)
 
             if can_pseudo_label:
                 with torch.no_grad():
@@ -493,7 +490,7 @@ def train(p: Params):
 
             # 真实 y_u 仅在所有训练损失构造完成后的诊断分支中读取
             with torch.no_grad():
-                y_u = unlabeled_batch[1].to(device)
+                y_u = unlabeled_batch[1].to(p.dev)
                 missing_u = ~labeled_present[y_u]
 
                 train_stats[8] += float(y_u.numel())
