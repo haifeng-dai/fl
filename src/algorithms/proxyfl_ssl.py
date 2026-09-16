@@ -37,8 +37,14 @@ class Params(BaseParams):
     bet: float
     unlabeled_ratio: int
 
-
 def train(p: Params):
+    # 入口探针：检查分发的初始模型权重是否已包含 NaN/Inf
+    for k, v in p.model_state.items():
+        if not torch.isfinite(v).all():
+            raise FloatingPointError(
+                f"[Client {p.client_id}] 入口 model_state[{k}] 存在 NaN/Inf！"
+            )
+
     model = get_model(p).to(p.dev)
     model.load_state_dict(p.model_state)
 
@@ -62,9 +68,34 @@ def train(p: Params):
     pseudo_count = 0
     pseudo_correct = 0
 
+    # 监控指标统计累加器
+    unlabeled_total = 0
+    hc_count = 0
+    hc_correct = 0
+    lc_count = 0
+    lc_empty = 0
+    lc_single = 0
+    lc_multi = 0
+    lc_cand_size_sum = 0
+    lc_covered = 0
+    lc_single_correct = 0
+    lc_multi_covered = 0
+    lc_size_counts = torch.zeros(p.num_class + 1, dtype=torch.long)
+    lc_size_correct = torch.zeros(p.num_class + 1, dtype=torch.long)
+
+    def assert_tensor(tensor, name, step_desc):
+        if not torch.isfinite(tensor).all():
+            nan_cnt = int(torch.isnan(tensor).sum().item())
+            inf_cnt = int(torch.isinf(tensor).sum().item())
+            raise FloatingPointError(
+                f"[Client {p.client_id} | {step_desc}] 变量 {name} 异常! "
+                f"NaN数量: {nan_cnt}, Inf数量: {inf_cnt}, 形状: {tuple(tensor.shape)}"
+            )
+
     model.train()
     for local_epoch in range(p.epochs):
-        for (x_l, y_l), (x_u, y_u) in iterate_fixmatch_batches(loaders):
+        for batch_idx, ((x_l, y_l), (x_u, y_u)) in enumerate(iterate_fixmatch_batches(loaders)):
+            step_desc = f"Epoch {local_epoch}, Batch {batch_idx}"
             x_l, y_l = x_l.to(p.dev), y_l.to(p.dev)
             x_u, y_u = x_u.to(p.dev), y_u.to(p.dev)
             x_l = weak_augment(x_l, p.dataset)
@@ -73,16 +104,20 @@ def train(p: Params):
 
             inputs = torch.cat((x_l, x_u_w, x_u_s))
             z = model.extractor(inputs)
+            assert_tensor(z, "z (extractor output)", step_desc)
             logits = model.classifier(z)
+            assert_tensor(logits, "logits (classifier output)", step_desc)
 
             batch_size = x_l.size(0)
             unlabeled_size = x_u.size(0)
             logits_l = logits[:batch_size]
             logits_u_w, logits_u_s = logits[batch_size:].chunk(2)
             loss_s = F.cross_entropy(logits_l, y_l)
+            assert_tensor(loss_s, "loss_s (supervised CE)", step_desc)
 
             with torch.no_grad():  # 对齐官方源码：local/global 置信度并集
                 y_g = model_g(x_u_w)  # 全局 logits（论文 Eq.3 的 y_i）
+                assert_tensor(y_g, "y_g (global logits)", step_desc)
                 p_g = torch.softmax(y_g, dim=-1)
                 confidence_g, y_hat = p_g.max(dim=1)
                 p_l = torch.softmax(logits_u_w.detach(), dim=-1)
@@ -95,6 +130,7 @@ def train(p: Params):
                 # hc 类别集合仍使用全局 ŷ，同时作为 L_u 的伪标签目标
                 xi_hc = F.one_hot(y_hat, p.num_class).bool()
             loss_u = masked_kl_loss(logits_u_s, xi_hc.float(), hc_mask)
+            assert_tensor(loss_u, "loss_u (unlabeled KL)", step_desc)
 
             # ══════════════════════════════════════════════════════════════
             # ICPL 类别集合构建（论文 Eq.3-4）:
@@ -168,6 +204,7 @@ def train(p: Params):
                 if z_hc.size(0) > 0:
                     omega_hc = omega_G[y_hat_active[is_hc_active]]  # ω_k^{ŷ_i}
                     pos_hc = (z_hc * omega_hc).sum(dim=1)  # z_i·ω_i^{hc}
+                    assert_tensor(pos_hc, "pos_hc (hc positive similarity)", step_desc)
                     logits_hc = torch.cat(
                         (pos_hc.unsqueeze(1), neg_sim_unlabeled[is_hc_active]), dim=1
                     )
@@ -175,6 +212,7 @@ def train(p: Params):
                         logits_hc,
                         torch.zeros(z_hc.size(0), dtype=torch.long, device=p.dev),
                     )
+                    assert_tensor(loss_c_hc, "loss_c_hc (hc cross_entropy)", step_desc)
 
                 # ── lc 组：正代理 = ξ 内按本地概率加权（Eq.6 下）──
                 loss_c_lc = 0.0
@@ -186,6 +224,7 @@ def train(p: Params):
                         y_tilde_lc * xi_lc_active.float()
                     ) @ omega_G  # Σ_{c'∈ξ} ỹ_i(c')·ω_k^{c'}
                     pos_lc = (z_lc * omega_lc).sum(dim=1)  # z_i·ω_i^{lc}
+                    assert_tensor(pos_lc, "pos_lc (lc positive similarity)", step_desc)
                     logits_lc = torch.cat(
                         (pos_lc.unsqueeze(1), neg_sim_unlabeled[~is_hc_active]), dim=1
                     )
@@ -193,27 +232,79 @@ def train(p: Params):
                         logits_lc,
                         torch.zeros(z_lc.size(0), dtype=torch.long, device=p.dev),
                     )
+                    assert_tensor(loss_c_lc, "loss_c_lc (lc cross_entropy)", step_desc)
 
                 # hc/lc 两项各自平均后求和（Eq.8）
                 loss_c = loss_c_hc + loss_c_lc
+                assert_tensor(loss_c, "loss_c (total contrastive loss)", step_desc)
             else:
                 # 无活跃无标签样本：返回 0（乘 0 保持计算图连通）
                 loss_c = z_pool.sum() * 0.0
 
             loss = loss_s + p.alp * loss_u + p.bet * loss_c
+            assert_tensor(loss, "total loss", step_desc)
 
             optimizer.zero_grad()
             check_losses(loss, locals())
             loss.backward()
+
+            # 检查反向传播后的梯度
+            for name, param in model.named_parameters():
+                if param.grad is not None and not torch.isfinite(param.grad).all():
+                    raise FloatingPointError(
+                        f"[Client {p.client_id} | {step_desc}] 梯度异常! "
+                        f"参数 {name}.grad 存在 NaN/Inf, 形状: {tuple(param.grad.shape)}"
+                    )
+
             optimizer.step()
+
+            # 检查更新后的参数
+            for name, param in model.named_parameters():
+                if not torch.isfinite(param.data).all():
+                    raise FloatingPointError(
+                        f"[Client {p.client_id} | {step_desc}] 权重异常! "
+                        f"step 之后 {name}.data 存在 NaN/Inf！"
+                    )
 
             if local_epoch == p.epochs - 1:
                 class_counts += F.one_hot(y_l, p.num_class).float().sum(dim=0)
                 valid = hc_mask.bool()
                 class_counts += F.one_hot(y_hat[valid], p.num_class).float().sum(dim=0)
 
-                pseudo_count += int(valid.sum().item())
-                pseudo_correct += int(((y_hat == y_u) & valid).sum().item())
+                unlabeled_total += int(unlabeled_size)
+                cur_hc_count = int(valid.sum().item())
+                cur_hc_correct = int(((y_hat == y_u) & valid).sum().item())
+                hc_count += cur_hc_count
+                hc_correct += cur_hc_correct
+
+                is_lc = ~valid
+                cur_lc_count = int(is_lc.sum().item())
+                lc_count += cur_lc_count
+                if cur_lc_count > 0:
+                    xi_lc_sub = xi_lc[is_lc]
+                    y_u_sub = y_u[is_lc]
+                    cand_sizes = xi_lc_sub.sum(dim=1)
+                    empty_m = cand_sizes == 0
+                    single_m = cand_sizes == 1
+                    multi_m = cand_sizes > 1
+
+                    y_u_onehot = F.one_hot(y_u_sub, p.num_class).bool()
+                    covered_m = (xi_lc_sub & y_u_onehot).any(dim=1)
+
+                    lc_empty += int(empty_m.sum().item())
+                    lc_single += int(single_m.sum().item())
+                    lc_multi += int(multi_m.sum().item())
+                    lc_cand_size_sum += int(cand_sizes.sum().item())
+                    lc_covered += int(covered_m.sum().item())
+                    lc_single_correct += int((covered_m & single_m).sum().item())
+                    lc_multi_covered += int((covered_m & multi_m).sum().item())
+                    lc_size_counts += torch.bincount(
+                        cand_sizes, minlength=p.num_class + 1
+                    ).cpu()
+                    lc_size_correct += torch.bincount(
+                        cand_sizes[covered_m], minlength=p.num_class + 1
+                    ).cpu()
+
             total_loss += loss.item()
             num_batches += 1
 
@@ -223,8 +314,19 @@ def train(p: Params):
         "state": state,
         "num_samples": len(p.train_set.y),
         "class_counts": class_counts.cpu().detach().clone(),
-        "pseudo_count": pseudo_count,
-        "pseudo_correct": pseudo_correct,
+        "unlabeled_total": unlabeled_total,
+        "hc_count": hc_count,
+        "hc_correct": hc_correct,
+        "lc_count": lc_count,
+        "lc_empty": lc_empty,
+        "lc_single": lc_single,
+        "lc_multi": lc_multi,
+        "lc_cand_size_sum": lc_cand_size_sum,
+        "lc_covered": lc_covered,
+        "lc_single_correct": lc_single_correct,
+        "lc_multi_covered": lc_multi_covered,
+        "lc_size_counts": lc_size_counts,
+        "lc_size_correct": lc_size_correct,
     }
 
 
@@ -252,6 +354,8 @@ class Server(BaseServer):
         )
         self.pseudo_acc = []
         self.pseudo_count = []
+        self.lc_size_counts = []
+        self.lc_size_correct = []
 
     def update_global_distribution(self, counts):
         total = torch.stack(counts).to(dtype=torch.float32).sum(dim=0)
@@ -285,19 +389,30 @@ class Server(BaseServer):
             max_dist = distances.min(dim=-1).values.max()
 
         self.gpt.train()
-        for _ in range(self.gpt_epochs):
-            for proxy, label in loader:
+        for epoch in range(self.gpt_epochs):
+            for batch_idx, (proxy, label) in enumerate(loader):
                 loss = dist_contrastive_loss(
                     proxy,
                     self.gpt.weight,
                     label,
                     margin=min(max_dist.item(), self.gpt_threshold),
                 )
+                if not torch.isfinite(loss).all():
+                    raise FloatingPointError(
+                        f"[Server update_gpt | Epoch {epoch}, Batch {batch_idx}] dist_contrastive_loss 异常为 NaN/Inf!"
+                    )
                 self.gpt_optimizer.zero_grad()
                 check_losses(loss, locals())
                 loss.backward()
+                if self.gpt.weight.grad is not None and not torch.isfinite(self.gpt.weight.grad).all():
+                    raise FloatingPointError(
+                        f"[Server update_gpt | Epoch {epoch}, Batch {batch_idx}] gpt.weight.grad 存在 NaN/Inf!"
+                    )
                 self.gpt_optimizer.step()
         self.gpt.eval()
+
+        if not torch.isfinite(self.gpt.weight).all():
+            raise FloatingPointError("[Server update_gpt] step 之后 gpt.weight 存在 NaN/Inf!")
 
         global_state = self.model.state_dict()
         global_state["classifier.weight"] = self.gpt.weight.detach().cpu().clone()
@@ -329,15 +444,41 @@ class Server(BaseServer):
             sample_counts = []
             class_counts = []
             total_loss = 0.0
-            total_pseudo_count = 0
-            total_pseudo_correct = 0
+            total_unlabeled = 0
+            total_hc_count = 0
+            total_hc_correct = 0
+            total_lc_count = 0
+            total_lc_empty = 0
+            total_lc_single = 0
+            total_lc_multi = 0
+            total_lc_cand_size_sum = 0
+            total_lc_covered = 0
+            total_lc_single_correct = 0
+            total_lc_multi_covered = 0
+
+            total_lc_size_counts = torch.zeros(self.num_class + 1, dtype=torch.long)
+            total_lc_size_correct = torch.zeros(self.num_class + 1, dtype=torch.long)
+
             for res in results.values():
                 states.append(res["state"])
                 sample_counts.append(res["num_samples"])
                 class_counts.append(res["class_counts"])
                 total_loss += res["loss"]
-                total_pseudo_count += res["pseudo_count"]
-                total_pseudo_correct += res["pseudo_correct"]
+                total_unlabeled += res["unlabeled_total"]
+                total_hc_count += res["hc_count"]
+                total_hc_correct += res["hc_correct"]
+                total_lc_count += res["lc_count"]
+                total_lc_empty += res["lc_empty"]
+                total_lc_single += res["lc_single"]
+                total_lc_multi += res["lc_multi"]
+                total_lc_cand_size_sum += res["lc_cand_size_sum"]
+                total_lc_covered += res["lc_covered"]
+                total_lc_single_correct += res["lc_single_correct"]
+                total_lc_multi_covered += res["lc_multi_covered"]
+                if "lc_size_counts" in res:
+                    total_lc_size_counts += res["lc_size_counts"]
+                if "lc_size_correct" in res:
+                    total_lc_size_correct += res["lc_size_correct"]
 
             total_samples = sum(sample_counts)
             weights = [count / total_samples for count in sample_counts]
@@ -346,21 +487,92 @@ class Server(BaseServer):
             self.update_gpt(states, weights)
 
             self.loss.append(total_loss / num_join)
-            round_pseudo_acc = (
-                total_pseudo_correct / max(1, total_pseudo_count)
+            round_hc_acc = (
+                total_hc_correct / max(1, total_hc_count)
             ) * 100.0
-            self.pseudo_acc.append(round_pseudo_acc)
-            self.pseudo_count.append(total_pseudo_count)
+            round_hc_rate = (
+                total_hc_count / max(1, total_unlabeled)
+            ) * 100.0
+            round_lc_rate = (
+                total_lc_count / max(1, total_unlabeled)
+            ) * 100.0
+
+            round_lc_empty_rate = (
+                total_lc_empty / max(1, total_lc_count)
+            ) * 100.0
+            round_lc_single_rate = (
+                total_lc_single / max(1, total_lc_count)
+            ) * 100.0
+            round_lc_multi_rate = (
+                total_lc_multi / max(1, total_lc_count)
+            ) * 100.0
+            round_lc_mean_cand = (
+                total_lc_cand_size_sum / max(1, total_lc_count)
+            )
+
+            round_lc_coverage = (
+                total_lc_covered / max(1, total_lc_count)
+            ) * 100.0
+            round_lc_single_acc = (
+                (total_lc_single_correct / total_lc_single * 100.0)
+                if total_lc_single > 0
+                else float("nan")
+            )
+            round_lc_multi_cov = (
+                (total_lc_multi_covered / total_lc_multi * 100.0)
+                if total_lc_multi > 0
+                else float("nan")
+            )
+            lc_nonempty = total_lc_single + total_lc_multi
+            round_lc_nonempty_acc = (
+                (
+                    (total_lc_single_correct + total_lc_multi_covered)
+                    / lc_nonempty
+                    * 100.0
+                )
+                if lc_nonempty > 0
+                else float("nan")
+            )
+            round_active_rate = (
+                (total_hc_count + lc_nonempty) / max(1, total_unlabeled)
+            ) * 100.0
+
+            self.pseudo_acc.append(round_hc_acc)
+            self.pseudo_count.append(total_hc_count)
+            self.lc_size_counts.append(total_lc_size_counts.tolist())
+            self.lc_size_correct.append(total_lc_size_correct.tolist())
 
             self.evaluate()
             round_duration = time.time() - start
+
+            unlabeled_total_f = float(max(1, total_unlabeled))
+            lc_size_parts = [
+                f"{k}类={int(total_lc_size_counts[k])} "
+                f"({(total_lc_size_counts[k].item() / unlabeled_total_f * 100.0):.2f}%, "
+                f"准确率={(total_lc_size_correct[k].item() / total_lc_size_counts[k].item() * 100.0):.2f}%)"
+                for k in range(1, self.num_class + 1)
+                if total_lc_size_counts[k] > 0
+            ]
+            lc_size_line = " | ".join(lc_size_parts) if lc_size_parts else "无非空候选"
+
             print(
-                f"Global Acc: {self.acc[-1]:.2f}% | "
-                f"Loss: {self.loss[-1]:.4f} | "
-                f"Pseudo Acc: {self.pseudo_acc[-1]:.2f}% | "
-                f"Pseudo Count: {self.pseudo_count[-1]}"
+                f"\n--- ProxyFL-SSL 第 {r + 1}/{self.rounds} 轮 ---\n"
+                f"测试准确率: {self.acc[-1]:.2f}% | 训练损失: {self.loss[-1]:.4f}\n"
+                f"无标签样本与类别集合监控:\n"
+                f"  高置信组 (hc, 硬伪标签):\n"
+                f"    数量={total_hc_count} | 比例={round_hc_rate:.2f}% | 准确率={round_hc_acc:.2f}%\n"
+                f"  低置信组 (lc, 犹豫集合):\n"
+                f"    数量={total_lc_count} | 比例={round_lc_rate:.2f}% | 平均候选数={round_lc_mean_cand:.2f}\n"
+                f"    分布构成: 空候选={round_lc_empty_rate:.2f}% | 单候选={round_lc_single_rate:.2f}% | 多候选={round_lc_multi_rate:.2f}%\n"
+                f"    各候选集大小具体数量比例及准确率 [占全体, 准确率]:\n"
+                f"      {lc_size_line}\n"
+                f"    真实类覆盖与准确率: 总体覆盖={round_lc_coverage:.2f}% | "
+                f"单候选准确率={('N/A' if round_lc_single_acc != round_lc_single_acc else f'{round_lc_single_acc:.2f}%')} | "
+                f"多候选覆盖={('N/A' if round_lc_multi_cov != round_lc_multi_cov else f'{round_lc_multi_cov:.2f}%')} | "
+                f"非空合并准确率={('N/A' if round_lc_nonempty_acc != round_lc_nonempty_acc else f'{round_lc_nonempty_acc:.2f}%')}\n"
+                f"  活跃进池率={round_active_rate:.2f}% (参与对比学习的非空集样本比例)\n"
+                f"本轮耗时: {round_duration:.2f} 秒"
             )
-            print(f"Round finished in {round_duration:.2f} seconds")
 
     def save(self):
         metrics = {
@@ -368,6 +580,8 @@ class Server(BaseServer):
             "loss": self.loss,
             "pseudo_acc": self.pseudo_acc,
             "pseudo_count": self.pseudo_count,
+            "lc_size_counts": self.lc_size_counts,
+            "lc_size_correct": self.lc_size_correct,
         }
         params = {"global": self.model.state_dict()}
         self.deal_save(metrics, params)

@@ -3,6 +3,7 @@
 # 数据相关 (Data)
 dataset: # cifar10, cifar100, cinic10, tiny_imagenet, mnist, fashionmnist, emnist
     - cifar10
+raw_dir: ~/datasets
     # - cifar100
     # - cinic10
     # - tiny_imagenet
@@ -71,7 +72,8 @@ resume_from: null
 gpus: "0,1,2,3" # 使用的物理 GPU 编号，逗号分隔
 # gpus: "0,1"
 # gpus: "2,3"
-# gpus: "0,1,3"
+# gpus: "1,2,3"
+# gpus: "0"
 max_workers_per_gpu: 5
 test: 0 # 是否开启测试模式 (1: 开启, 0: 关闭)，可用 -t 在命令行中快速开启
 

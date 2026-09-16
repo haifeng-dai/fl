@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from .utils import (
     BaseParams,
     BaseServer,
+    check_losses,
     clone_cpu_state,
     extract_prototypes,
     fmt_num,
@@ -16,8 +17,8 @@ from .utils import (
     prepare_input_batch,
     proto_aggregate,
 )
-from .utils.augment import strong_augment, weak_augment
-from .utils.ssl import build_fixmatch_loaders, iterate_ssl_batches
+from .utils.augment import weak_augment
+from .utils.ssl import build_fixmatch_loaders, iterate_fixmatch_batches
 
 
 def get_path(args):
@@ -30,7 +31,7 @@ def get_path(args):
 @dataclass
 class Params(BaseParams):
     unlabeled_ratio: int
-    global_protos: torch.Tensor
+    proto_g: torch.Tensor
     global_valid: torch.Tensor
     proto_scale: float
     lambda_s: float
@@ -38,33 +39,19 @@ class Params(BaseParams):
 
 
 @dataclass
-class ClientCalibrateParams(BaseParams):
-    global_protos: torch.Tensor
-    global_valid: torch.Tensor
-    proto_scale: float
-
-
-@dataclass
 class ClientDiagnoseParams(BaseParams):
-    global_protos: torch.Tensor
+    proto_g: torch.Tensor
     global_valid: torch.Tensor
     proto_scale: float
-    radius_q10: torch.Tensor
-    radius_q50: torch.Tensor
-    radius_valid: torch.Tensor
+    proto_conf_threshold: torch.Tensor
+    proto_conf_threshold_valid: torch.Tensor
 
 
 @torch.no_grad()
 def estimate_prototypes_worker(p: BaseParams):
     """客户端使用当前轮次最新的全局模型，在有标签数据上提取类别原型。"""
-    device = torch.device(p.client_gpu)
 
-    model = get_model(
-        p.model_name,
-        p.dataset,
-        p.num_class,
-        p.feature_dim,
-    ).to(device)
+    model = get_model(p).to(p.dev)
 
     model.load_state_dict(p.model_state)
     model.eval()
@@ -83,7 +70,7 @@ def estimate_prototypes_worker(p: BaseParams):
         loader,
         p.num_class,
         p.feature_dim,
-        device,
+        p.dev,
         return_counts=True,
     )
 
@@ -98,17 +85,16 @@ def mse_distance(features, prototypes):
     return diff.square().mean(dim=-1)
 
 
-
 def train(p: Params):
-    device = torch.device(p.client_gpu)
 
-    model_l = get_model(
-        p.model_name,
-        p.dataset,
-        p.num_class,
-        p.feature_dim,
-    ).to(device)
+    model_l = get_model(p).to(p.dev)
     model_l.load_state_dict(p.model_state)
+
+    model_g = get_model(p).to(p.dev)
+    model_g.load_state_dict(p.model_state)
+    model_g.eval()
+    for parameter in model_g.parameters():
+        parameter.requires_grad_(False)
 
     loaders = build_fixmatch_loaders(
         p.train_set,
@@ -118,8 +104,8 @@ def train(p: Params):
     if loaders.labeled_loader is None:
         raise ValueError("fedtest 客户端缺少有标签样本")
 
-    global_protos = p.global_protos.to(device)
-    global_valid = p.global_valid.to(device).bool()
+    proto_g = p.proto_g.to(p.dev)
+    global_valid = p.global_valid.to(p.dev).bool()
     optimizer = torch.optim.SGD(
         model_l.parameters(),
         lr=p.lr,
@@ -127,38 +113,120 @@ def train(p: Params):
         weight_decay=p.weight_decay,
     )
 
-    stats = torch.zeros(6, dtype=torch.float64, device=device)
+    stats = torch.zeros(13, dtype=torch.float64, device=p.dev)
     # 0/1: loss_x sum/count
     # 2/3: loss_cal sum/count
     # 4/5: loss_total sum/count
+    # 6/7: loss_x_u sum/count
+    # 8/9: loss_cal_u sum/count
+    # 10/11: pseudo-label count / unlabeled sample count
+    # 12: selected pseudo-label correct count
+    hc_diag = {
+        "lo": [0, 0, 0],
+        "go": [0, 0, 0],
+        "b": [0, 0, 0, 0, 0],
+        "n": [0, 0, 0],
+        "l": [0, 0, 0],
+        "g": [0, 0, 0],
+        "u": [0, 0, 0],
+    }
+    proto_diag = {
+        "all": [0, 0, 0, 0, 0],
+        "local_high": [0, 0, 0, 0, 0],
+    }
 
     model_l.train()
 
-    for _ in range(p.epochs):
-        for labeled_batch, unlabeled_batch in iterate_ssl_batches(loaders):
-            assert labeled_batch is not None
-
+    for local_epoch in range(p.epochs):
+        for labeled_batch, unlabeled_batch in iterate_fixmatch_batches(loaders):
             x_l_raw, y_l = labeled_batch
-            x_l_raw = x_l_raw.to(device)
-            y_l = y_l.to(device)
+            x_l_raw = x_l_raw.to(p.dev)
+            y_l = y_l.to(p.dev)
+            x_u_raw, y_u_raw = unlabeled_batch
+            x_u_raw = x_u_raw.to(p.dev)
 
             x_l_weak = weak_augment(x_l_raw, p.dataset)
 
-            features_l = model_l.extractor(x_l_weak)
-            logits_l = model_l.classifier(features_l)
+            with torch.no_grad():
+                x_u_weak = weak_augment(x_u_raw, p.dataset)
+                features_u_weak = model_l.extractor(x_u_weak)
+                logits_u_pseudo = model_l.classifier(features_u_weak)
+                confidence_u, pseudo_y = torch.softmax(logits_u_pseudo, dim=1).max(
+                    dim=1
+                )
+                pseudo_mask = confidence_u > 0.95
+
+                if local_epoch == p.epochs - 1:
+                    local_mask = pseudo_mask
+                    local_pred = pseudo_y
+                    global_logits = model_g(x_u_weak)
+                    global_prob, global_pred = torch.softmax(global_logits, dim=1).max(
+                        dim=1
+                    )
+                    global_mask = global_prob > 0.95
+                    groups = {
+                        "lo": local_mask & ~global_mask,
+                        "go": ~local_mask & global_mask,
+                        "b": local_mask & global_mask,
+                        "n": ~local_mask & ~global_mask,
+                        "l": local_mask,
+                        "g": global_mask,
+                        "u": local_mask | global_mask,
+                    }
+                    for key, group in groups.items():
+                        hc_diag[key][0] += int(group.sum().item())
+                        hc_diag[key][1] += int(
+                            ((local_pred == y_u_raw.to(p.dev)) & group).sum().item()
+                        )
+                        hc_diag[key][2] += int(
+                            ((global_pred == y_u_raw.to(p.dev)) & group).sum().item()
+                        )
+                    agree = local_pred == global_pred
+                    both = groups["b"]
+                    hc_diag["b"][3] += int((agree & both).sum().item())
+                    hc_diag["b"][4] += int(
+                        (agree & (local_pred == y_u_raw.to(p.dev)) & both).sum().item()
+                    )
+
+                    if bool(global_valid.any()):
+                        proto_distance = mse_distance(features_u_weak, proto_g)
+                        proto_distance[:, ~global_valid] = float("inf")
+                        proto_pred = proto_distance.argmin(dim=1)
+                        proto_ok = proto_pred == y_u_raw.to(p.dev)
+                        classifier_ok = local_pred == y_u_raw.to(p.dev)
+                        proto_agree = local_pred == proto_pred
+                        for key, group in {
+                            "all": torch.ones_like(local_mask),
+                            "local_high": local_mask,
+                        }.items():
+                            proto_diag[key][0] += int(group.sum().item())
+                            proto_diag[key][1] += int(
+                                (classifier_ok & group).sum().item()
+                            )
+                            proto_diag[key][2] += int((proto_ok & group).sum().item())
+                            proto_diag[key][3] += int(
+                                (proto_agree & group).sum().item()
+                            )
+                            proto_diag[key][4] += int(
+                                (proto_agree & classifier_ok & group).sum().item()
+                            )
+
+            selected_x_u = x_u_weak[pseudo_mask]
+            selected_y_u = pseudo_y[pseudo_mask]
+
+            if selected_y_u.numel() > 0:
+                x_train = torch.cat((x_l_weak, selected_x_u), dim=0)
+            else:
+                x_train = x_l_weak
+            features_train = model_l.extractor(x_train)
+            logits_train = model_l.classifier(features_train)
+            features_l = features_train[: y_l.size(0)]
+            logits_l = logits_train[: y_l.size(0)]
 
             loss_x = F.cross_entropy(logits_l, y_l)
 
             diff = (
-                mse_distance(
-                    features_l,
-                    global_protos,
-                )
-                .gather(
-                    1,
-                    y_l.unsqueeze(1),
-                )
-                .squeeze(1)
+                mse_distance(features_l, proto_g).gather(1, y_l.unsqueeze(1)).squeeze(1)
             )
 
             valid_labeled = global_valid[y_l]
@@ -168,9 +236,31 @@ def train(p: Params):
                 1
             ).float()
 
-            loss = loss_x + p.lambda_s * loss_cal
+            if selected_y_u.numel() > 0:
+                logits_u = logits_train[y_l.size(0) :]
+                loss_x_u = F.cross_entropy(logits_u, selected_y_u)
+                diff_u = (
+                    mse_distance(features_train[y_l.size(0) :], proto_g)
+                    .gather(1, selected_y_u.unsqueeze(1))
+                    .squeeze(1)
+                )
+                valid_u = global_valid[selected_y_u]
+                valid_u_count = valid_u.sum()
+                loss_cal_u = (diff_u * valid_u.float()).sum() / valid_u_count.clamp_min(
+                    1
+                ).float()
+            else:
+                loss_x_u = logits_l.sum() * 0.0
+                loss_cal_u = features_l.sum() * 0.0
+                diff_u = loss_cal_u.detach().expand(0)
+                valid_u = torch.zeros(0, dtype=torch.bool, device=p.dev)
+                valid_u_count = torch.zeros((), dtype=torch.long, device=p.dev)
+
+            loss_u = loss_x_u + p.lambda_s * loss_cal_u
+            loss = loss_x + p.lambda_s * loss_cal + p.lambda_u * loss_u
 
             optimizer.zero_grad()
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 
@@ -184,6 +274,14 @@ def train(p: Params):
 
             stats[4] += loss.detach().double() * bs
             stats[5] += bs
+            pseudo_bs = float(selected_y_u.numel())
+            stats[6] += loss_x_u.detach().double() * pseudo_bs
+            stats[7] += pseudo_bs
+            stats[8] += (diff_u.detach().double() * valid_u.double()).sum()
+            stats[9] += valid_u_count
+            stats[10] += pseudo_bs
+            stats[11] += float(y_u_raw.size(0))
+            stats[12] += (selected_y_u == y_u_raw.to(p.dev)[pseudo_mask]).double().sum()
 
     stats = stats.cpu().tolist()
 
@@ -195,81 +293,29 @@ def train(p: Params):
         "loss_calibrate_count": int(stats[3]),
         "loss_total_sum": stats[4],
         "loss_total_count": int(stats[5]),
-    }
-
-
-@torch.no_grad()
-def client_calibrate_worker(p: ClientCalibrateParams):
-    """收集各真实类别样本到自身目标原型的弱增强距离。"""
-    device = torch.device(p.client_gpu)
-
-    model = get_model(
-        p.model_name,
-        p.dataset,
-        p.num_class,
-        p.feature_dim,
-    ).to(device)
-
-    model.load_state_dict(p.model_state)
-    model.eval()
-
-    prototypes = p.global_protos.to(device)
-    valid = p.global_valid.to(device).bool()
-
-    class_distances = [[] for _ in range(p.num_class)]
-
-    labeled_mask = p.train_set.is_labeled.bool()
-    labeled_indices = torch.where(labeled_mask)[0]
-
-    if labeled_indices.numel() > 0:
-        labeled_x = p.train_set.x[labeled_indices]
-        loader_l = DataLoader(
-            TensorDataset(labeled_x, p.train_set.y[labeled_indices]),
-            batch_size=max(p.batch_size, 256),
-            shuffle=False,
-        )
-        for bx_raw, by in loader_l:
-            bx_raw = bx_raw.to(device)
-            bx_weak = weak_augment(bx_raw, p.dataset)
-            features = model.extractor(bx_weak)
-            dist = mse_distance(features, prototypes)
-            dist[:, ~valid] = float("inf")
-            own_dist = dist.gather(1, by.to(device)[:, None]).squeeze(1)
-            proto_pred = dist.argmin(dim=1)
-            proto_correct = proto_pred == by.to(device)
-            for c in range(p.num_class):
-                mask = (by == c) & valid[c].cpu() & proto_correct.cpu()
-                if mask.any():
-                    class_distances[c].append(own_dist[mask.to(device)].cpu())
-
-    return {
-        "class_distances": [
-            torch.cat(v) if v else torch.empty(0) for v in class_distances
-        ],
+        "loss_x_u_sum": stats[6],
+        "loss_x_u_count": int(stats[7]),
+        "loss_calibrate_u_sum": stats[8],
+        "loss_calibrate_u_count": int(stats[9]),
+        "pseudo_count": int(stats[10]),
+        "unlabeled_count": int(stats[11]),
+        "pseudo_correct": int(stats[12]),
+        "hc_diag": hc_diag,
+        "proto_diag": proto_diag,
     }
 
 
 @torch.no_grad()
 def client_diagnose_worker(p: ClientDiagnoseParams):
     """阶段2：在无标签数据上评估基础分类与同空间下的候选集合质量。"""
-    device = torch.device(p.client_gpu)
 
-    model = get_model(
-        p.model_name,
-        p.dataset,
-        p.num_class,
-        p.feature_dim,
-    ).to(device)
+    model = get_model(p).to(p.dev)
 
     model.load_state_dict(p.model_state)
     model.eval()
 
-    prototypes = p.global_protos.to(device)
-    valid = p.global_valid.to(device).bool()
-    radius_q10 = p.radius_q10.to(device)
-    radius_q50 = p.radius_q50.to(device)
-    radius_valid = p.radius_valid.to(device).bool()
-
+    prototypes = p.proto_g.to(p.dev)
+    valid = p.global_valid.to(p.dev).bool()
     num_class = p.num_class
 
     labeled_mask = p.train_set.is_labeled.bool()
@@ -279,72 +325,151 @@ def client_diagnose_worker(p: ClientDiagnoseParams):
             minlength=num_class,
         )
         > 0
-    ).to(device)
+    ).to(p.dev)
 
     unlabeled_indices = torch.where(~labeled_mask)[0]
 
-    # counts 统计量:
-    # 0: total
-    # 1: cls_correct
-    # 2: proto_correct
-    # 3: seen_total
-    # 4: seen_cls_correct
-    # 5: seen_proto_correct
-    # 6: missing_total
-    # 7: missing_cls_correct
-    # 8: missing_proto_correct
-    # 9: cand_total (有候选评估的样本数)
-    # 10: cand_cover (真实类别在候选集中的样本数)
-    # 11: cand_size_sum (候选集大小总和)
-    # 12: singleton_count (候选集大小为 1 的样本数)
-    # 13: singleton_correct (单候选且预测正确的样本数)
-    # 14: empty_count (空候选集样本数)
-    # 15: mis_cand_total
-    # 16: mis_cand_cover
-    # 17: mis_cand_size_sum
-    # 18: mis_singleton_count
-    # 19: mis_singleton_correct
-    # 20: mis_empty_count
-    diag_counts = torch.zeros(35, dtype=torch.float64, device=device)
-
-    has_thresh = bool(radius_valid.any())
+    # 0 total, 1 classifier correct, 2 prototype correct
+    # 3/4/5 seen total/classifier correct/prototype correct
+    # 6/7/8 missing total/classifier correct/prototype correct
+    # 0-8: total/classifier/prototype, seen and missing class counts
+    # 9-13: classifier confidence <95% total/classifier/prototype/agreement/agreement-correct
+    # 14-21: classifier confidence >95% total/correct/missing/missing-correct/
+    #        agreement/agreement-correct/prototype-correct/prototype-correct-classifier-correct
+    # 22:22+num_class: prototype-correct confidence sums by true class
+    # 22+num_class:22+2*num_class: corresponding counts
+    diag_counts = torch.zeros(22 + 2 * num_class, dtype=torch.float64, device=p.dev)
+    threshold_count = torch.zeros(num_class, dtype=torch.float64, device=p.dev)
+    threshold_correct = torch.zeros(num_class, dtype=torch.float64, device=p.dev)
+    candidate_counts = torch.zeros(8, dtype=torch.float64, device=p.dev)
+    low_candidate_counts = torch.zeros(8, dtype=torch.float64, device=p.dev)
+    cand_size_counts = torch.zeros(num_class + 1, dtype=torch.float64, device=p.dev)
+    cand_size_correct = torch.zeros(num_class + 1, dtype=torch.float64, device=p.dev)
+    low_cand_size_counts = torch.zeros(num_class + 1, dtype=torch.float64, device=p.dev)
+    low_cand_size_correct = torch.zeros(
+        num_class + 1, dtype=torch.float64, device=p.dev
+    )
+    threshold = p.proto_conf_threshold.to(p.dev)
+    threshold_valid = p.proto_conf_threshold_valid.to(p.dev).bool()
 
     if unlabeled_indices.numel() > 0:
         raw_x = p.train_set.x[unlabeled_indices]
-        raw_y = p.train_set.y[unlabeled_indices].to(device)
+        raw_y = p.train_set.y[unlabeled_indices].to(p.dev)
         loader_u = DataLoader(
             TensorDataset(raw_x, raw_y),
             batch_size=max(p.batch_size, 256),
             shuffle=False,
         )
         for bx_raw, by in loader_u:
-            bx_raw = bx_raw.to(device)
+            bx_raw = bx_raw.to(p.dev)
             bx_prep = prepare_input_batch(bx_raw, p.dataset)
             feat_u = model.extractor(bx_prep)
             logits_u = model.classifier(feat_u)
-            dist_u = mse_distance(feat_u, prototypes)
-            dist_u[:, ~valid] = float("inf")
-            prob_u = torch.softmax(-dist_u / max(float(p.proto_scale), 1e-8), dim=1)
-            prob_max, prob_pred = prob_u.max(dim=1)
-            prob90 = prob_max > 0.9
-            diag_counts[26] += prob90.double().sum()
-            diag_counts[27] += (prob90 & prob_pred.eq(by)).double().sum()
-
             cls_pred = logits_u.argmax(dim=1)
-            cls_prob, cls_prob_pred = torch.softmax(logits_u, dim=1).max(dim=1)
+            cls_prob = torch.softmax(logits_u, dim=1).max(dim=1).values
             cls95 = cls_prob > 0.95
-            proto_pred = dist_u.argmin(dim=1)
+            low_conf = cls_prob < 0.95
+
+            if bool(valid.any()):
+                dist_u = mse_distance(feat_u, prototypes)
+                dist_u[:, ~valid] = float("inf")
+                prob_u = torch.softmax(-dist_u / max(float(p.proto_scale), 1e-8), dim=1)
+                prob_max, proto_pred = prob_u.max(dim=1)
+                threshold_candidate = threshold_valid[proto_pred] & (
+                    prob_max > threshold[proto_pred]
+                )
+                threshold_count += torch.bincount(
+                    proto_pred[threshold_candidate], minlength=num_class
+                ).double()
+                threshold_correct += torch.bincount(
+                    proto_pred[threshold_candidate & (proto_pred == by)],
+                    minlength=num_class,
+                ).double()
+                if bool(threshold_valid.any()):
+                    candidate_mask = (
+                        prob_u > threshold.unsqueeze(0)
+                    ) & threshold_valid.unsqueeze(0)
+                    candidate_count = candidate_mask.sum(dim=1)
+                    true_in_candidate = candidate_mask.gather(
+                        1, by.unsqueeze(1)
+                    ).squeeze(1)
+                    single = candidate_count == 1
+                    multi = candidate_count > 1
+                    candidate_counts += torch.stack(
+                        [
+                            torch.tensor(by.numel(), device=p.dev),
+                            (candidate_count == 0).sum(),
+                            single.sum(),
+                            multi.sum(),
+                            candidate_count.sum(),
+                            true_in_candidate.sum(),
+                            (single & true_in_candidate).sum(),
+                            (multi & true_in_candidate).sum(),
+                        ]
+                    ).double()
+                    cand_size_counts += torch.bincount(
+                        candidate_count, minlength=num_class + 1
+                    ).double()
+                    cand_size_correct += torch.bincount(
+                        candidate_count[true_in_candidate], minlength=num_class + 1
+                    ).double()
+                    low_mask = cls_prob < 0.95
+                    low_candidate_count = candidate_count[low_mask]
+                    low_true_in_candidate = true_in_candidate[low_mask]
+                    low_single = low_candidate_count == 1
+                    low_multi = low_candidate_count > 1
+                    low_candidate_counts += torch.stack(
+                        [
+                            low_mask.sum(),
+                            (low_candidate_count == 0).sum(),
+                            low_single.sum(),
+                            low_multi.sum(),
+                            low_candidate_count.sum(),
+                            low_true_in_candidate.sum(),
+                            (low_single & low_true_in_candidate).sum(),
+                            (low_multi & low_true_in_candidate).sum(),
+                        ]
+                    ).double()
+                    low_cand_size_counts += torch.bincount(
+                        low_candidate_count, minlength=num_class + 1
+                    ).double()
+                    low_cand_size_correct += torch.bincount(
+                        low_candidate_count[low_true_in_candidate],
+                        minlength=num_class + 1,
+                    ).double()
+            else:
+                prob_max = torch.zeros(by.size(0), device=p.dev)
+                proto_pred = torch.full_like(by, -1)
 
             cls_ok = cls_pred == by
             proto_ok = proto_pred == by
             is_seen = labeled_present[by]
             is_mis = ~is_seen
-            diag_counts[30] += cls95.double().sum()
-            diag_counts[31] += (cls95 & cls_prob_pred.eq(by)).double().sum()
-            diag_counts[32] += (cls95 & is_mis).double().sum()
-            diag_counts[33] += (cls95 & cls_prob_pred.eq(by) & is_mis).double().sum()
-            diag_counts[28] += (prob90 & is_mis).double().sum()
-            diag_counts[29] += (prob90 & prob_pred.eq(by) & is_mis).double().sum()
+            agree = cls_pred == proto_pred
+            diag_counts[9] += low_conf.double().sum()
+            diag_counts[10] += (low_conf & cls_ok).double().sum()
+            diag_counts[11] += (low_conf & proto_ok).double().sum()
+            diag_counts[12] += (low_conf & agree).double().sum()
+            diag_counts[13] += (low_conf & agree & cls_ok).double().sum()
+            diag_counts[14] += cls95.double().sum()
+            diag_counts[15] += (cls95 & cls_ok).double().sum()
+            diag_counts[16] += (cls95 & is_mis).double().sum()
+            diag_counts[17] += (cls95 & cls_ok & is_mis).double().sum()
+            diag_counts[18] += (cls95 & agree).double().sum()
+            diag_counts[19] += (cls95 & agree & cls_ok).double().sum()
+            diag_counts[20] += (cls95 & proto_ok).double().sum()
+            diag_counts[21] += (cls95 & proto_ok & cls_ok).double().sum()
+
+            class_conf_sum = torch.bincount(
+                by[proto_ok],
+                weights=prob_max[proto_ok],
+                minlength=num_class,
+            )
+            class_conf_count = torch.bincount(by[proto_ok], minlength=num_class).to(
+                torch.float64
+            )
+            diag_counts[22 : 22 + num_class] += class_conf_sum.double()
+            diag_counts[22 + num_class :] += class_conf_count
 
             n_batch = float(by.size(0))
             diag_counts[0] += n_batch
@@ -359,45 +484,16 @@ def client_diagnose_worker(p: ClientDiagnoseParams):
             diag_counts[7] += (cls_ok & is_mis).double().sum()
             diag_counts[8] += (proto_ok & is_mis).double().sum()
 
-            if has_thresh:
-                bx_weak = weak_augment(bx_raw, p.dataset)
-                feat_u_weak = model.extractor(bx_weak)
-                dist_u_weak = mse_distance(feat_u_weak, prototypes)
-                high_mask = (dist_u_weak <= radius_q10.unsqueeze(0)) & radius_valid.unsqueeze(0)
-                high_size = high_mask.sum(dim=1)
-                high_true = high_mask.gather(1, by.unsqueeze(1)).squeeze(1)
-                high_single = high_size == 1
-                diag_counts[21] += (high_size > 0).double().sum()
-                diag_counts[22] += high_true.double().sum()
-                diag_counts[23] += high_single.double().sum()
-                diag_counts[24] += (high_single & high_true).double().sum()
-                diag_counts[25] += (high_size > 1).double().sum()
-                cand_mask = (
-                    dist_u_weak <= radius_q50.unsqueeze(0)
-                ) & radius_valid.unsqueeze(0)
-                c_size = cand_mask.sum(dim=1)
-                true_in_cand = cand_mask.gather(1, by.unsqueeze(1)).squeeze(1)
-                is_single = c_size == 1
-                single_ok = is_single & true_in_cand
-                is_empty = c_size == 0
-
-                diag_counts[9] += n_batch
-                diag_counts[10] += true_in_cand.double().sum()
-                diag_counts[11] += c_size.double().sum()
-                diag_counts[12] += is_single.double().sum()
-                diag_counts[13] += single_ok.double().sum()
-                diag_counts[14] += is_empty.double().sum()
-
-                if is_mis.any():
-                    diag_counts[15] += is_mis.double().sum()
-                    diag_counts[16] += (true_in_cand & is_mis).double().sum()
-                    diag_counts[17] += (c_size.float() * is_mis.float()).double().sum()
-                    diag_counts[18] += (is_single & is_mis).double().sum()
-                    diag_counts[19] += (single_ok & is_mis).double().sum()
-                    diag_counts[20] += (is_empty & is_mis).double().sum()
-
     return {
         "diag_counts": diag_counts.cpu(),
+        "proto_conf_threshold_count": threshold_count.cpu(),
+        "proto_conf_threshold_correct": threshold_correct.cpu(),
+        "proto_candidate_counts": candidate_counts.cpu(),
+        "proto_low_candidate_counts": low_candidate_counts.cpu(),
+        "proto_candidate_size_counts": cand_size_counts.cpu(),
+        "proto_candidate_size_correct": cand_size_correct.cpu(),
+        "proto_low_candidate_size_counts": low_cand_size_counts.cpu(),
+        "proto_low_candidate_size_correct": low_cand_size_correct.cpu(),
     }
 
 
@@ -411,7 +507,7 @@ class Server(BaseServer):
 
         self.mean_protos = torch.zeros(self.num_class, self.feature_dim)
         self.mean_valid = torch.zeros(self.num_class, dtype=torch.bool)
-        self.global_protos = torch.zeros(self.num_class, self.feature_dim)
+        self.proto_g = torch.zeros(self.num_class, self.feature_dim)
         self.global_valid = torch.zeros(self.num_class, dtype=torch.bool)
 
         self.proto_anchor_weight = args.proto_anchor_weight
@@ -424,11 +520,6 @@ class Server(BaseServer):
         self.unlabeled_ratio = args.unlabeled_ratio
         self.proto_scale = 1.0
 
-        # 当前轮距离分位数半径
-        self.radius_q10 = torch.zeros(self.num_class)
-        self.radius_q50 = torch.zeros(self.num_class)
-        self.radius_valid = torch.zeros(self.num_class, dtype=torch.bool)
-
         # 核心指标序列
         self.acc = []
         self.acc_proto = []
@@ -438,6 +529,11 @@ class Server(BaseServer):
         metric_names = (
             "loss_x",
             "loss_calibrate",
+            "loss_x_u",
+            "loss_calibrate_u",
+            "pseudo_count",
+            "pseudo_rate",
+            "pseudo_acc",
             "round_time",
             "unlabeled_classifier_acc",
             "unlabeled_proto_acc",
@@ -445,19 +541,59 @@ class Server(BaseServer):
             "seen_proto_acc",
             "missing_classifier_acc",
             "missing_proto_acc",
-            "cand_cov",
-            "avg_cand_size",
-            "singleton_ratio",
-            "singleton_acc",
-            "empty_ratio",
-            "missing_cand_cov",
-            "missing_avg_cand_size",
-            "missing_singleton_ratio",
-            "missing_singleton_acc",
-            "missing_empty_ratio",
+            "low_conf_classifier_acc",
+            "low_conf_proto_acc",
+            "low_conf_agree_rate",
+            "low_conf_agree_cls_acc",
+            "cls95_agree_rate",
+            "cls95_agree_sample_rate",
+            "cls95_agree_acc",
+            "cls95_proto_ok_rate",
+            "cls95_proto_ok_cls_acc",
+            "cls95_discard_rate",
+            "cls95_discard_acc",
+            "cls95_discard_mis_rate",
         )
         for name in metric_names:
             setattr(self, name, [])
+        self.proto_correct_conf_mean = []
+        self.proto_correct_conf_sum = []
+        self.proto_correct_conf_count = []
+        self.proto_conf_threshold = []
+        self.proto_conf_threshold_valid = []
+        self.proto_conf_threshold_count = []
+        self.proto_conf_threshold_correct = []
+        self.proto_conf_threshold_acc = []
+        self.proto_candidate_counts = []
+        self.proto_candidate_valid = []
+        self.proto_candidate_empty_rate = []
+        self.proto_candidate_single_rate = []
+        self.proto_candidate_multi_rate = []
+        self.proto_candidate_mean_count = []
+        self.proto_candidate_true_coverage = []
+        self.proto_candidate_single_coverage = []
+        self.proto_candidate_multi_coverage = []
+        self.proto_candidate_single_accuracy = []
+        self.proto_candidate_multi_accuracy = []
+        self.proto_candidate_nonempty_accuracy = []
+        self.proto_low_candidate_counts = []
+        self.proto_low_candidate_valid = []
+        self.proto_low_candidate_empty_rate = []
+        self.proto_low_candidate_single_rate = []
+        self.proto_low_candidate_multi_rate = []
+        self.proto_low_candidate_mean_count = []
+        self.proto_low_candidate_true_coverage = []
+        self.proto_low_candidate_single_coverage = []
+        self.proto_low_candidate_multi_coverage = []
+        self.proto_low_candidate_single_accuracy = []
+        self.proto_low_candidate_multi_accuracy = []
+        self.proto_low_candidate_nonempty_accuracy = []
+        self.proto_candidate_size_counts = []
+        self.proto_candidate_size_correct = []
+        self.proto_low_candidate_size_counts = []
+        self.proto_low_candidate_size_correct = []
+        self.hc_diag = []
+        self.proto_diag = []
 
     @staticmethod
     def _percent(value, total):
@@ -497,6 +633,7 @@ class Server(BaseServer):
                 + self.proto_sep_weight * sep_loss
             )
 
+            check_losses(loss, locals())
             loss.backward()
             optimizer.step()
 
@@ -517,7 +654,7 @@ class Server(BaseServer):
     def _evaluate_accuracy(self):
         loader = DataLoader(self.test_set, batch_size=256, shuffle=False)
         self.model.to(self.device).eval()
-        prototypes = self.global_protos.to(self.device)
+        prototypes = self.proto_g.to(self.device)
         valid = self.global_valid.to(self.device).bool()
         mean_prototypes = self.mean_protos.to(self.device)
         mean_valid = self.mean_valid.to(self.device).bool()
@@ -564,7 +701,7 @@ class Server(BaseServer):
                 Params(
                     **asdict(base),
                     unlabeled_ratio=self.unlabeled_ratio,
-                    global_protos=self.global_protos.clone(),
+                    proto_g=self.proto_g.clone(),
                     global_valid=self.global_valid.clone(),
                     proto_scale=self.proto_scale,
                     lambda_s=self.lambda_s,
@@ -584,10 +721,54 @@ class Server(BaseServer):
             )
             ltot_sum = sum(train_results[cid]["loss_total_sum"] for cid in selected)
             ltot_cnt = sum(train_results[cid]["loss_total_count"] for cid in selected)
+            lxu_sum = sum(train_results[cid]["loss_x_u_sum"] for cid in selected)
+            lxu_cnt = sum(train_results[cid]["loss_x_u_count"] for cid in selected)
+            lcalu_sum = sum(
+                train_results[cid]["loss_calibrate_u_sum"] for cid in selected
+            )
+            lcalu_cnt = sum(
+                train_results[cid]["loss_calibrate_u_count"] for cid in selected
+            )
+            pseudo_count = sum(train_results[cid]["pseudo_count"] for cid in selected)
+            pseudo_correct = sum(
+                train_results[cid]["pseudo_correct"] for cid in selected
+            )
+            unlabeled_count = sum(
+                train_results[cid]["unlabeled_count"] for cid in selected
+            )
+            hc_diag = {
+                "lo": [0, 0, 0],
+                "go": [0, 0, 0],
+                "b": [0, 0, 0, 0, 0],
+                "n": [0, 0, 0],
+                "l": [0, 0, 0],
+                "g": [0, 0, 0],
+                "u": [0, 0, 0],
+            }
+            proto_diag = {
+                "all": [0, 0, 0, 0, 0],
+                "local_high": [0, 0, 0, 0, 0],
+            }
+            for cid in selected:
+                for key, values in train_results[cid]["hc_diag"].items():
+                    for index, value in enumerate(values):
+                        hc_diag[key][index] += value
+                for key, values in train_results[cid]["proto_diag"].items():
+                    for index, value in enumerate(values):
+                        proto_diag[key][index] += value
 
             self.loss_x.append(lx_sum / max(1, lx_cnt))
             self.loss_calibrate.append(lcal_sum / max(1, lcal_cnt))
+            self.loss_x_u.append(lxu_sum / max(1, lxu_cnt))
+            self.loss_calibrate_u.append(lcalu_sum / max(1, lcalu_cnt))
+            self.pseudo_count.append(pseudo_count)
+            self.pseudo_rate.append(100.0 * pseudo_count / max(1, unlabeled_count))
+            self.pseudo_acc.append(
+                100.0 * pseudo_correct / pseudo_count if pseudo_count else 0.0
+            )
             self.loss.append(ltot_sum / max(1, ltot_cnt))
+            self.hc_diag.append(hc_diag)
+            self.proto_diag.append(proto_diag)
 
             # 2. FedAvg 聚合模型参数
             states = [train_results[cid]["state"] for cid in selected]
@@ -614,120 +795,33 @@ class Server(BaseServer):
             self.mean_valid = total_count.gt(0).cpu()
 
             # 4. 优化目标原型并获取空间内在尺度
-            self.global_protos = self._optimize_global_prototypes(
+            self.proto_g = self._optimize_global_prototypes(
                 self.mean_protos,
                 self.mean_valid,
             )
             self.global_valid = self.mean_valid.clone()
 
-            # 5. 距离分位数校准 (使用当前轮最新的全局模型与目标原型)
-            cal_params = [
-                ClientCalibrateParams(
-                    **asdict(base),
-                    global_protos=self.global_protos.clone(),
-                    global_valid=self.global_valid.clone(),
-                    proto_scale=self.proto_scale,
+            # 5. 诊断仅观察无标签分类器与原型预测
+            if self.proto_correct_conf_count:
+                previous_threshold = torch.tensor(
+                    self.proto_correct_conf_mean[-1], dtype=torch.float32
                 )
-                for base in self.build_base_params(selected)
-            ]
-
-            cal_results = self.run_clients(
-                client_calibrate_worker,
-                cal_params,
-            )
-
-            # 6. 服务器精确聚合各类 Q10、Q50 距离半径
-            radius_q10 = torch.zeros(self.num_class)
-            radius_q50 = torch.zeros(self.num_class)
-            radius_valid = torch.zeros(self.num_class, dtype=torch.bool)
-            for c in range(self.num_class):
-                parts = [
-                    cal_results[cid]["class_distances"][c]
-                    for cid in selected
-                    if cal_results[cid]["class_distances"][c].numel() > 0
-                ]
-                if parts:
-                    d = torch.cat(parts)
-                    radius_q10[c] = torch.quantile(d, 0.10)
-                    radius_q50[c] = torch.quantile(d, 0.50)
-                    radius_valid[c] = True
-            self.radius_q10 = radius_q10
-            self.radius_q50 = radius_q50
-            self.radius_valid = radius_valid
-
-            valid_idx = torch.where(radius_valid & self.global_valid)[0]
-            pair_overlap10 = pair_overlap50 = 0.0
-            pair_total = 0
-            midpoint10 = []
-            midpoint50 = []
-            if valid_idx.numel() >= 2:
-                proto_dist = mse_distance(
-                    self.global_protos[valid_idx], self.global_protos[valid_idx]
-                )
-                for i in range(valid_idx.numel()):
-                    for j in range(i + 1, valid_idx.numel()):
-                        ci, cj = valid_idx[i], valid_idx[j]
-                        dij = float(proto_dist[i, j])
-                        if dij <= 0:
-                            continue
-                        pair_total += 1
-                        if float(torch.sqrt(radius_q10[ci]) + torch.sqrt(radius_q10[cj])) >= dij**0.5:
-                            pair_overlap10 += 1
-                        if float(torch.sqrt(radius_q50[ci]) + torch.sqrt(radius_q50[cj])) >= dij**0.5:
-                            pair_overlap50 += 1
-                for i in range(valid_idx.numel()):
-                    ci = valid_idx[i]
-                    other = proto_dist[i].clone()
-                    other[i] = float("inf")
-                    nearest = other.min().clamp_min(1e-12)
-                    midpoint10.append(float(4 * radius_q10[ci] / nearest))
-                    midpoint50.append(float(4 * radius_q50[ci] / nearest))
-            pair_overlap10 = 100.0 * pair_overlap10 / max(1, pair_total)
-            # 5. 距离分位数校准 (使用当前轮最新的全局模型与目标原型)
-            midpoint10_mean = sum(midpoint10) / max(1, len(midpoint10))
-            midpoint50_mean = sum(midpoint50) / max(1, len(midpoint50))
-
-            distance_summary = []
-            for c in range(self.num_class):
-                parts = [
-                    cal_results[cid]["class_distances"][c]
-                    for cid in selected
-                    if cal_results[cid]["class_distances"][c].numel() > 0
-                ]
-                if parts:
-                    d = torch.cat(parts)
-                    q = torch.quantile(
-                        d, torch.tensor([0.01, 0.10, 0.50, 0.90, 0.99, 1.0])
-                    )
-                    distance_summary.append((c, int(d.numel()), [float(v) for v in q]))
-            inter_distance_summary = []
-            nearest_inter_summary = []
-            if valid_idx.numel() >= 2:
-                inter_values = proto_dist[torch.triu(
-                    torch.ones_like(proto_dist, dtype=torch.bool), diagonal=1
-                )]
-                inter_values = inter_values[torch.isfinite(inter_values) & (inter_values > 0)]
-                if inter_values.numel() > 0:
-                    iq = torch.quantile(
-                        inter_values,
-                        torch.tensor([0.01, 0.10, 0.50, 0.90, 0.99]),
-                    )
-                    inter_distance_summary = [float(v) for v in iq]
-                for i, c in enumerate(valid_idx.tolist()):
-                    other = proto_dist[i].clone()
-                    other[i] = float("inf")
-                    nearest_inter_summary.append((c, float(other.min())))
-
-            # 6. 服务器精确聚合各类 Q10、Q50 距离半径
+                previous_threshold_valid = torch.tensor(
+                    self.proto_correct_conf_count[-1], dtype=torch.float32
+                ).gt(0) & torch.isfinite(previous_threshold)
+            else:
+                previous_threshold = torch.zeros(self.num_class)
+                previous_threshold_valid = torch.zeros(self.num_class, dtype=torch.bool)
+            self.proto_conf_threshold.append(previous_threshold.tolist())
+            self.proto_conf_threshold_valid.append(previous_threshold_valid.tolist())
             diag_params = [
                 ClientDiagnoseParams(
                     **asdict(base),
-                    global_protos=self.global_protos.clone(),
+                    proto_g=self.proto_g.clone(),
                     global_valid=self.global_valid.clone(),
                     proto_scale=self.proto_scale,
-                    radius_q10=self.radius_q10.clone(),
-                    radius_q50=self.radius_q50.clone(),
-                    radius_valid=self.radius_valid.clone(),
+                    proto_conf_threshold=previous_threshold.clone(),
+                    proto_conf_threshold_valid=previous_threshold_valid.clone(),
                 )
                 for base in self.build_base_params(selected)
             ]
@@ -740,6 +834,197 @@ class Server(BaseServer):
             diag = torch.stack(
                 [diag_results[cid]["diag_counts"] for cid in selected]
             ).sum(dim=0)
+            threshold_count = torch.stack(
+                [diag_results[cid]["proto_conf_threshold_count"] for cid in selected]
+            ).sum(dim=0)
+            threshold_correct = torch.stack(
+                [diag_results[cid]["proto_conf_threshold_correct"] for cid in selected]
+            ).sum(dim=0)
+            candidate_counts = torch.stack(
+                [diag_results[cid]["proto_candidate_counts"] for cid in selected]
+            ).sum(dim=0)
+            low_candidate_counts = torch.stack(
+                [diag_results[cid]["proto_low_candidate_counts"] for cid in selected]
+            ).sum(dim=0)
+            cand_size_counts = torch.stack(
+                [diag_results[cid]["proto_candidate_size_counts"] for cid in selected]
+            ).sum(dim=0)
+            cand_size_correct = torch.stack(
+                [diag_results[cid]["proto_candidate_size_correct"] for cid in selected]
+            ).sum(dim=0)
+            low_cand_size_counts = torch.stack(
+                [
+                    diag_results[cid]["proto_low_candidate_size_counts"]
+                    for cid in selected
+                ]
+            ).sum(dim=0)
+            low_cand_size_correct = torch.stack(
+                [
+                    diag_results[cid]["proto_low_candidate_size_correct"]
+                    for cid in selected
+                ]
+            ).sum(dim=0)
+            candidate_valid = bool(
+                previous_threshold_valid.any()
+                and self.global_valid.any()
+                and candidate_counts[0] > 0
+            )
+            if candidate_valid:
+                candidate_total = candidate_counts[0]
+                candidate_rates = {
+                    "empty": float(candidate_counts[1] / candidate_total * 100),
+                    "single": float(candidate_counts[2] / candidate_total * 100),
+                    "multi": float(candidate_counts[3] / candidate_total * 100),
+                    "mean": float(candidate_counts[4] / candidate_total),
+                    "true": float(candidate_counts[5] / candidate_total * 100),
+                    "single_true": (
+                        float(candidate_counts[6] / candidate_counts[2] * 100)
+                        if candidate_counts[2] > 0
+                        else float("nan")
+                    ),
+                    "multi_true": (
+                        float(candidate_counts[7] / candidate_counts[3] * 100)
+                        if candidate_counts[3] > 0
+                        else float("nan")
+                    ),
+                    "single_accuracy": float(
+                        candidate_counts[6] / candidate_counts[2] * 100
+                    )
+                    if candidate_counts[2] > 0
+                    else float("nan"),
+                    "multi_accuracy": float(
+                        candidate_counts[7] / candidate_counts[3] * 100
+                    )
+                    if candidate_counts[3] > 0
+                    else float("nan"),
+                    "nonempty_accuracy": float(
+                        (candidate_counts[6] + candidate_counts[7])
+                        / (candidate_counts[2] + candidate_counts[3])
+                        * 100
+                    )
+                    if candidate_counts[2] + candidate_counts[3] > 0
+                    else float("nan"),
+                }
+            else:
+                candidate_rates = {
+                    key: float("nan")
+                    for key in (
+                        "empty",
+                        "single",
+                        "multi",
+                        "mean",
+                        "true",
+                        "single_true",
+                        "multi_true",
+                        "single_accuracy",
+                        "multi_accuracy",
+                        "nonempty_accuracy",
+                    )
+                }
+            self.proto_candidate_counts.append(candidate_counts.tolist())
+            self.proto_candidate_valid.append(candidate_valid)
+            self.proto_candidate_empty_rate.append(candidate_rates["empty"])
+            self.proto_candidate_single_rate.append(candidate_rates["single"])
+            self.proto_candidate_multi_rate.append(candidate_rates["multi"])
+            self.proto_candidate_mean_count.append(candidate_rates["mean"])
+            self.proto_candidate_true_coverage.append(candidate_rates["true"])
+            self.proto_candidate_single_coverage.append(candidate_rates["single_true"])
+            self.proto_candidate_multi_coverage.append(candidate_rates["multi_true"])
+            self.proto_candidate_single_accuracy.append(
+                candidate_rates["single_accuracy"]
+            )
+            self.proto_candidate_multi_accuracy.append(
+                candidate_rates["multi_accuracy"]
+            )
+            self.proto_candidate_nonempty_accuracy.append(
+                candidate_rates["nonempty_accuracy"]
+            )
+            low_candidate_valid = bool(candidate_valid and low_candidate_counts[0] > 0)
+            if low_candidate_valid:
+                low_total = low_candidate_counts[0]
+                low_candidate_rates = {
+                    "empty": float(low_candidate_counts[1] / low_total * 100),
+                    "single": float(low_candidate_counts[2] / low_total * 100),
+                    "multi": float(low_candidate_counts[3] / low_total * 100),
+                    "mean": float(low_candidate_counts[4] / low_total),
+                    "true": float(low_candidate_counts[5] / low_total * 100),
+                    "single_true": (
+                        float(low_candidate_counts[6] / low_candidate_counts[2] * 100)
+                        if low_candidate_counts[2] > 0
+                        else float("nan")
+                    ),
+                    "multi_true": (
+                        float(low_candidate_counts[7] / low_candidate_counts[3] * 100)
+                        if low_candidate_counts[3] > 0
+                        else float("nan")
+                    ),
+                    "single_accuracy": float(
+                        low_candidate_counts[6] / low_candidate_counts[2] * 100
+                    )
+                    if low_candidate_counts[2] > 0
+                    else float("nan"),
+                    "multi_accuracy": float(
+                        low_candidate_counts[7] / low_candidate_counts[3] * 100
+                    )
+                    if low_candidate_counts[3] > 0
+                    else float("nan"),
+                    "nonempty_accuracy": float(
+                        (low_candidate_counts[6] + low_candidate_counts[7])
+                        / (low_candidate_counts[2] + low_candidate_counts[3])
+                        * 100
+                    )
+                    if low_candidate_counts[2] + low_candidate_counts[3] > 0
+                    else float("nan"),
+                }
+            else:
+                low_candidate_rates = {
+                    key: float("nan")
+                    for key in (
+                        "empty",
+                        "single",
+                        "multi",
+                        "mean",
+                        "true",
+                        "single_true",
+                        "multi_true",
+                        "single_accuracy",
+                        "multi_accuracy",
+                        "nonempty_accuracy",
+                    )
+                }
+            self.proto_low_candidate_counts.append(low_candidate_counts.tolist())
+            self.proto_low_candidate_valid.append(low_candidate_valid)
+            self.proto_low_candidate_empty_rate.append(low_candidate_rates["empty"])
+            self.proto_low_candidate_single_rate.append(low_candidate_rates["single"])
+            self.proto_low_candidate_multi_rate.append(low_candidate_rates["multi"])
+            self.proto_low_candidate_mean_count.append(low_candidate_rates["mean"])
+            self.proto_low_candidate_true_coverage.append(low_candidate_rates["true"])
+            self.proto_low_candidate_single_coverage.append(
+                low_candidate_rates["single_true"]
+            )
+            self.proto_low_candidate_multi_coverage.append(
+                low_candidate_rates["multi_true"]
+            )
+            self.proto_low_candidate_single_accuracy.append(
+                low_candidate_rates["single_accuracy"]
+            )
+            self.proto_low_candidate_multi_accuracy.append(
+                low_candidate_rates["multi_accuracy"]
+            )
+            self.proto_low_candidate_nonempty_accuracy.append(
+                low_candidate_rates["nonempty_accuracy"]
+            )
+            self.proto_candidate_size_counts.append(cand_size_counts.tolist())
+            self.proto_candidate_size_correct.append(cand_size_correct.tolist())
+            self.proto_low_candidate_size_counts.append(low_cand_size_counts.tolist())
+            self.proto_low_candidate_size_correct.append(low_cand_size_correct.tolist())
+            threshold_acc = [
+                (float(correct) / float(count) * 100.0 if count > 0 else float("nan"))
+                for count, correct in zip(threshold_count, threshold_correct)
+            ]
+            self.proto_conf_threshold_count.append(threshold_count.tolist())
+            self.proto_conf_threshold_correct.append(threshold_correct.tolist())
+            self.proto_conf_threshold_acc.append(threshold_acc)
 
             total = int(diag[0])
             unlabeled_cls_acc = 100.0 * float(diag[1]) / max(1, total)
@@ -760,97 +1045,77 @@ class Server(BaseServer):
             self.missing_classifier_acc.append(mis_cls_acc)
             self.missing_proto_acc.append(mis_prt_acc)
 
-            cand_total = int(diag[9])
-            if cand_total > 0:
-                cand_cov = 100.0 * float(diag[10]) / cand_total
-                avg_cand_size = float(diag[11]) / cand_total
-                singleton_ratio = 100.0 * float(diag[12]) / cand_total
-                singleton_acc = 100.0 * float(diag[13]) / max(1.0, float(diag[12]))
-                empty_ratio = 100.0 * float(diag[14]) / cand_total
-            else:
-                cand_cov = avg_cand_size = singleton_ratio = singleton_acc = (
-                    empty_ratio
-                ) = 0.0
-
-            self.cand_cov.append(cand_cov)
-            self.avg_cand_size.append(avg_cand_size)
-            self.singleton_ratio.append(singleton_ratio)
-            self.singleton_acc.append(singleton_acc)
-            self.empty_ratio.append(empty_ratio)
-
-            mis_cand_total = int(diag[15])
-            if mis_cand_total > 0:
-                mis_cand_cov = 100.0 * float(diag[16]) / mis_cand_total
-                mis_avg_cand_size = float(diag[17]) / mis_cand_total
-                mis_singleton_ratio = 100.0 * float(diag[18]) / mis_cand_total
-                mis_singleton_acc = 100.0 * float(diag[19]) / max(1.0, float(diag[18]))
-                mis_empty_ratio = 100.0 * float(diag[20]) / mis_cand_total
-            else:
-                mis_cand_cov = mis_avg_cand_size = mis_singleton_ratio = (
-                    mis_singleton_acc
-                ) = mis_empty_ratio = 0.0
-
-            self.missing_cand_cov.append(mis_cand_cov)
-            self.missing_avg_cand_size.append(mis_avg_cand_size)
-            self.missing_singleton_ratio.append(mis_singleton_ratio)
-            self.missing_singleton_acc.append(mis_singleton_acc)
-            self.missing_empty_ratio.append(mis_empty_ratio)
-            high_hit = 100.0 * float(diag[21]) / max(1, total)
-            high_cover = 100.0 * float(diag[22]) / max(1, total)
-            high_hit_acc = 100.0 * float(diag[22]) / max(1.0, float(diag[21]))
-            high_single = 100.0 * float(diag[23]) / max(1, total)
-            high_single_acc = 100.0 * float(diag[24]) / max(1.0, float(diag[23]))
-            high_multi = 100.0 * float(diag[25]) / max(1, total)
-            high_multi_hit = 100.0 * float(diag[25]) / max(1.0, float(diag[21]))
-            prob90_rate = 100.0 * float(diag[26]) / max(1, total)
-            prob90_acc = (
-                f"{100.0 * float(diag[27]) / float(diag[26]):.2f}%"
-                if diag[26] > 0 else "N/A"
+            low_total = float(diag[9])
+            low_conf_cls_acc = (
+                100.0 * float(diag[10]) / low_total if low_total > 0 else 0.0
             )
-            prob90_missing_rate = 100.0 * float(diag[28]) / max(1, mis_total)
-            prob90_missing_acc = (
-                f"{100.0 * float(diag[29]) / float(diag[28]):.2f}%"
-                if diag[28] > 0 else "N/A"
+            low_conf_proto_acc = (
+                100.0 * float(diag[11]) / low_total if low_total > 0 else 0.0
             )
-            cls95_rate = 100.0 * float(diag[30]) / max(1, total)
+            low_conf_agree_rate = (
+                100.0 * float(diag[12]) / low_total if low_total > 0 else 0.0
+            )
+            low_conf_agree_cls_acc = (
+                100.0 * float(diag[13]) / float(diag[12]) if diag[12] > 0 else 0.0
+            )
+            cls95_rate = 100.0 * float(diag[14]) / max(1, total)
             cls95_acc = (
-                f"{100.0 * float(diag[31]) / float(diag[30]):.2f}%"
-                if diag[30] > 0 else "N/A"
+                f"{100.0 * float(diag[15]) / float(diag[14]):.2f}%"
+                if diag[14] > 0
+                else "N/A"
             )
-            cls95_missing_rate = 100.0 * float(diag[32]) / max(1, mis_total)
+            cls95_missing_rate = 100.0 * float(diag[16]) / max(1, mis_total)
             cls95_missing_acc = (
-                f"{100.0 * float(diag[33]) / float(diag[32]):.2f}%"
-                if diag[32] > 0 else "N/A"
+                f"{100.0 * float(diag[17]) / float(diag[16]):.2f}%"
+                if diag[16] > 0
+                else "N/A"
             )
-            q50_text = (
-                f"覆盖={cand_cov:.2f}% | 平均候选数={avg_cand_size:.2f} | "
-                f"空集率={empty_ratio:.2f}% | 单类率={singleton_ratio:.2f}% | "
-                f"单类准确率={singleton_acc:.2f}%"
+            cls95_agree_rate = (
+                100.0 * float(diag[18]) / float(diag[14]) if diag[14] > 0 else 0.0
             )
-            distance_text = "\n".join(
-                f"  c{c} (n={n}): q01={q[0]:.4g} | q10={q[1]:.4g} | "
-                f"q50={q[2]:.4g} | q90={q[3]:.4g} | q99={q[4]:.4g} | q100={q[5]:.4g}"
-                for c, n, q in distance_summary
+            cls95_agree_sample_rate = 100.0 * float(diag[18]) / max(1, total)
+            cls95_agree_acc = (
+                100.0 * float(diag[19]) / float(diag[18]) if diag[18] > 0 else 0.0
             )
-            inter_text = (
-                "q01={:.4g},q10={:.4g},q50={:.4g},q90={:.4g},q99={:.4g}".format(
-                    *inter_distance_summary
-                )
-                if inter_distance_summary
-                else "无有效类间距离"
+            cls95_proto_ok_rate = (
+                100.0 * float(diag[20]) / float(diag[14]) if diag[14] > 0 else 0.0
             )
-            nearest_inter_text = "; ".join(
-                f"c{c}:{d:.4g}" for c, d in nearest_inter_summary
+            cls95_proto_ok_cls_acc = (
+                100.0 * float(diag[21]) / float(diag[20]) if diag[20] > 0 else 0.0
             )
-            intra_inter_ratio_text = ""
-            nearest_map = dict(nearest_inter_summary)
-            if nearest_map:
-                intra_inter_ratio_text = "; ".join(
-                    f"c{c}:{q[2] / nearest_map[c]:.3f}"
-                    for c, _, q in distance_summary
-                    if c in nearest_map and nearest_map[c] > 0
-                )
-
+            discard_cnt = float(diag[14]) - float(diag[18])
+            discard_ok_cnt = float(diag[15]) - float(diag[19])
+            cls95_discard_rate = (
+                100.0 * discard_cnt / float(diag[14]) if diag[14] > 0 else 0.0
+            )
+            cls95_discard_acc = (
+                100.0 * discard_ok_cnt / discard_cnt if discard_cnt > 0 else 0.0
+            )
+            cls95_discard_mis_rate = (
+                100.0 * discard_ok_cnt / float(diag[15]) if diag[15] > 0 else 0.0
+            )
+            conf_sum = diag[22 : 22 + self.num_class].tolist()
+            conf_count = diag[22 + self.num_class :].tolist()
+            conf_mean = [
+                value / count if count > 0 else float("nan")
+                for value, count in zip(conf_sum, conf_count)
+            ]
+            conf_mean_text = ", ".join(f"{value:.2f}" for value in conf_mean)
+            self.low_conf_classifier_acc.append(low_conf_cls_acc)
+            self.low_conf_proto_acc.append(low_conf_proto_acc)
+            self.low_conf_agree_rate.append(low_conf_agree_rate)
+            self.low_conf_agree_cls_acc.append(low_conf_agree_cls_acc)
+            self.cls95_agree_rate.append(cls95_agree_rate)
+            self.cls95_agree_sample_rate.append(cls95_agree_sample_rate)
+            self.cls95_agree_acc.append(cls95_agree_acc)
+            self.cls95_proto_ok_rate.append(cls95_proto_ok_rate)
+            self.cls95_proto_ok_cls_acc.append(cls95_proto_ok_cls_acc)
+            self.cls95_discard_rate.append(cls95_discard_rate)
+            self.cls95_discard_acc.append(cls95_discard_acc)
+            self.cls95_discard_mis_rate.append(cls95_discard_mis_rate)
+            self.proto_correct_conf_mean.append(conf_mean)
+            self.proto_correct_conf_sum.append(conf_sum)
+            self.proto_correct_conf_count.append(conf_count)
             # 8. 测试集评估
             acc, acc_proto_mean, acc_proto = self._evaluate_accuracy()
             self.acc.append(acc)
@@ -862,31 +1127,170 @@ class Server(BaseServer):
             # 9. 格式化控制台输出
             print(
                 f"\n--- FedTest 第 {round_idx + 1}/{self.rounds} 轮 ---\n"
-                f"测试准确率: 分类器={self.acc[-1]:.2f}% | 目标原型={self.acc_proto[-1]:.2f}% | 统计原型={self.acc_proto_mean[-1]:.2f}%\n"
-                f"训练损失: CE={self.loss_x[-1]:.4f} | 原型校准={self.loss_calibrate[-1]:.4f} | 总损失={self.loss[-1]:.4f}\n"
-                f"无标签分类: 分类器={unlabeled_cls_acc:.2f}% (常见={seen_cls_acc:.2f}%, 缺失={mis_cls_acc:.2f}%) | "
-                f"原型={unlabeled_prt_acc:.2f}% (常见={seen_prt_acc:.2f}%, 缺失={mis_prt_acc:.2f}%)\n"
+                f"测试准确率:\n"
+                f"  分类器={self.acc[-1]:.2f}% | 目标原型={self.acc_proto[-1]:.2f}% | 统计原型={self.acc_proto_mean[-1]:.2f}%\n"
+                f"训练损失:\n"
+                f"  总损失={self.loss[-1]:.4f}\n"
+                f"  CE={self.loss_x[-1]:.4f} | 原型校准={self.loss_calibrate[-1]:.4f}\n"
+                f"  无标签CE={self.loss_x_u[-1]:.4f} | 无标签原型校准={self.loss_calibrate_u[-1]:.4f}\n"
+                f"高置信伪标签:\n"
+                f"  数量={self.pseudo_count[-1]} | 比例={self.pseudo_rate[-1]:.2f}% | 准确率={self.pseudo_acc[-1]:.2f}%\n"
+                f"无标签分类:\n"
+                f"  分类器={unlabeled_cls_acc:.2f}% (常见={seen_cls_acc:.2f}%, 缺失={mis_cls_acc:.2f}%)\n"
+                f"  原型={unlabeled_prt_acc:.2f}% (常见={seen_prt_acc:.2f}%, 缺失={mis_prt_acc:.2f}%)\n"
                 f"无标签样本数: 总数={total} | 常见类={seen_total} | 缺失类={mis_total}\n"
-                f"候选集质量: 真实覆盖率={cand_cov:.2f}% | 平均候选数={avg_cand_size:.2f} | 空集率={empty_ratio:.2f}% | "
-                f"单候选率={singleton_ratio:.2f}% (准确率={singleton_acc:.2f}%)\n"
-                f"缺失类候选: 真实覆盖率={mis_cand_cov:.2f}% | 平均候选数={mis_avg_cand_size:.2f} | 空集率={mis_empty_ratio:.2f}% | "
-                f"单候选率={mis_singleton_ratio:.2f}% (准确率={mis_singleton_acc:.2f}%)\n"
-                f"Q10: 命中率={high_hit:.2f}% | 命中样本真实准确率={high_hit_acc:.2f}% | "
-                f"全体真实覆盖={high_cover:.2f}% | 单类率={high_single:.2f}% | "
-                f"单类准确率={high_single_acc:.2f}% | 多类命中率(全体)={high_multi:.2f}% | "
-                f"多类比例(Q10命中)={high_multi_hit:.2f}%\n"
-                f"原型概率>90%: 样本率={prob90_rate:.2f}% | 准确率={prob90_acc} | "
-                f"缺失类样本率={prob90_missing_rate:.2f}% | 缺失类准确率={prob90_missing_acc}\n"
-                f"分类器概率>95%: 样本率={cls95_rate:.2f}% | 准确率={cls95_acc} | "
-                f"缺失类样本率={cls95_missing_rate:.2f}% | 缺失类准确率={cls95_missing_acc}\n"
-                f"Q50: {q50_text}\n"
-                f"几何重叠: Q10={pair_overlap10:.2f}% | Q50={pair_overlap50:.2f}% | 中点比例均值(Q10/Q50)={midpoint10_mean:.4f}/{midpoint50_mean:.4f}\n"
-                f"原型预测正确样本类内距离分布:\n{distance_text}\n"
-                f"类间原型距离分布: {inter_text}\n"
-                f"各类最近异类原型距离: {nearest_inter_text}\n"
-                f"正确样本类内q50/最近类间距离: {intra_inter_ratio_text}\n"
-                f"半径: Q10有效={int(self.radius_valid.sum())} | Q50有效={int(self.radius_valid.sum())}\n"
+                f"分类器置信度>95%（最大 softmax）:\n"
+                f"  样本率={cls95_rate:.2f}% | 准确率={cls95_acc}\n"
+                f"  缺失类样本率={cls95_missing_rate:.2f}% | 缺失类准确率={cls95_missing_acc}\n"
+                f"分类器置信度>95%且与原型预测一致（保留）:\n"
+                f"  一致率={cls95_agree_rate:.2f}% | 样本率={cls95_agree_sample_rate:.2f}% | 准确率={cls95_agree_acc:.2f}%\n"
+                f"分类器置信度>95%且原型预测正确:\n"
+                f"  样本率={cls95_proto_ok_rate:.2f}% | 分类器准确率={cls95_proto_ok_cls_acc:.2f}%\n"
+                f"分类器置信度>95%但与原型预测不一致（剔除）:\n"
+                f"  剔除率={cls95_discard_rate:.2f}% | 剔除样本准确率={cls95_discard_acc:.2f}% | 正确样本误删率={cls95_discard_mis_rate:.2f}%\n"
+                f"分类器置信度<95%（最大 softmax）:\n"
+                f"  分类器准确率={low_conf_cls_acc:.2f}% | 原型准确率={low_conf_proto_acc:.2f}%\n"
+                f"  一致率={low_conf_agree_rate:.2f}% | 一致样本分类器准确率={low_conf_agree_cls_acc:.2f}%\n"
+                f"各类原型预测正确样本的原型预测置信度均值:\n"
+                f"  [{conf_mean_text}]\n"
                 f"本轮耗时: {self.round_time[-1]:.2f} 秒"
+            )
+            hc_rate = {
+                key: (
+                    "N/A"
+                    if values[0] == 0
+                    else f"{100.0 * values[1] / values[0]:.2f}%/"
+                    f"{100.0 * values[2] / values[0]:.2f}%"
+                )
+                for key, values in hc_diag.items()
+            }
+            proto_rate = {
+                key: (
+                    "N/A"
+                    if values[0] == 0
+                    else f"{100.0 * values[1] / values[0]:.2f}%/"
+                    f"{100.0 * values[2] / values[0]:.2f}%/"
+                    f"{100.0 * values[3] / values[0]:.2f}%/"
+                    f"{100.0 * values[4] / values[0]:.2f}%"
+                )
+                for key, values in proto_diag.items()
+            }
+            both_agree_rate = (
+                "N/A"
+                if hc_diag["b"][0] == 0
+                else f"{100.0 * hc_diag['b'][3] / hc_diag['b'][0]:.2f}%"
+            )
+            both_agree_correct_rate = (
+                "N/A"
+                if hc_diag["b"][3] == 0
+                else f"{100.0 * hc_diag['b'][4] / hc_diag['b'][3]:.2f}%"
+            )
+            print(
+                "训练池 L∪U 分类器高置信（数量/本地准确率/全局准确率）：\n"
+                f"  local={hc_diag['l'][0]}/{hc_rate['l']}，"
+                f"global={hc_diag['g'][0]}/{hc_rate['g']}，"
+                f"union={hc_diag['u'][0]}/{hc_rate['u']}\n"
+                "训练池 L∪U 分类器分组（数量/本地准确率/全局准确率）：\n"
+                f"  仅本地={hc_diag['lo'][0]}/{hc_rate['lo']}，"
+                f"仅全局={hc_diag['go'][0]}/{hc_rate['go']}，"
+                f"共同={hc_diag['b'][0]}/{hc_rate['b']}，"
+                f"均未选={hc_diag['n'][0]}/{hc_rate['n']}\n"
+                f"共同组：预测一致率={both_agree_rate}，"
+                f"一致样本准确率={both_agree_correct_rate}\n"
+                "训练池 L∪U 原型对照（数量/本地分类器准确率/原型准确率/一致率/一致且正确率）：\n"
+                f"  全部={proto_diag['all'][0]}/{proto_rate['all']}\n"
+                f"  本地高置信={proto_diag['local_high'][0]}/"
+                f"{proto_rate['local_high']}"
+            )
+            threshold_text = "\n".join(
+                (
+                    f"  类{class_id}: T={previous_threshold[class_id].item():.4f}，"
+                    f"候选={int(threshold_count[class_id])}，"
+                    f"正确={int(threshold_correct[class_id])}，准确率="
+                    f"{('N/A' if threshold_count[class_id] == 0 else f'{threshold_acc[class_id]:.2f}%')}"
+                )
+                if previous_threshold_valid[class_id]
+                else f"  类{class_id}: T=N/A，候选=N/A，正确=N/A，准确率=N/A"
+                for class_id in range(self.num_class)
+            )
+            print(f"纯U原型置信度阈值评估（使用上一轮T，按类）：\n{threshold_text}")
+            if candidate_valid:
+                candidate_line1 = (
+                    f"空={int(candidate_counts[1])} "
+                    f"({candidate_rates['empty']:.2f}%) | "
+                    f"单={int(candidate_counts[2])} "
+                    f"({candidate_rates['single']:.2f}%) | "
+                    f"多={int(candidate_counts[3])} "
+                    f"({candidate_rates['multi']:.2f}%) | "
+                    f"平均候选数={candidate_rates['mean']:.2f}"
+                )
+                candidate_line2 = (
+                    f"总体覆盖={candidate_rates['true']:.2f}% | "
+                    f"单候选准确率={('N/A' if candidate_rates['single_accuracy'] != candidate_rates['single_accuracy'] else f'{candidate_rates["single_accuracy"]:.2f}%')} | "
+                    f"多候选覆盖={('N/A' if candidate_rates['multi_true'] != candidate_rates['multi_true'] else f'{candidate_rates["multi_true"]:.2f}%')} | "
+                    f"非空合并准确率={('N/A' if candidate_rates['nonempty_accuracy'] != candidate_rates['nonempty_accuracy'] else f'{candidate_rates["nonempty_accuracy"]:.2f}%')}"
+                )
+                cand_size_parts = [
+                    f"{k}类={int(cand_size_counts[k])} "
+                    f"({(cand_size_counts[k] / candidate_total * 100.0):.2f}%, "
+                    f"准确率={(cand_size_correct[k] / cand_size_counts[k] * 100.0):.2f}%)"
+                    for k in range(1, self.num_class + 1)
+                    if cand_size_counts[k] > 0
+                ]
+                candidate_line3 = (
+                    " | ".join(cand_size_parts) if cand_size_parts else "无非空候选"
+                )
+            else:
+                candidate_line1 = "N/A"
+                candidate_line2 = "N/A"
+                candidate_line3 = "N/A"
+            print(
+                "纯U原型候选集（空/单/多/平均候选数）：\n"
+                f"  {candidate_line1}\n"
+                "纯U原型候选集（各候选集大小具体数量比例及准确率 [占全体, 准确率]）：\n"
+                f"  {candidate_line3}\n"
+                "纯U原型候选集（真实类覆盖与准确率）：\n"
+                f"  {candidate_line2}"
+            )
+            if low_candidate_valid:
+                low_candidate_line1 = (
+                    f"空={int(low_candidate_counts[1])} "
+                    f"({low_candidate_rates['empty']:.2f}%) | "
+                    f"单={int(low_candidate_counts[2])} "
+                    f"({low_candidate_rates['single']:.2f}%) | "
+                    f"多={int(low_candidate_counts[3])} "
+                    f"({low_candidate_rates['multi']:.2f}%) | "
+                    f"平均候选数={low_candidate_rates['mean']:.2f}"
+                )
+                low_candidate_line2 = (
+                    f"总体覆盖={low_candidate_rates['true']:.2f}% | "
+                    f"单候选准确率={('N/A' if low_candidate_rates['single_accuracy'] != low_candidate_rates['single_accuracy'] else f'{low_candidate_rates["single_accuracy"]:.2f}%')} | "
+                    f"多候选覆盖={('N/A' if low_candidate_rates['multi_true'] != low_candidate_rates['multi_true'] else f'{low_candidate_rates["multi_true"]:.2f}%')} | "
+                    f"非空合并准确率={('N/A' if low_candidate_rates['nonempty_accuracy'] != low_candidate_rates['nonempty_accuracy'] else f'{low_candidate_rates["nonempty_accuracy"]:.2f}%')}"
+                )
+                low_cand_size_parts = [
+                    f"{k}类={int(low_cand_size_counts[k])} "
+                    f"({(low_cand_size_counts[k] / low_total * 100.0):.2f}%, "
+                    f"准确率={(low_cand_size_correct[k] / low_cand_size_counts[k] * 100.0):.2f}%)"
+                    for k in range(1, self.num_class + 1)
+                    if low_cand_size_counts[k] > 0
+                ]
+                low_candidate_line3 = (
+                    " | ".join(low_cand_size_parts)
+                    if low_cand_size_parts
+                    else "无非空候选"
+                )
+            else:
+                low_candidate_line1 = "N/A"
+                low_candidate_line2 = "N/A"
+                low_candidate_line3 = "N/A"
+            print(
+                "全局分类器低置信纯U原型候选集（空/单/多/平均候选数）：\n"
+                f"  {low_candidate_line1}\n"
+                "全局分类器低置信纯U原型候选集（各候选集大小具体数量比例及准确率 [占全体, 准确率]）：\n"
+                f"  {low_candidate_line3}\n"
+                "全局分类器低置信纯U原型候选集（真实类覆盖与准确率）：\n"
+                f"  {low_candidate_line2}"
             )
 
     def save(self):
@@ -897,6 +1301,11 @@ class Server(BaseServer):
             "loss": self.loss,
             "loss_x": self.loss_x,
             "loss_calibrate": self.loss_calibrate,
+            "loss_x_u": self.loss_x_u,
+            "loss_calibrate_u": self.loss_calibrate_u,
+            "pseudo_count": self.pseudo_count,
+            "pseudo_rate": self.pseudo_rate,
+            "pseudo_acc": self.pseudo_acc,
             "round_time": self.round_time,
             "unlabeled_classifier_acc": self.unlabeled_classifier_acc,
             "unlabeled_proto_acc": self.unlabeled_proto_acc,
@@ -904,26 +1313,63 @@ class Server(BaseServer):
             "seen_proto_acc": self.seen_proto_acc,
             "missing_classifier_acc": self.missing_classifier_acc,
             "missing_proto_acc": self.missing_proto_acc,
-            "cand_cov": self.cand_cov,
-            "avg_cand_size": self.avg_cand_size,
-            "singleton_ratio": self.singleton_ratio,
-            "singleton_acc": self.singleton_acc,
-            "empty_ratio": self.empty_ratio,
-            "missing_cand_cov": self.missing_cand_cov,
-            "missing_avg_cand_size": self.missing_avg_cand_size,
-            "missing_singleton_ratio": self.missing_singleton_ratio,
-            "missing_singleton_acc": self.missing_singleton_acc,
-            "missing_empty_ratio": self.missing_empty_ratio,
+            "low_conf_classifier_acc": self.low_conf_classifier_acc,
+            "low_conf_proto_acc": self.low_conf_proto_acc,
+            "low_conf_agree_rate": self.low_conf_agree_rate,
+            "low_conf_agree_cls_acc": self.low_conf_agree_cls_acc,
+            "cls95_agree_rate": self.cls95_agree_rate,
+            "cls95_agree_sample_rate": self.cls95_agree_sample_rate,
+            "cls95_agree_acc": self.cls95_agree_acc,
+            "cls95_proto_ok_rate": self.cls95_proto_ok_rate,
+            "cls95_proto_ok_cls_acc": self.cls95_proto_ok_cls_acc,
+            "cls95_discard_rate": self.cls95_discard_rate,
+            "cls95_discard_acc": self.cls95_discard_acc,
+            "cls95_discard_mis_rate": self.cls95_discard_mis_rate,
+            "proto_correct_conf_mean": self.proto_correct_conf_mean,
+            "proto_correct_conf_sum": self.proto_correct_conf_sum,
+            "proto_correct_conf_count": self.proto_correct_conf_count,
+            "hc_diag": self.hc_diag,
+            "proto_diag": self.proto_diag,
+            "proto_conf_threshold": self.proto_conf_threshold,
+            "proto_conf_threshold_valid": self.proto_conf_threshold_valid,
+            "proto_conf_threshold_count": self.proto_conf_threshold_count,
+            "proto_conf_threshold_correct": self.proto_conf_threshold_correct,
+            "proto_conf_threshold_acc": self.proto_conf_threshold_acc,
+            "proto_candidate_counts": self.proto_candidate_counts,
+            "proto_candidate_valid": self.proto_candidate_valid,
+            "proto_candidate_empty_rate": self.proto_candidate_empty_rate,
+            "proto_candidate_single_rate": self.proto_candidate_single_rate,
+            "proto_candidate_multi_rate": self.proto_candidate_multi_rate,
+            "proto_candidate_mean_count": self.proto_candidate_mean_count,
+            "proto_candidate_true_coverage": self.proto_candidate_true_coverage,
+            "proto_candidate_single_coverage": self.proto_candidate_single_coverage,
+            "proto_candidate_multi_coverage": self.proto_candidate_multi_coverage,
+            "proto_candidate_single_accuracy": self.proto_candidate_single_accuracy,
+            "proto_candidate_multi_accuracy": self.proto_candidate_multi_accuracy,
+            "proto_candidate_nonempty_accuracy": self.proto_candidate_nonempty_accuracy,
+            "proto_low_candidate_counts": self.proto_low_candidate_counts,
+            "proto_low_candidate_valid": self.proto_low_candidate_valid,
+            "proto_low_candidate_empty_rate": self.proto_low_candidate_empty_rate,
+            "proto_low_candidate_single_rate": self.proto_low_candidate_single_rate,
+            "proto_low_candidate_multi_rate": self.proto_low_candidate_multi_rate,
+            "proto_low_candidate_mean_count": self.proto_low_candidate_mean_count,
+            "proto_low_candidate_true_coverage": self.proto_low_candidate_true_coverage,
+            "proto_low_candidate_single_coverage": self.proto_low_candidate_single_coverage,
+            "proto_low_candidate_multi_coverage": self.proto_low_candidate_multi_coverage,
+            "proto_low_candidate_single_accuracy": self.proto_low_candidate_single_accuracy,
+            "proto_low_candidate_multi_accuracy": self.proto_low_candidate_multi_accuracy,
+            "proto_low_candidate_nonempty_accuracy": self.proto_low_candidate_nonempty_accuracy,
+            "proto_candidate_size_counts": self.proto_candidate_size_counts,
+            "proto_candidate_size_correct": self.proto_candidate_size_correct,
+            "proto_low_candidate_size_counts": self.proto_low_candidate_size_counts,
+            "proto_low_candidate_size_correct": self.proto_low_candidate_size_correct,
         }
 
         self.deal_save(
             metrics,
             {
                 "global": self.model.state_dict(),
-                "proto": self.global_protos,
+                "proto": self.proto_g,
                 "proto_mean": self.mean_protos,
-                "radius_q10": self.radius_q10,
-                "radius_q50": self.radius_q50,
-                "radius_valid": self.radius_valid,
             },
         )

@@ -32,7 +32,7 @@ def prepare_data(args):
     配置层已保证 SSL 与 FDG 互斥；以下分支仅负责分派各个互斥场景。
     """
     dataset_name = args.dataset
-    raw_dir = "./datasets/raw"
+    raw_dir = os.path.expanduser(args.raw_dir)
     raw_path = os.path.join(raw_dir, f"{dataset_name}_raw.pt")
 
     need_process = not os.path.exists(raw_path)
