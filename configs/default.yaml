@@ -3,7 +3,6 @@
 # 数据相关 (Data)
 dataset: # cifar10, cifar100, cinic10, tiny_imagenet, mnist, fashionmnist, emnist
     - cifar10
-raw_dir: ~/datasets
     # - cifar100
     # - cinic10
     # - tiny_imagenet
@@ -11,6 +10,7 @@ raw_dir: ~/datasets
     # - fashionmnist
     # - emnist
     # - cifar10_dg
+raw_dir: ~/datasets
 model:
     - cnn
     # - resnet18
