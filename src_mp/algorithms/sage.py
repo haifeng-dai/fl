@@ -10,12 +10,13 @@ from .core.model import build_model
 
 
 class Client(BaseClientExecutor):
-    def __init__(self, args, device, num_class) -> None:
-        super().__init__(args, device, num_class)
+    def __init__(self, args, device, num_class, **kwargs) -> None:
+        super().__init__(args, device, num_class, **kwargs)
         self.dataset = args.dataset
         self.conf = args.conf
         self.kappa: float = math.log(2.0) / 0.05
         self.lambda_u = args.lambda_u
+        self.unlabeled_ratio = args.unlabeled_ratio
 
         self.model_g = build_model(self.model_param).to(self.device)
         self.model_g.eval()
@@ -34,46 +35,38 @@ class Client(BaseClientExecutor):
             clone_state(self.model.state_dict()),
         )
 
-    def run_epoch(self, total: float, batches: int) -> tuple[float, int]:
-        for x, y, _, is_labeled in self.loader:
-            x = x.to(self.device)
-            y = y.to(self.device)
-            is_labeled = is_labeled.to(self.device).bool()
+    def run_epoch(
+        self,
+        total: float,
+        batches: int,
+    ) -> tuple[float, int]:
+        for (x_l, y_l), (x_u, *_) in self.get_ssl_loaders():
+            x_l, y_l = x_l.to(self.device), y_l.to(self.device)
+            x_u = x_u.to(self.device)
+            # 有标签样本使用弱增强，并在增强后完成归一化。
+            x_l_w = weak_augment(x_l, self.dataset)
+            logits_l = self.model(x_l_w)
+            loss = ce_loss(logits_l, y_l)
 
-            x_l, y_l = x[is_labeled], y[is_labeled]
-            x_u = x[~is_labeled]
-
-            # 与模型计算图连接的 float 标量；避免 L/U 均无有效样本时
-            # uint8 零值无法执行 backward。
-            loss = self.model.classifier.weight.sum() * 0.0
-
-            if x_l.size(0) > 0:
-                # 有标签样本使用弱增强，并在增强后完成归一化。
-                x_l_w = weak_augment(x_l, self.dataset)
-                logits_l = self.model(x_l_w)
-                loss = loss + ce_loss(logits_l, y_l)
-
-            if x_u.size(0) > 0:
-                x_u_w = weak_augment(x_u, self.dataset)
-                valid_indices, confidence_l, confidence_g, targets_l, targets_g = (
-                    self._confident_samples(x_u_w)
+            x_u_w = weak_augment(x_u, self.dataset)
+            valid_indices, confidence_l, confidence_g, targets_l, targets_g = (
+                self._confident_samples(x_u_w)
+            )
+            if valid_indices.numel() > 0:
+                targets = self._build_pseudo_label(
+                    confidence_l,
+                    confidence_g,
+                    targets_l,
+                    targets_g,
                 )
-
-                if valid_indices.numel() > 0:
-                    targets = self._build_pseudo_label(
-                        confidence_l,
-                        confidence_g,
-                        targets_l,
-                        targets_g,
-                    )
-                    x_u_s = strong_augment(x_u[valid_indices], self.dataset)
-                    logits_u = self.model(x_u_s)
-                    loss_u = F.kl_div(
-                        F.log_softmax(logits_u, dim=1),
-                        targets,
-                        reduction="none",
-                    ).sum(dim=1)
-                    loss = loss + self.lambda_u * loss_u.mean()
+                x_u_s = strong_augment(x_u[valid_indices], self.dataset)
+                logits_u = self.model(x_u_s)
+                loss_u = F.kl_div(
+                    F.log_softmax(logits_u, dim=1),
+                    targets,
+                    reduction="none",
+                ).sum(dim=1)
+                loss = loss + self.lambda_u * loss_u.mean()
 
             self.check_nan(loss)
             self.optimizer.zero_grad()
@@ -129,6 +122,13 @@ class Client(BaseClientExecutor):
 class Server(BaseServer):
     client_cls = Client
     supports_ssl = True
+
+    def __init__(self, args, devices):
+        if args.ssl in ("none", "client"):
+            raise ValueError(
+                "SAGE 仅支持 sample、double、sfd 等每客户端含 L/U 的 SSL 模式。"
+            )
+        super().__init__(args, devices)
 
     def apply_result(self, results):
         self.aggregate_model(results)

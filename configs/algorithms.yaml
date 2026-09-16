@@ -12,6 +12,28 @@ fedavg_lpl:
     lambda_u: 1.0
     conf: 0.95
 
+fedlabel:
+    lambda_u: 1.0
+    lambda_0: 1.0
+    conf: 0.95
+
+feddure:
+    lambda_u: 1.0
+    conf: 0.95
+
+fedloke:
+    lambda_u: 1.0
+    ema_weight: 0.95
+    entropy_threshold: 0.5
+
+feddb:
+    lambda_u: 1.0
+    conf: 0.95
+
+fedavg_flexmatch:
+    lambda_u: 1.0
+    conf: 0.95
+
 fedprox:
     mu: 0.01
 
@@ -121,7 +143,20 @@ dfedpgp:
     weight_decay_v: 0.0
 
 proxyfl:
-    mu: 0.01
+    conf: 0.95
+    lambda_u: 1.0
+    temperature: 1.0
+    server_epochs: 100
+    server_lr: 0.01
+    server_batch_size: 64
+    gpt_threshold: 100.0
+    ema_beta: 0.99
+
+protofl:
+    conf: 0.95
+    lambda_u: 1.0
+    lambda_p: 1.0
+    temperature: 1.0
 
 proxyfl_ssl:
     conf: 0.95
@@ -132,48 +167,6 @@ proxyfl_ssl:
     gpt_batch_size: 64
     gpt_threshold: 100.0
     ema_beta: 0.99
-
-# 联邦半监督学习测试算法（fedtest）
-fedtest:
-    lambda_s: 1.0
-    lambda_u: 1.0
-    proto_anchor_weight: 1.0
-    proto_sep_weight: 1.0
-    proto_opt_lr: 0.001
-    proto_opt_steps: 50
-
-fedtest_p_r:
-    lambda_s: 1.0
-    lambda_p: 0.0
-    lambda_u: 1.0
-    tau: 0.1
-    proto_radius_quantile: 0.95
-    proto_anchor_weight: 1.0
-    proto_sep_weight: 1.0
-    proto_opt_lr: 0.001
-    proto_opt_steps: 50
-
-fedtest_p_t:
-    lambda_s: 1.0
-    lambda_p: 0.0
-    lambda_u: 1.0
-    tau: 0.1
-    proto_low_confidence: 0.4
-    proto_temperature: 0.1
-    proto_gate_confidence: 0.6
-    proto_gate_margin: 0.2
-    pseudo_proto_weight: 0.1
-    proto_support_scale: 10.0
-    proto_stability_temperature: 0.1
-    proto_radius_quantile: 0.95
-    proto_anchor_weight: 1.0
-    proto_sep_weight: 1.0
-    proto_opt_lr: 0.001
-    proto_opt_steps: 50
-    proto_q_target_precision: 0.70
-    proto_q_min_samples: 20
-    proto_q_max_threshold: 0.65
-    proto_q_history_rounds: 3
 
 efhc:
     event_r: 250

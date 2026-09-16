@@ -40,12 +40,6 @@ def _strong_transform(height: int, width: int):
                 interpolation=InterpolationMode.BILINEAR,
                 fill=127,
             ),
-            v2.RandomErasing(
-                p=1.0,
-                scale=(0.25, 0.25),
-                ratio=(1.0, 1.0),
-                value=127,
-            ),
         ]
     )
 

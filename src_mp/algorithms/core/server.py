@@ -1,6 +1,5 @@
 import abc
 import logging
-import pprint
 import time
 
 import torch
@@ -35,7 +34,6 @@ class BaseServer(abc.ABC):
     def __init__(self, args, devices):
         if self.client_cls is None:
             raise TypeError("algorithm must define client_cls")
-        self.args = args
         self.is_ssl = args.ssl != "none"
         if self.is_ssl and not bool(type(self).supports_ssl):
             raise ValueError(
@@ -68,16 +66,20 @@ class BaseServer(abc.ABC):
                 client_id: clone_state(state) for client_id in range(self.num_clients)
             }
         self.pool = PersistentClientPool(
-            self.devices, args, self.num_class, self.client_cls
+            self.devices,
+            args,
+            self.num_class,
+            self.client_cls,
+            train_sets=self.train_sets,
         )
 
-        self.num_clients_per_round = max(1, int(args.num_clients * args.join_ratio))
+        self.num_selected = max(1, int(args.num_clients * args.join_ratio))
         self.selected: list[int] = []
 
     def select_clients(self):
         """随机选择当前通信轮次参与训练的客户端。"""
         self.selected = sorted(
-            torch.randperm(self.num_clients)[: self.num_clients_per_round].tolist()
+            torch.randperm(self.num_clients)[: self.num_selected].tolist()
         )
 
     def task(self, client_id, state, payload=None):
@@ -111,7 +113,6 @@ class BaseServer(abc.ABC):
         FedProx 可返回每个客户端的近端系数，FedPLN 可返回当前 PLN 状态。
         返回值应为 ``{client_id: payload}``，或返回 ``None``。
         """
-        return None
 
     def train_clients(self):
         """分发当前轮次训练任务并收集客户端结果。"""
@@ -171,11 +172,6 @@ class BaseServer(abc.ABC):
 
     def fit(self):
         """运行完整联邦训练流程，并记录进度与耗时统计。"""
-        params_text = pprint.pformat(vars(self.args), sort_dicts=True)
-        logger.info(
-            "params=%s",
-            params_text,
-        )
         progress = tqdm(
             total=self.rounds + 1,
             desc=self.algo.upper(),

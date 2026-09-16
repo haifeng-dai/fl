@@ -2,8 +2,6 @@ from typing import cast
 
 import torch
 
-from src.algorithms.utils.loss import dist_contrastive_loss
-
 from .core import (
     BaseClientExecutor,
     BaseServer,
@@ -13,6 +11,7 @@ from .core import (
     aggregate_weighted,
     ce_loss,
     clone_state,
+    dist_contrastive_loss,
 )
 
 
@@ -55,8 +54,8 @@ class PLN(torch.nn.Module):
 
 
 class Client(BaseClientExecutor):
-    def __init__(self, args, device, num_class):
-        super().__init__(args, device, num_class)
+    def __init__(self, args, device, num_class, **kwargs):
+        super().__init__(args, device, num_class, **kwargs)
         self.lam: float = args.lambda_
         self.epoch_pln: int = args.epoch_pln
         self.batch_size_pln: int = args.batch_size_pln
@@ -189,10 +188,10 @@ class Server(BaseServer):
     def run_round(self):
         results = self.train_clients()
         self.apply_result(results)
-        loss = sum(results[c].loss for c in self.selected) / self.num_clients_per_round
+        loss = sum(results[c].loss for c in self.selected) / self.num_selected
         loss_pln = (
             sum(results[c].payload["loss_proto"] for c in self.selected)
-            / self.num_clients_per_round
+            / self.num_selected
         )
         accuracy, accuracy_pln = self.evaluate()
         self.record_round(loss, accuracy, loss_pln, accuracy_pln)

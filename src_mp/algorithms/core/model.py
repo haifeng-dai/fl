@@ -3,6 +3,7 @@ import torch
 from src.models import CNN, HARCNN, HARMLP, ResNet18, ResNet50
 
 from .protocol import ModelParam
+from .resnet import ResNet_PC
 
 
 def build_model(param: ModelParam) -> torch.nn.Module:
@@ -25,6 +26,8 @@ def build_model(param: ModelParam) -> torch.nn.Module:
             param.feature_dim,
             param.dataset,
         )
+    if param.model in ("resnet", "resnet9", "resnet_pc"):
+        return ResNet_PC(param.num_class, param.feature_dim, param.dataset)
     if param.model == "resnet18":
         return ResNet18(param.num_class, param.feature_dim, param.dataset)
     if param.model == "resnet50":

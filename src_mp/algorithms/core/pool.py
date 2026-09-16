@@ -19,12 +19,14 @@ def _worker(
     client_cls,
     inbox: Any,
     outbox: Any,
+    train_sets: dict | None = None,
 ) -> None:
     try:
+        torch.set_num_threads(2)
         device = torch.device(device_name)
         if device.type == "cuda":
             torch.cuda.set_device(device)
-        client = client_cls(args, device, num_class)
+        client = client_cls(args, device, num_class, train_sets=train_sets)
     except Exception:
         outbox.put((worker_id, None, None, traceback.format_exc()))
         return
@@ -50,7 +52,14 @@ def _run_task(client, task):
 
 
 class PersistentClientPool:
-    def __init__(self, devices: list[str], args, num_class: int, client_cls):
+    def __init__(
+        self,
+        devices: list[str],
+        args,
+        num_class: int,
+        client_cls,
+        train_sets: dict | None = None,
+    ):
         self.ctx = mp.get_context("spawn")
         self.inboxes = [self.ctx.Queue() for _ in devices]
         self.outbox = self.ctx.Queue()
@@ -65,6 +74,7 @@ class PersistentClientPool:
                     client_cls,
                     self.inboxes[i],
                     self.outbox,
+                    train_sets,
                 ),
             )
             for i, device in enumerate(devices)

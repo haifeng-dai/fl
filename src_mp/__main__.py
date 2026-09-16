@@ -1,5 +1,6 @@
 import argparse
 import logging
+import pprint
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -65,6 +66,8 @@ def main():
         description="基于 torch.multiprocessing 的原生联邦学习框架"
     )
     parser.add_argument("-a", "--algo", default="fedavg")
+    parser.add_argument("-m", "--model", help="模型名称，例如 resnet9, cnn")
+    parser.add_argument("-d", "--dataset", help="数据集名称，例如 cifar10")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--rounds", type=int)
     parser.add_argument("--epochs", type=int)
@@ -104,9 +107,10 @@ def main():
         cfg.update(algorithm_configs.get(cli.algo.lower(), {}))
         configured_ssl = cfg.get("ssl", "none")
         cfg.update(algo=cli.algo, ssl=configured_ssl)
-        for key in ("rounds", "epochs", "mu"):
-            if getattr(cli, key) is not None:
+        for key in ("rounds", "epochs", "mu", "model", "dataset"):
+            if getattr(cli, key, None) is not None:
                 cfg[key] = getattr(cli, key)
+        logger.info("params=%s", pprint.pformat(cfg, sort_dicts=True))
         if not torch.cuda.is_available():
             raise RuntimeError("src_mp requires CUDA")
         gpu_ids, devices = select_devices(

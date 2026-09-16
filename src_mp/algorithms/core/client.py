@@ -6,6 +6,7 @@ import torch
 
 from src.algorithms.utils.input import prepare_input_batch
 
+from .data import SSLDataLoaderRegistry, SSLStream
 from .model import build_model
 from .protocol import BaseClientParams, ClientResult, EvalResult, EvalTask, ModelParam
 from .utils import clone_state
@@ -28,7 +29,14 @@ class BaseClientExecutor(abc.ABC):
     * ``run`` 会在每次训练前加载全局或个性化模型状态并重置优化器。
     """
 
-    def __init__(self, args, device: torch.device, num_class: int):
+    def __init__(
+        self,
+        args,
+        device: torch.device,
+        num_class: int,
+        train_sets: dict | None = None,
+        **kwargs,
+    ):
         self.device, self.num_class = device, num_class
         self.is_ssl = args.ssl != "none"
         self.dataset = args.dataset
@@ -59,7 +67,24 @@ class BaseClientExecutor(abc.ABC):
         self.loader: torch.utils.data.DataLoader
         self.payload = None
 
-    def _loader(self, task: BaseClientParams) -> torch.utils.data.DataLoader:
+        self.train_sets = train_sets
+        self.ssl_registry: SSLDataLoaderRegistry | None = None
+        if self.is_ssl and train_sets is not None:
+            self.ssl_registry = SSLDataLoaderRegistry(
+                train_sets=train_sets,
+                batch_size=self.batch_size,
+                unlabeled_ratio=int(getattr(args, "unlabeled_ratio", 1)),
+            )
+
+    def get_ssl_loaders(self) -> SSLStream:
+        """获取当前客户端的半监督双流加载器 (SSLStream)。"""
+        if self.ssl_registry is None:
+            raise RuntimeError(
+                f"client {self.client_id}: SSLDataLoaderRegistry 未初始化，请检查是否传入了 train_sets"
+            )
+        return self.ssl_registry.get(self.client_id)
+
+    def _loader(self, task: BaseClientParams):
         """获取客户端训练 DataLoader，并按 client_id 缓存复用。"""
         if task.client_id not in self.loaders:
             loader = torch.utils.data.DataLoader(
@@ -70,7 +95,7 @@ class BaseClientExecutor(abc.ABC):
             self.loaders[task.client_id] = loader
         return self.loaders[task.client_id]
 
-    def _reset_optimizer(self) -> None:
+    def reset_optimizer(self):
         """恢复本任务的优化器超参数并清空动量等历史状态。"""
         for group in self.optimizer.param_groups:
             group.update(
@@ -80,7 +105,7 @@ class BaseClientExecutor(abc.ABC):
             )
         self.optimizer.state.clear()
 
-    def run(self, task: BaseClientParams) -> ClientResult:
+    def run(self, task: BaseClientParams):
         """执行一个客户端训练任务。
 
         该方法负责通用的任务装载流程，通常不需要子类覆写。算法专用的
@@ -91,10 +116,10 @@ class BaseClientExecutor(abc.ABC):
         self.loader = self._loader(task)
         self.payload = task.payload
         self.model.load_state_dict(task.global_state)
-        self._reset_optimizer()
+        self.reset_optimizer()
         return self.train()
 
-    def evaluate(self, task: EvalTask) -> EvalResult:
+    def evaluate(self, task: EvalTask):
         """在测试集上评估模型并返回正确数、样本总数和任务编号。
 
         SSL 数据在这里会从原始 uint8 图像转换为模型输入；普通数据则沿用
