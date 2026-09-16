@@ -16,6 +16,18 @@ logger = logging.getLogger(__name__)
 
 
 class BaseServer(abc.ABC):
+    """联邦学习 Server 基类。
+
+    Server 管理全局模型、客户端数据、客户端选择、训练任务分发、模型聚合
+    和评估。算法实现通常只需要设置 ``client_cls``，并实现 ``apply_result``；
+    如果有算法专用状态或指标，再覆写对应钩子。
+
+    每轮调用顺序为：
+
+    ``select_clients`` → ``train_clients`` → ``apply_result`` → ``evaluate``
+    → ``record_round``。
+    """
+
     client_cls = None
     personalized = False
     supports_ssl = False
@@ -63,11 +75,13 @@ class BaseServer(abc.ABC):
         self.selected: list[int] = []
 
     def select_clients(self):
+        """随机选择当前通信轮次参与训练的客户端。"""
         self.selected = sorted(
             torch.randperm(self.num_clients)[: self.num_clients_per_round].tolist()
         )
 
     def task(self, client_id, state, payload=None):
+        """构造一个客户端训练任务。"""
         return BaseClientParams(
             client_id,
             state,
@@ -76,6 +90,11 @@ class BaseServer(abc.ABC):
         )
 
     def build_train_tasks(self, payloads=None):
+        """根据当前 ``self.selected`` 构造训练任务列表。
+
+        ``payloads`` 是按客户端编号索引的算法专用状态；普通算法传入
+        ``None``，个性化算法则使用各客户端自己的模型状态。
+        """
         state = clone_state(self.model.state_dict())
         return [
             self.task(
@@ -87,17 +106,25 @@ class BaseServer(abc.ABC):
         ]
 
     def train_payloads(self):
+        """训练 payload 钩子，默认不向客户端传递额外状态。
+
+        FedProx 可返回每个客户端的近端系数，FedPLN 可返回当前 PLN 状态。
+        返回值应为 ``{client_id: payload}``，或返回 ``None``。
+        """
         return None
 
     def train_clients(self):
+        """分发当前轮次训练任务并收集客户端结果。"""
         tasks = self.build_train_tasks(self.train_payloads())
         return self.pool.run(tasks)
 
     def update_client_states(self, results, selected):
+        """保存个性化算法中各客户端本轮训练后的模型状态。"""
         for client_id in selected:
             self.client_states[client_id] = results[client_id].state
 
     def aggregate_model(self, results, weights: list[float] | None = None):
+        """按样本数或指定权重聚合客户端模型参数。"""
         if weights is None:
             total = sum(self.train_counts[c] for c in self.selected)
             weights = [self.train_counts[c] / total for c in self.selected]
@@ -106,6 +133,11 @@ class BaseServer(abc.ABC):
         )
 
     def build_eval_tasks(self, payloads=None):
+        """构造评估任务。
+
+        普通算法创建一个全局评估任务；个性化算法为每个客户端创建一个
+        评估任务。评估 payload 通过 ``EvalTask.payload`` 传给客户端。
+        """
         if not self.personalized:
             return [
                 EvalTask(
@@ -126,16 +158,19 @@ class BaseServer(abc.ABC):
         ]
 
     def summarize_evaluation(self, results):
+        """将客户端评估结果汇总为 Server 侧指标。"""
         if self.personalized:
             return sum(result.accuracy for result in results.values()) / len(results)
         return results[-1].accuracy
 
     def evaluate(self, payloads=None):
+        """执行评估任务并调用 ``summarize_evaluation`` 汇总结果。"""
         tasks = self.build_eval_tasks(payloads)
         results = self.pool.evaluate(tasks)
         return self.summarize_evaluation(results)
 
     def fit(self):
+        """运行完整联邦训练流程，并记录进度与耗时统计。"""
         params_text = pprint.pformat(vars(self.args), sort_dicts=True)
         logger.info(
             "params=%s",
@@ -183,22 +218,30 @@ class BaseServer(abc.ABC):
             self.pool.close()
 
     def record_round(self, loss, accuracy):
+        """保存一轮训练的基础 loss 和 accuracy。"""
         self.loss.append(loss)
         self.acc.append(accuracy)
 
     def progress_metrics(self):
+        """进度条指标钩子，返回可传给 ``tqdm.set_postfix`` 的字典。"""
         return {
             "loss": f"{self.loss[-1]:.4f}",
             "accuracy": f"{self.acc[-1]:.2f}%",
         }
 
     def round_log_metrics(self):
+        """日志指标钩子，返回当前轮要写入 INFO 日志的格式化字段。"""
         return {
             "loss": f"{self.loss[-1]:.6f}",
             "accuracy": f"{self.acc[-1]:.2f}%",
         }
 
     def run_round(self):
+        """执行一轮标准 FedAvg 流程。
+
+        需要额外 payload、特殊聚合或额外指标的算法可以覆写此方法；
+        仅需要改变聚合方式时，通常只覆写 ``apply_result`` 即可。
+        """
         results = self.train_clients()
         self.apply_result(results)
         loss = sum(results[c].loss for c in self.selected) / len(self.selected)
@@ -206,4 +249,6 @@ class BaseServer(abc.ABC):
         self.record_round(loss, accuracy)
 
     @abc.abstractmethod
-    def apply_result(self, results): ...
+    def apply_result(self, results):
+        """应用客户端结果；子类必须实现聚合或个性化状态更新。"""
+        raise NotImplementedError

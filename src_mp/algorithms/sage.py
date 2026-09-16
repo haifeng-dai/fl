@@ -56,11 +56,11 @@ class Client(BaseClientExecutor):
             if x_u.size(0) > 0:
                 x_u_w = weak_augment(x_u, self.dataset)
                 valid_indices, confidence_l, confidence_g, targets_l, targets_g = (
-                    self.confident_samples(x_u_w)
+                    self._confident_samples(x_u_w)
                 )
 
                 if valid_indices.numel() > 0:
-                    targets = self.build_pseudo_label(
+                    targets = self._build_pseudo_label(
                         confidence_l,
                         confidence_g,
                         targets_l,
@@ -82,11 +82,10 @@ class Client(BaseClientExecutor):
 
             total += loss.item()
             batches += 1
-
         return total, batches
 
     @torch.no_grad()
-    def confident_samples(self, x_u_w: torch.Tensor):
+    def _confident_samples(self, x_u_w: torch.Tensor):
         """根据 weak view 的 local/global 置信度筛选无标签样本。"""
         confidence_g, targets_g = torch.softmax(self.model_g(x_u_w), dim=1).max(dim=1)
         confidence_l, targets_l = torch.softmax(self.model(x_u_w), dim=1).max(dim=1)
@@ -101,7 +100,7 @@ class Client(BaseClientExecutor):
             targets_g[valid_indices],
         )
 
-    def build_pseudo_label(
+    def _build_pseudo_label(
         self,
         confidence_l: torch.Tensor,
         confidence_g: torch.Tensor,

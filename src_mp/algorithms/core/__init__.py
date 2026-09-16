@@ -1,6 +1,5 @@
-import torch
-
 from .client import BaseClientExecutor
+from .loss import ce_loss, kl_loss
 from .protocol import BaseClientParams, ClientResult, EvalResult, EvalTask
 from .server import BaseServer
 from .utils import aggregate_weighted, clone_state
@@ -14,7 +13,6 @@ __all__ = [
     "EvalResult",
     "EvalTask",
     "clone_state",
+    "ce_loss",
+    "kl_loss",
 ]
-
-
-ce_loss = torch.nn.functional.cross_entropy

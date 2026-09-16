@@ -62,27 +62,27 @@ def select_devices(gpu_spec, workers_spec):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Native torch.multiprocessing federated learning"
+        description="基于 torch.multiprocessing 的原生联邦学习框架"
     )
     parser.add_argument("-a", "--algo", default="fedavg")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--rounds", type=int)
     parser.add_argument("--epochs", type=int)
-    parser.add_argument("--mu", type=float, help="algorithm proximal coefficient")
-    parser.add_argument("--gpus", help="e.g. 0,1,3; defaults to config gpus")
+    parser.add_argument("--mu", type=float, help="FedProx 的近端正则系数")
+    parser.add_argument("--gpus", help="GPU 编号，例如 0,1,3；默认读取配置文件")
     parser.add_argument(
         "--workers-per-gpu",
-        help="1 for every selected GPU, or a mapping such as 0:2,1:4",
+        help="每张 GPU 的 worker 数量，或使用映射格式，例如 0:2,1:4",
     )
     parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
         default="INFO",
-        help="log file level",
+        help="日志级别",
     )
     parser.add_argument(
         "--log-file",
-        help="log file path; defaults to logs/src_mp/<algorithm>.log",
+        help="日志文件路径，默认保存到 logs/src_mp/<algorithm>.log",
     )
     cli = parser.parse_args()
     configure_logging(
@@ -90,6 +90,9 @@ def main():
         cli.log_file or Path("logs/src_mp") / f"{cli.algo.lower()}.log",
     )
     try:
+        # FedMatch 会通过进程队列传输大量 sigma/psi Tensor；使用文件系统
+        # 共享策略，避免 file_descriptor 策略耗尽进程文件描述符。
+        torch.multiprocessing.set_sharing_strategy("file_system")
         with open(cli.config, encoding="utf-8") as file:
             raw = yaml.safe_load(file) or {}
         with open("configs/algorithms.yaml", encoding="utf-8") as file:

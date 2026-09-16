@@ -12,7 +12,21 @@ from .utils import clone_state
 
 
 class BaseClientExecutor(abc.ABC):
-    """每个 GPU worker 一个实例；复用模型、优化器和客户端 DataLoader。"""
+    """客户端训练执行器基类。
+
+    每个 GPU worker 只创建一个执行器实例，并在多个任务之间复用模型、
+    优化器和 DataLoader。Server 每轮把一个 ``BaseClientParams`` 任务交给
+    ``run``；子类通常只需要实现 ``run_epoch``，如果算法有额外状态或训练
+    阶段，再覆写 ``train``、``evaluate`` 或增加自己的 payload 处理逻辑。
+
+    子类实现时需要注意：
+
+    * ``self.model`` 是当前客户端的本地模型；
+    * ``self.loader`` 是当前任务对应客户端的数据加载器；
+    * ``self.payload`` 是 Server 通过任务传入的算法专用状态；
+    * ``self.client_id`` 是当前任务的客户端编号；
+    * ``run`` 会在每次训练前加载全局或个性化模型状态并重置优化器。
+    """
 
     def __init__(self, args, device: torch.device, num_class: int):
         self.device, self.num_class = device, num_class
@@ -46,6 +60,7 @@ class BaseClientExecutor(abc.ABC):
         self.payload = None
 
     def _loader(self, task: BaseClientParams) -> torch.utils.data.DataLoader:
+        """获取客户端训练 DataLoader，并按 client_id 缓存复用。"""
         if task.client_id not in self.loaders:
             loader = torch.utils.data.DataLoader(
                 task.train_set,
@@ -56,6 +71,7 @@ class BaseClientExecutor(abc.ABC):
         return self.loaders[task.client_id]
 
     def _reset_optimizer(self) -> None:
+        """恢复本任务的优化器超参数并清空动量等历史状态。"""
         for group in self.optimizer.param_groups:
             group.update(
                 lr=self.lr,
@@ -65,6 +81,11 @@ class BaseClientExecutor(abc.ABC):
         self.optimizer.state.clear()
 
     def run(self, task: BaseClientParams) -> ClientResult:
+        """执行一个客户端训练任务。
+
+        该方法负责通用的任务装载流程，通常不需要子类覆写。算法专用的
+        payload 会保存到 ``self.payload``，随后调用子类的 ``train``。
+        """
         self.current_task = task
         self.client_id = task.client_id
         self.loader = self._loader(task)
@@ -74,6 +95,12 @@ class BaseClientExecutor(abc.ABC):
         return self.train()
 
     def evaluate(self, task: EvalTask) -> EvalResult:
+        """在测试集上评估模型并返回正确数、样本总数和任务编号。
+
+        SSL 数据在这里会从原始 uint8 图像转换为模型输入；普通数据则沿用
+        已处理的输入。需要额外评估指标的算法可以覆写此方法，并把附加结果
+        放入 ``EvalResult.payload``。
+        """
         if task.eval_id not in self.eval_loaders:
             self.eval_loaders[task.eval_id] = torch.utils.data.DataLoader(
                 task.test_set, batch_size=128, shuffle=False
@@ -96,10 +123,17 @@ class BaseClientExecutor(abc.ABC):
         return EvalResult(task.eval_id, correct, total)
 
     def check_nan(self, loss):
+        """检查损失是否为有限值，发现 NaN 或 Inf 时立即终止当前任务。"""
         if not torch.isfinite(loss):
             raise FloatingPointError(f"client {self.client_id}: non-finite loss")
 
     def train(self):
+        """执行默认的本地训练循环。
+
+        默认按 ``self.epochs`` 次调用 ``run_epoch``，并返回本地平均 loss、
+        客户端模型状态和空 payload。需要多阶段训练的算法可以覆写此方法，
+        但仍应返回 ``ClientResult``。
+        """
         self.model.train()
         total, batches = 0.0, 0
         for _ in range(self.epochs):
@@ -111,4 +145,6 @@ class BaseClientExecutor(abc.ABC):
         )
 
     @abc.abstractmethod
-    def run_epoch(self, total, batches) -> tuple[float, int]: ...
+    def run_epoch(self, total, batches) -> tuple[float, int]:
+        """执行一个本地 epoch，并返回累计 loss 与 batch 数。"""
+        raise NotImplementedError
